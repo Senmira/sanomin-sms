@@ -123,6 +123,18 @@ export async function GET() {
     take: 5,
   })
 
+  // Fees summary for current month
+  const now = new Date()
+  const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+  const monthPayments = await db.payment.findMany({
+    where: { month: monthKey },
+    select: { amount: true, paidAmount: true, status: true },
+  })
+  const totalBilled = monthPayments.reduce((s, p) => s + p.amount, 0)
+  const totalCollected = monthPayments.reduce((s, p) => s + p.paidAmount, 0)
+  const overdueCount = monthPayments.filter((p) => p.status === 'Overdue').length
+  const pendingCount = monthPayments.filter((p) => p.status === 'Pending' || p.status === 'Partial').length
+
   return NextResponse.json({
     totals: {
       students: totalStudents,
@@ -142,6 +154,15 @@ export async function GET() {
     trend,
     recent: recentWithNames,
     upcomingClasses,
+    fees: {
+      month: monthKey,
+      totalBilled,
+      totalCollected,
+      outstanding: totalBilled - totalCollected,
+      paidRate: totalBilled ? Math.round((totalCollected / totalBilled) * 100) : 0,
+      overdueCount,
+      pendingCount,
+    },
   })
 }
 

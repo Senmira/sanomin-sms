@@ -19,7 +19,7 @@ import {
 
 import { api } from '@/lib/api'
 import { ProgramRow } from '@/lib/types'
-import { currency } from '@/lib/format'
+import { currency, currencyCompact } from '@/lib/format'
 
 import { SectionHeader } from '@/components/shared/section-header'
 import { StatCard } from '@/components/shared/stat-card'
@@ -296,10 +296,10 @@ export function ProgramsSection() {
         />
         <StatCard
           label="Monthly Revenue Potential"
-          value={currency(stats.revenue)}
+          value={currencyCompact(stats.revenue)}
           icon={Wallet}
           accent="amber"
-          hint="Enrollments × monthly fee"
+          hint={`${currency(stats.revenue)} total`}
         />
       </div>
 

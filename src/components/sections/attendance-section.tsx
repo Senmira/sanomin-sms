@@ -505,14 +505,20 @@ function ScanResultPanel({
 
   if (!result) {
     return (
-      <div className="flex h-full min-h-[14rem] flex-col items-center justify-center gap-3 rounded-xl border border-dashed bg-muted/20 p-6 text-center">
-        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
-          <ScanLine className="h-6 w-6" />
+      <div className="relative flex h-full min-h-[14rem] flex-col items-center justify-center gap-3 overflow-hidden rounded-xl border border-dashed bg-gradient-to-br from-muted/40 to-muted/10 p-6 text-center">
+        <div className="pointer-events-none absolute inset-0 bg-grid opacity-40" />
+        <div className="relative flex h-14 w-14 items-center justify-center rounded-full bg-background text-primary shadow-sm ring-1 ring-border">
+          <ScanLine className="h-7 w-7" />
+          <span className="absolute inset-0 animate-ping rounded-full bg-primary/10" />
         </div>
-        <p className="text-sm font-semibold">Waiting for scan</p>
-        <p className="max-w-sm text-xs text-muted-foreground">
+        <p className="relative text-sm font-semibold">Waiting for scan</p>
+        <p className="relative max-w-sm text-xs text-muted-foreground">
           The result of the next check-in or check-out will appear here with a confirmation flash.
         </p>
+        <div className="relative mt-1 flex items-center gap-1.5 rounded-full bg-background/60 px-2.5 py-1 text-[10px] font-medium text-muted-foreground ring-1 ring-border">
+          <span className="inline-flex h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
+          Scanner ready
+        </div>
       </div>
     )
   }

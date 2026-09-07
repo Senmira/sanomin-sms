@@ -186,9 +186,9 @@ function AttendanceReportPanel() {
         <CardContent>
           <ResponsiveContainer width="100%" height={280}>
             <LineChart data={data.daily} margin={{ left: -20, right: 8, top: 8 }}>
-              <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
-              <XAxis dataKey="date" tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" tickFormatter={(d) => d.slice(5)} />
-              <YAxis tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" allowDecimals={false} />
+              <CartesianGrid strokeDasharray="3 3" opacity={0.5} />
+              <XAxis dataKey="date" tick={{ fontSize: 11 }} stroke="var(--muted-foreground)" tickFormatter={(d) => d.slice(5)} />
+              <YAxis tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" allowDecimals={false} />
               <Tooltip contentStyle={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 12, fontSize: 12 }} />
               <Legend wrapperStyle={{ fontSize: 12 }} />
               <Line type="monotone" dataKey="students" name="Students" stroke="#1e40af" strokeWidth={2} dot={{ r: 3 }} />
@@ -244,9 +244,9 @@ function AttendanceReportPanel() {
           <CardContent>
             <ResponsiveContainer width="100%" height={200}>
               <BarChart data={teacherTypeData} margin={{ left: -20, right: 16, top: 8 }}>
-                <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
-                <XAxis dataKey="name" tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" />
-                <YAxis tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" allowDecimals={false} />
+                <CartesianGrid strokeDasharray="3 3" opacity={0.5} />
+                <XAxis dataKey="name" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" />
+                <YAxis tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" allowDecimals={false} />
                 <Tooltip contentStyle={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 12, fontSize: 12 }} />
                 <Bar dataKey="value" radius={[6, 6, 0, 0]}>
                   {teacherTypeData.map((e, i) => <Cell key={i} fill={e.color} />)}
@@ -266,9 +266,9 @@ function AttendanceReportPanel() {
           <CardContent>
             <ResponsiveContainer width="100%" height={240}>
               <BarChart data={data.programCount} layout="vertical" margin={{ left: 8, right: 24 }}>
-                <CartesianGrid strokeDasharray="3 3" opacity={0.3} horizontal={false} />
-                <XAxis type="number" tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" allowDecimals={false} />
-                <YAxis dataKey="code" type="category" tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" width={70} />
+                <CartesianGrid strokeDasharray="3 3" opacity={0.5} horizontal={false} />
+                <XAxis type="number" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" allowDecimals={false} />
+                <YAxis dataKey="code" type="category" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" width={70} />
                 <Tooltip contentStyle={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 12, fontSize: 12 }} />
                 <Bar dataKey="count" name="Attendance" radius={[0, 6, 6, 0]}>
                   {data.programCount.map((e, i) => <Cell key={i} fill={e.color} />)}
@@ -371,9 +371,9 @@ function EnrollmentReportPanel() {
           <CardContent>
             <ResponsiveContainer width="100%" height={260}>
               <BarChart data={data.byProgram} margin={{ left: -20, right: 8, top: 8 }}>
-                <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
-                <XAxis dataKey="code" tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" />
-                <YAxis tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" allowDecimals={false} />
+                <CartesianGrid strokeDasharray="3 3" opacity={0.5} />
+                <XAxis dataKey="code" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" />
+                <YAxis tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" allowDecimals={false} />
                 <Tooltip contentStyle={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 12, fontSize: 12 }} />
                 <Bar dataKey="count" name="Students" radius={[6, 6, 0, 0]}>
                   {data.byProgram.map((e, i) => <Cell key={i} fill={e.color} />)}
@@ -390,9 +390,9 @@ function EnrollmentReportPanel() {
           <CardContent>
             <ResponsiveContainer width="100%" height={260}>
               <BarChart data={ageData} layout="vertical" margin={{ left: 8, right: 16 }}>
-                <CartesianGrid strokeDasharray="3 3" opacity={0.3} horizontal={false} />
-                <XAxis type="number" tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" allowDecimals={false} />
-                <YAxis dataKey="name" type="category" tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" width={50} />
+                <CartesianGrid strokeDasharray="3 3" opacity={0.5} horizontal={false} />
+                <XAxis type="number" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" allowDecimals={false} />
+                <YAxis dataKey="name" type="category" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" width={50} />
                 <Tooltip contentStyle={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 12, fontSize: 12 }} />
                 <Bar dataKey="value" name="Students" radius={[0, 6, 6, 0]} fill="#7c3aed" />
               </BarChart>
@@ -426,9 +426,9 @@ function EnrollmentReportPanel() {
           <CardContent>
             <ResponsiveContainer width="100%" height={200}>
               <BarChart data={religionData} margin={{ left: -20, right: 8, top: 8 }}>
-                <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
-                <XAxis dataKey="name" tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
-                <YAxis tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" allowDecimals={false} />
+                <CartesianGrid strokeDasharray="3 3" opacity={0.5} />
+                <XAxis dataKey="name" tick={{ fontSize: 11 }} stroke="var(--muted-foreground)" />
+                <YAxis tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" allowDecimals={false} />
                 <Tooltip contentStyle={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 12, fontSize: 12 }} />
                 <Bar dataKey="value" name="Students" radius={[6, 6, 0, 0]} fill="#1e40af" />
               </BarChart>

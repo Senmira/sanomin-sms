@@ -7,8 +7,12 @@ export type SectionKey =
   | 'attendance'
   | 'classes'
   | 'programs'
+  | 'fees'
   | 'reports'
   | 'settings'
+
+export const PAYMENT_STATUSES = ['Pending', 'Partial', 'Paid', 'Overdue'] as const
+export const PAYMENT_METHODS = ['Cash', 'Card', 'Bank', 'Online'] as const
 
 export const PROGRAM_COLORS: Record<string, string> = {
   PRESCHOOL: '#1e40af',
@@ -119,4 +123,32 @@ export interface AttendanceRow {
   status: string
   note: string | null
   personName?: string
+}
+
+export interface PaymentRow {
+  id: string
+  studentId: string
+  programId: string | null
+  classId: string | null
+  month: string // "YYYY-MM"
+  amount: number
+  paidAmount: number
+  method: string // Cash | Card | Bank | Online
+  status: string // Pending | Partial | Paid | Overdue
+  paidDate: string | null
+  dueDate: string | null
+  note: string | null
+  receiptNo: string | null
+  createdAt: string
+  updatedAt: string
+  student: { id: string; studentId: string; fullName: string }
+  program: { id: string; code: string; name: string; color: string } | null
+}
+
+export interface PaymentSummary {
+  totalBilled: number
+  totalCollected: number
+  totalOutstanding: number
+  pendingCount: number
+  overdueCount: number
 }

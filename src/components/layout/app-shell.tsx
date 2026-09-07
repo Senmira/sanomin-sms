@@ -11,6 +11,7 @@ import {
   ScanLine,
   CalendarDays,
   BookOpen,
+  Wallet,
   FileBarChart,
   Settings,
   Menu,
@@ -57,6 +58,7 @@ const NAV: NavItem[] = [
   { key: 'attendance', label: 'Attendance', icon: ScanLine, group: 'Operations', description: 'Barcode & fingerprint check-in/out' },
   { key: 'classes', label: 'Classes', icon: CalendarDays, group: 'Operations', description: 'Tuition class scheduling' },
   { key: 'programs', label: 'Programs', icon: BookOpen, group: 'Operations', description: 'Preschool, Daycare, IT, Elocution, Dancing' },
+  { key: 'fees', label: 'Fees & Payments', icon: Wallet, group: 'Operations', description: 'Monthly tuition fee tracking & receipts' },
   { key: 'reports', label: 'Reports', icon: FileBarChart, group: 'Insights', description: 'Attendance & enrollment analytics' },
   { key: 'settings', label: 'Settings', icon: Settings, group: 'Insights', description: 'School & device configuration' },
 ]
@@ -255,15 +257,19 @@ export function AppShell({ children }: { children: ReactNode }) {
         <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8">{children}</main>
 
         {/* Sticky footer */}
-        <footer className="mt-auto border-t bg-background/80 px-4 py-3 backdrop-blur sm:px-6 lg:px-8">
-          <div className="flex flex-col items-center justify-between gap-2 text-xs text-muted-foreground sm:flex-row">
-            <p>
-              © {new Date().getFullYear()} SANOMIN International Preschool — Student Management
-              System (Administrator)
+        <footer className="mt-auto border-t bg-muted/40 px-4 py-3 backdrop-blur sm:px-6 lg:px-8">
+          <div className="flex flex-col items-center justify-between gap-2 text-xs text-foreground/70 sm:flex-row">
+            <p className="flex items-center gap-2">
+              <span className="hidden font-semibold text-foreground/80 sm:inline">SANOMIN SMS</span>
+              <span className="hidden text-muted-foreground/60 sm:inline">·</span>
+              <span>© {new Date().getFullYear()} SANOMIN International Preschool — Administrator Portal</span>
             </p>
-            <p className="flex items-center gap-1.5">
-              <span className="inline-flex h-1.5 w-1.5 rounded-full bg-emerald-500" />
-              All systems operational · v1.0
+            <p className="flex items-center gap-2">
+              <span className="flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-2 py-0.5 font-medium text-emerald-600 dark:text-emerald-400">
+                <span className="inline-flex h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+                All systems operational
+              </span>
+              <span className="text-muted-foreground/60">v1.1</span>
             </p>
           </div>
         </footer>

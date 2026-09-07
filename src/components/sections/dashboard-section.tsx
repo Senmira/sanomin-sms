@@ -27,6 +27,9 @@ import {
   ArrowRight,
   TrendingUp,
   Activity,
+  Wallet,
+  AlertCircle,
+  CheckCircle2,
 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { SectionHeader } from '@/components/shared/section-header'
@@ -35,9 +38,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
+import { Progress } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAppStore } from '@/lib/store'
-import { initials, avatarColor, fmtTime } from '@/lib/format'
+import { initials, avatarColor, fmtTime, currency, currencyCompact } from '@/lib/format'
 
 interface DashboardData {
   totals: {
@@ -75,6 +79,15 @@ interface DashboardData {
     program: { code: string; name: string; color: string } | null
     teacher: { teacherId: string; fullName: string; type: string } | null
   }>
+  fees: {
+    month: string
+    totalBilled: number
+    totalCollected: number
+    outstanding: number
+    paidRate: number
+    overdueCount: number
+    pendingCount: number
+  }
 }
 
 export function DashboardSection() {
@@ -207,17 +220,17 @@ export function DashboardSection() {
               <AreaChart data={data.trend} margin={{ left: -20, right: 8, top: 8 }}>
                 <defs>
                   <linearGradient id="gStu" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#1e40af" stopOpacity={0.5} />
-                    <stop offset="95%" stopColor="#1e40af" stopOpacity={0} />
+                    <stop offset="5%" stopColor="#1e40af" stopOpacity={0.7} />
+                    <stop offset="95%" stopColor="#1e40af" stopOpacity={0.05} />
                   </linearGradient>
                   <linearGradient id="gTea" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#7c3aed" stopOpacity={0.5} />
-                    <stop offset="95%" stopColor="#7c3aed" stopOpacity={0} />
+                    <stop offset="5%" stopColor="#7c3aed" stopOpacity={0.7} />
+                    <stop offset="95%" stopColor="#7c3aed" stopOpacity={0.05} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.3} />
-                <XAxis dataKey="date" tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" />
-                <YAxis tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" allowDecimals={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" opacity={0.5} />
+                <XAxis dataKey="date" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" />
+                <YAxis tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" allowDecimals={false} />
                 <Tooltip
                   contentStyle={{
                     background: 'var(--popover)',
@@ -231,16 +244,20 @@ export function DashboardSection() {
                   dataKey="students"
                   name="Students"
                   stroke="#1e40af"
-                  strokeWidth={2}
+                  strokeWidth={3}
                   fill="url(#gStu)"
+                  dot={{ r: 3, fill: '#1e40af' }}
+                  activeDot={{ r: 5 }}
                 />
                 <Area
                   type="monotone"
                   dataKey="teachers"
                   name="Teachers"
                   stroke="#7c3aed"
-                  strokeWidth={2}
+                  strokeWidth={3}
                   fill="url(#gTea)"
+                  dot={{ r: 3, fill: '#7c3aed' }}
+                  activeDot={{ r: 5 }}
                 />
                 <Legend wrapperStyle={{ fontSize: 12 }} />
               </AreaChart>
@@ -301,9 +318,9 @@ export function DashboardSection() {
           <CardContent>
             <ResponsiveContainer width="100%" height={240}>
               <BarChart data={data.byProgram} margin={{ left: -20, right: 8, top: 8 }}>
-                <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
-                <XAxis dataKey="code" tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" />
-                <YAxis tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" allowDecimals={false} />
+                <CartesianGrid strokeDasharray="3 3" opacity={0.5} />
+                <XAxis dataKey="code" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" />
+                <YAxis tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" allowDecimals={false} />
                 <Tooltip
                   contentStyle={{
                     background: 'var(--popover)',
@@ -331,9 +348,15 @@ export function DashboardSection() {
           </CardHeader>
           <CardContent className="space-y-2 pt-0">
             {data.upcomingClasses.length === 0 && (
-              <p className="py-6 text-center text-xs text-muted-foreground">
-                No tuition classes scheduled for today.
-              </p>
+              <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-muted/20 px-4 py-6 text-center">
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                  <CalendarDays className="h-5 w-5" />
+                </div>
+                <p className="text-xs font-medium">No tuition classes today</p>
+                <p className="text-[11px] text-muted-foreground">
+                  External teachers' sessions run on their scheduled weekdays.
+                </p>
+              </div>
             )}
             {data.upcomingClasses.map((c) => (
               <div
@@ -371,6 +394,71 @@ export function DashboardSection() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Fees collection summary */}
+      <Card className="overflow-hidden">
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+          <div className="flex items-center gap-2">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400">
+              <Wallet className="h-5 w-5" />
+            </div>
+            <div>
+              <CardTitle className="text-base font-semibold">Fee Collection — {data.fees.month}</CardTitle>
+              <p className="text-xs text-muted-foreground">Monthly tuition fee tracking</p>
+            </div>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => setSection('fees')}>
+            Manage fees <ArrowRight className="ml-1 h-3 w-3" />
+          </Button>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-4 sm:grid-cols-3">
+            {/* Collected */}
+            <div className="rounded-xl border bg-emerald-500/5 p-4">
+              <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400">
+                <CheckCircle2 className="h-4 w-4" />
+                <span className="text-xs font-medium">Collected</span>
+              </div>
+              <p className="mt-1 text-2xl font-bold tracking-tight">
+                {currencyCompact(data.fees.totalCollected)}
+              </p>
+              <p className="text-[11px] text-muted-foreground">{currency(data.fees.totalCollected)}</p>
+            </div>
+            {/* Outstanding */}
+            <div className="rounded-xl border bg-amber-500/5 p-4">
+              <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400">
+                <Clock className="h-4 w-4" />
+                <span className="text-xs font-medium">Outstanding</span>
+              </div>
+              <p className="mt-1 text-2xl font-bold tracking-tight">
+                {currencyCompact(data.fees.outstanding)}
+              </p>
+              <p className="text-[11px] text-muted-foreground">{currency(data.fees.outstanding)}</p>
+            </div>
+            {/* Overdue */}
+            <div className="rounded-xl border bg-red-500/5 p-4">
+              <div className="flex items-center gap-2 text-red-600 dark:text-red-400">
+                <AlertCircle className="h-4 w-4" />
+                <span className="text-xs font-medium">Overdue</span>
+              </div>
+              <p className="mt-1 text-2xl font-bold tracking-tight">{data.fees.overdueCount}</p>
+              <p className="text-[11px] text-muted-foreground">{data.fees.pendingCount} pending</p>
+            </div>
+          </div>
+          {/* Collection rate progress */}
+          <div className="mt-4 rounded-lg border bg-muted/20 p-4">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-medium">Collection rate</span>
+              <span className="font-semibold text-primary">{data.fees.paidRate}%</span>
+            </div>
+            <Progress value={data.fees.paidRate} className="mt-2 h-2.5" />
+            <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
+              <span>Billed: {currencyCompact(data.fees.totalBilled)}</span>
+              <span>of {currency(data.fees.totalBilled)} total billed</span>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Recent activity + Age group */}
       <div className="grid gap-4 lg:grid-cols-3">
@@ -431,9 +519,9 @@ export function DashboardSection() {
           <CardContent>
             <ResponsiveContainer width="100%" height={220}>
               <BarChart data={ageData} layout="vertical" margin={{ left: 8, right: 16 }}>
-                <CartesianGrid strokeDasharray="3 3" opacity={0.3} horizontal={false} />
-                <XAxis type="number" tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" allowDecimals={false} />
-                <YAxis dataKey="name" type="category" tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" width={40} />
+                <CartesianGrid strokeDasharray="3 3" opacity={0.5} horizontal={false} />
+                <XAxis type="number" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" allowDecimals={false} />
+                <YAxis dataKey="name" type="category" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" width={40} />
                 <Tooltip
                   contentStyle={{
                     background: 'var(--popover)',

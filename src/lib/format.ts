@@ -80,3 +80,11 @@ export function currency(n: number): string {
     maximumFractionDigits: 0,
   }).format(n || 0)
 }
+
+// Compact currency for stat cards / tight spaces: LKR 245K, LKR 1.2M
+export function currencyCompact(n: number): string {
+  const v = n || 0
+  if (v >= 1_000_000) return `LKR ${(v / 1_000_000).toFixed(v >= 10_000_000 ? 0 : 1)}M`
+  if (v >= 1_000) return `LKR ${(v / 1_000).toFixed(v >= 10_000 ? 0 : 1)}K`
+  return `LKR ${v}`
+}

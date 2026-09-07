@@ -28,6 +28,7 @@ model Program {
 
   enrollments Enrollment[]
   classes     Class[]
+  payments    Payment[]
 }
 
 // ─── Students ─────────────────────────────────────────────────────────────
@@ -53,6 +54,7 @@ model Student {
   guardians      Guardian[]
   enrollments    Enrollment[]
   attendance     Attendance[]
+  payments       Payment[]
 }
 
 // ─── Guardians (parents) ──────────────────────────────────────────────────
@@ -159,4 +161,26 @@ model Setting {
   id    String @id
   key   String @unique
   value String
+}
+
+// ─── Payments (monthly tuition fee tracking) ──────────────────────────────
+model Payment {
+  id          String   @id @default(cuid())
+  studentId   String
+  programId   String?
+  classId     String?
+  month       String                       // "2025-01" (YYYY-MM) the fee is FOR
+  amount      Float                        // amount charged
+  paidAmount  Float    @default(0)         // amount actually paid
+  method      String   @default("Cash")    // Cash | Card | Bank | Online
+  status      String   @default("Pending") // Pending | Partial | Paid | Overdue
+  paidDate    DateTime?
+  dueDate     DateTime?
+  note        String?
+  receiptNo   String?  @unique             // auto-generated e.g. SAN-2025-0001
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  student     Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  program     Program? @relation(fields: [programId], references: [id], onDelete: SetNull)
 }
