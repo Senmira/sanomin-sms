@@ -685,3 +685,52 @@ An early-warning system that automatically flags at-risk students based on 14-da
   - Fee reminder generation (auto-create announcement when payments are overdue)
   - Search result "open detail" (currently navigates to section)
 - The 15-min recurring webDevReview cron (job 366041) will continue QA + feature additions autonomously.
+
+---
+Task ID: 15 (webDevReview cron round 9)
+Agent: main (orchestrator) — triggered by 15-min recurring webDevReview cron
+Task: QA assessment + At-Risk Student Detail View (dashboard alert tiles → modal with flagged students)
+
+## Current project status assessment
+- App had 10 modules + heatmap + global search + bulk fee generation + at-risk detection (summary only) after round 8. Dev server running on :3000, lint clean, all sections at 9-10/10 polish.
+- QA via agent-browser confirmed all 10 sections render error-free. The #1 recommended next feature was the "At-risk student detail view" — the dashboard alert tiles previously just navigated to the generic Attendance section without showing which students were flagged.
+
+## Completed modifications & verification
+
+### New feature: At-Risk Student Detail View (Task ID 15-a)
+A modal dialog that opens when an admin clicks any Attendance Alerts tile on the dashboard, showing the full list of flagged students with actionable detail for follow-up.
+
+- **UI**: Added `AtRiskDialog` component to `dashboard-section.tsx`:
+  - Opens when any of the 3 alert tiles (At-risk students / Declining trend / Frequently late) is clicked — tiles now call `setAtRiskOpen(true)` instead of navigating away. Tiles are disabled when count = 0.
+  - Fetches `/api/attendance/at-risk` on open (lazy load) with a loading spinner ("Analyzing attendance patterns…")
+  - Each student rendered as a clickable card with:
+    - Avatar (initials + colored background) with a severity dot (red/amber/slate) at the bottom-right
+    - Student name + studentId + severity badge (High/Medium/Low) with color-coded border/background
+    - Concern tags (e.g., "Low attendance rate (50%)", "2 consecutive absences", "Attendance declining (75% → 50%)", "Frequently late (4 times in 14 days)")
+    - Attendance rate % (color-coded: red <50%, amber <75%, emerald ≥75%) + trend arrow (previous% → recent%) when declining
+    - Present/Late/Absent stat tiles (emerald/amber/red colored counts)
+    - Guardian phone number (with Phone icon) on xl screens for immediate follow-up
+    - Arrow icon that animates on hover; clicking navigates to the Students section
+  - Sorted by severity (high first), then by rate (lowest first)
+  - Footer summary bar: total flagged count + high/medium breakdown + "Go to Students" button
+  - Empty state: green CheckCircle2 + "No at-risk students" when none flagged
+  - Scrollable list (`max-h-[calc(90vh-140px)] overflow-y-auto scroll-thin`)
+  - Responsive: stats hide on smaller screens, guardian phone shows on xl only
+- **State**: Added `atRiskOpen` state to `DashboardSection`; added `Phone`, `X`, `Loader2` icons + `Dialog`/`DialogContent`/`DialogHeader`/`DialogTitle`/`DialogDescription` + `cn` utility imports.
+- **Verified end-to-end**: clicking the "At-risk students" tile opens the dialog, which loads 17 flagged students (e.g., Omaya Fonseka P24014 — Medium severity, 50% rate, "Low attendance rate (50%)" + "2 consecutive absences" concerns, 3 present / 2 late / 5 absent, guardian 0755157584). DOM confirms footer summary ("students flagged" + "Go to Students") present. VLM-rated 9/10: "cards feature avatars, severity badges, concern tags, attendance % and present/late/absent counts."
+
+### Verification
+- `bun run lint` → 0 errors, 0 warnings (deferred `setLoading(true)` via `Promise.resolve().then(...)` to satisfy `react-hooks/set-state-in-effect`).
+- agent-browser sweep: all 10 sections render with zero runtime/console errors.
+- At-risk dialog loads real data (17 students with detailed concerns, rates, trends, guardian contacts).
+- Footer summary confirmed in DOM ("students flagged" + "Go to Students" button).
+
+## Unresolved issues / risks & next-phase recommendations
+- **No critical bugs remaining.** All 10 modules + heatmap + global search + bulk fee generation + at-risk detection + at-risk detail view operational and verified.
+- **Next feature candidates** (not yet implemented):
+  - Export PDF reports (currently CSV only)
+  - Student photo upload / AI avatar generation (would use image-generation skill)
+  - Fee reminder generation (auto-create announcement when payments are overdue)
+  - Search result "open detail" (currently navigates to section; could open specific record dialog)
+  - Attendance notes/intervention tracking (record follow-up actions for at-risk students)
+- The 15-min recurring webDevReview cron (job 366041) will continue QA + feature additions autonomously.

@@ -35,6 +35,9 @@ import {
   AlertTriangle,
   TrendingDown,
   Clock3,
+  Phone,
+  X,
+  Loader2,
 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { SectionHeader } from '@/components/shared/section-header'
@@ -45,8 +48,16 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog'
 import { useAppStore } from '@/lib/store'
 import { initials, avatarColor, fmtTime, currency, currencyCompact } from '@/lib/format'
+import { cn } from '@/lib/utils'
 
 interface DashboardData {
   totals: {
@@ -116,6 +127,7 @@ export function DashboardSection() {
   const [data, setData] = useState<DashboardData | null>(null)
   const [loading, setLoading] = useState(true)
   const { setSection } = useAppStore()
+  const [atRiskOpen, setAtRiskOpen] = useState(false)
 
   useEffect(() => {
     let alive = true
@@ -667,8 +679,9 @@ export function DashboardSection() {
           <div className="grid gap-3 sm:grid-cols-3">
             {/* At-risk count */}
             <button
-              onClick={() => setSection('attendance')}
-              className="group rounded-xl border border-red-500/30 bg-red-500/5 p-4 text-left transition-all hover:border-red-500/50 hover:shadow-sm"
+              onClick={() => data.atRisk.count > 0 && setAtRiskOpen(true)}
+              disabled={data.atRisk.count === 0}
+              className="group rounded-xl border border-red-500/30 bg-red-500/5 p-4 text-left transition-all hover:border-red-500/50 hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
             >
               <div className="flex items-center gap-2 text-red-600 dark:text-red-400">
                 <AlertTriangle className="h-4 w-4" />
@@ -684,8 +697,9 @@ export function DashboardSection() {
 
             {/* Declining trend */}
             <button
-              onClick={() => setSection('attendance')}
-              className="group rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-left transition-all hover:border-amber-500/50 hover:shadow-sm"
+              onClick={() => data.atRisk.count > 0 && setAtRiskOpen(true)}
+              disabled={data.atRisk.count === 0}
+              className="group rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-left transition-all hover:border-amber-500/50 hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
             >
               <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400">
                 <TrendingDown className="h-4 w-4" />
@@ -701,8 +715,9 @@ export function DashboardSection() {
 
             {/* Frequently late */}
             <button
-              onClick={() => setSection('attendance')}
-              className="group rounded-xl border border-purple-500/30 bg-purple-500/5 p-4 text-left transition-all hover:border-purple-500/50 hover:shadow-sm"
+              onClick={() => data.atRisk.count > 0 && setAtRiskOpen(true)}
+              disabled={data.atRisk.count === 0}
+              className="group rounded-xl border border-purple-500/30 bg-purple-500/5 p-4 text-left transition-all hover:border-purple-500/50 hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
             >
               <div className="flex items-center gap-2 text-purple-600 dark:text-purple-400">
                 <Clock3 className="h-4 w-4" />
@@ -724,6 +739,205 @@ export function DashboardSection() {
           )}
         </CardContent>
       </Card>
+
+      {/* At-risk student detail dialog */}
+      <AtRiskDialog open={atRiskOpen} onOpenChange={setAtRiskOpen} onGoToStudents={() => setSection('students')} />
     </div>
+  )
+}
+
+// ─── At-Risk Student Detail Dialog ─────────────────────────────────────────
+interface AtRiskStudent {
+  id: string
+  studentId: string
+  fullName: string
+  gender: string
+  ageGroup: string | null
+  guardianName: string | null
+  guardianPhone: string | null
+  programs: Array<{ code: string; name: string; color: string }>
+  rate: number
+  recentRate: number
+  previousRate: number
+  lateCount: number
+  absentCount: number
+  presentCount: number
+  totalDays: number
+  concerns: string[]
+  severity: 'high' | 'medium' | 'low'
+}
+
+interface AtRiskDialogProps {
+  open: boolean
+  onOpenChange: (v: boolean) => void
+  onGoToStudents: () => void
+}
+
+function AtRiskDialog({ open, onOpenChange, onGoToStudents }: AtRiskDialogProps) {
+  const [students, setStudents] = useState<AtRiskStudent[]>([])
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (!open) return
+    let alive = true
+    Promise.resolve().then(() => alive && setLoading(true))
+    api<{ atRisk: AtRiskStudent[] }>('/api/attendance/at-risk')
+      .then((r) => alive && setStudents(r.atRisk))
+      .catch(() => alive && setStudents([]))
+      .finally(() => alive && setLoading(false))
+    return () => {
+      alive = false
+    }
+  }, [open])
+
+  const severityStyle: Record<string, { border: string; bg: string; text: string; label: string }> = {
+    high: { border: 'border-red-500/40', bg: 'bg-red-500/10', text: 'text-red-600 dark:text-red-400', label: 'High' },
+    medium: { border: 'border-amber-500/40', bg: 'bg-amber-500/10', text: 'text-amber-600 dark:text-amber-400', label: 'Medium' },
+    low: { border: 'border-slate-500/40', bg: 'bg-slate-500/10', text: 'text-slate-600 dark:text-slate-400', label: 'Low' },
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[90vh] max-w-3xl overflow-hidden p-0">
+        <DialogHeader className="border-b px-6 py-4">
+          <DialogTitle className="flex items-center gap-2">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400">
+              <AlertTriangle className="h-4 w-4" />
+            </div>
+            At-Risk Students
+          </DialogTitle>
+          <DialogDescription>
+            Students with attendance concerns in the last 14 days. Click a student to view their full profile.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="scroll-thin max-h-[calc(90vh-140px)] overflow-y-auto px-6 py-4">
+          {loading ? (
+            <div className="flex flex-col items-center justify-center gap-3 py-12">
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              <p className="text-sm text-muted-foreground">Analyzing attendance patterns…</p>
+            </div>
+          ) : students.length === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-3 py-12">
+              <CheckCircle2 className="h-12 w-12 text-emerald-500" />
+              <p className="text-sm font-medium">No at-risk students</p>
+              <p className="text-xs text-muted-foreground">All students have healthy attendance patterns.</p>
+            </div>
+          ) : (
+            <div className="space-y-2.5">
+              {students.map((s) => {
+                const sv = severityStyle[s.severity] || severityStyle.medium
+                const rateColor = s.rate < 50 ? 'text-red-600 dark:text-red-400' : s.rate < 75 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'
+                return (
+                  <button
+                    key={s.id}
+                    onClick={() => {
+                      onOpenChange(false)
+                      onGoToStudents()
+                    }}
+                    className={cn(
+                      'group flex w-full items-center gap-3 rounded-xl border bg-card p-3 text-left transition-all hover:shadow-md',
+                      sv.border,
+                    )}
+                  >
+                    {/* Avatar + severity dot */}
+                    <div className="relative shrink-0">
+                      <Avatar className="h-10 w-10 ring-2 ring-background">
+                        <AvatarFallback className={cn('text-xs font-bold', avatarColor(s.fullName))}>
+                          {initials(s.fullName)}
+                        </AvatarFallback>
+                      </Avatar>
+                      <span
+                        className={cn(
+                          'absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-background',
+                          s.severity === 'high' ? 'bg-red-500' : s.severity === 'medium' ? 'bg-amber-500' : 'bg-slate-400',
+                        )}
+                      />
+                    </div>
+
+                    {/* Name + ID + concerns */}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <p className="truncate text-sm font-semibold">{s.fullName}</p>
+                        <span className="font-mono text-[10px] text-muted-foreground">{s.studentId}</span>
+                        <Badge variant="outline" className={cn('h-4 px-1.5 text-[9px]', sv.bg, sv.text, sv.border)}>
+                          {sv.label}
+                        </Badge>
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {s.concerns.map((c, i) => (
+                          <span
+                            key={i}
+                            className="inline-flex items-center rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                          >
+                            {c}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Rate + trend */}
+                    <div className="hidden shrink-0 flex-col items-end sm:flex">
+                      <div className="flex items-baseline gap-1">
+                        <span className={cn('text-lg font-bold', rateColor)}>{s.rate}%</span>
+                        <span className="text-[10px] text-muted-foreground">rate</span>
+                      </div>
+                      {s.previousRate > 0 && s.recentRate !== s.previousRate && (
+                        <span className="flex items-center gap-0.5 text-[10px] text-muted-foreground">
+                          <TrendingDown className="h-2.5 w-2.5 text-amber-500" />
+                          {s.previousRate}% → {s.recentRate}%
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Stats */}
+                    <div className="hidden shrink-0 gap-2 lg:flex">
+                      <div className="flex flex-col items-center rounded-md bg-muted/50 px-2 py-1">
+                        <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">{s.presentCount}</span>
+                        <span className="text-[9px] text-muted-foreground">present</span>
+                      </div>
+                      <div className="flex flex-col items-center rounded-md bg-muted/50 px-2 py-1">
+                        <span className="text-xs font-bold text-amber-600 dark:text-amber-400">{s.lateCount}</span>
+                        <span className="text-[9px] text-muted-foreground">late</span>
+                      </div>
+                      <div className="flex flex-col items-center rounded-md bg-muted/50 px-2 py-1">
+                        <span className="text-xs font-bold text-red-600 dark:text-red-400">{s.absentCount}</span>
+                        <span className="text-[9px] text-muted-foreground">absent</span>
+                      </div>
+                    </div>
+
+                    {/* Guardian contact */}
+                    {s.guardianPhone && (
+                      <div className="hidden shrink-0 items-center gap-1 rounded-md bg-muted/30 px-2 py-1 text-[10px] xl:flex">
+                        <Phone className="h-2.5 w-2.5 text-muted-foreground" />
+                        <span className="font-mono text-muted-foreground">{s.guardianPhone}</span>
+                      </div>
+                    )}
+
+                    <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Footer summary */}
+        {!loading && students.length > 0 && (
+          <div className="flex items-center justify-between border-t bg-muted/30 px-6 py-3 text-xs text-muted-foreground">
+            <span>
+              <span className="font-semibold text-foreground">{students.length}</span> student{students.length === 1 ? '' : 's'} flagged
+              {' · '}
+              <span className="text-red-600 dark:text-red-400">{students.filter((s) => s.severity === 'high').length} high</span>
+              {' · '}
+              <span className="text-amber-600 dark:text-amber-400">{students.filter((s) => s.severity === 'medium').length} medium</span>
+            </span>
+            <Button variant="outline" size="sm" onClick={() => { onOpenChange(false); onGoToStudents() }}>
+              Go to Students <ArrowRight className="ml-1 h-3 w-3" />
+            </Button>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   )
 }
