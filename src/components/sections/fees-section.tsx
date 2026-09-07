@@ -23,6 +23,7 @@ import {
   CircleDollarSign,
   Zap,
   BellRing,
+  FileText,
 } from 'lucide-react'
 
 import { api } from '@/lib/api'
@@ -235,6 +236,7 @@ export function FeesSection() {
   const [createOpen, setCreateOpen] = useState(false)
   const [editTarget, setEditTarget] = useState<PaymentRow | null>(null)
   const [receiptTarget, setReceiptTarget] = useState<PaymentRow | null>(null)
+  const [statementTarget, setStatementTarget] = useState<PaymentRow | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<PaymentRow | null>(null)
   const [generating, setGenerating] = useState(false)
   const [bulkOpen, setBulkOpen] = useState(false)
@@ -796,6 +798,9 @@ export function FeesSection() {
                             <DropdownMenuItem onClick={() => setReceiptTarget(p)}>
                               <ReceiptIcon className="mr-2 h-4 w-4" /> Print Receipt
                             </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => setStatementTarget(p)}>
+                              <FileText className="mr-2 h-4 w-4" /> Fee Statement
+                            </DropdownMenuItem>
                             <DropdownMenuSeparator />
                             <DropdownMenuItem
                               onClick={() => setDeleteTarget(p)}
@@ -847,6 +852,14 @@ export function FeesSection() {
         <ReceiptDialog
           payment={receiptTarget}
           onClose={() => setReceiptTarget(null)}
+        />
+      )}
+
+      {/* Student fee statement (all months, printable) */}
+      {statementTarget && (
+        <StudentStatementDialog
+          studentId={statementTarget.student.id}
+          onClose={() => setStatementTarget(null)}
         />
       )}
 
@@ -1743,6 +1756,292 @@ function BulkGenerateDialog({
             )}
           </Button>
         </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ─── Student fee statement (all billed months, printable) ──────────────────
+interface StatementLine {
+  description: string
+  amount: number
+  color: string | null
+}
+interface StatementMonth {
+  id: string
+  month: string
+  amount: number
+  paidAmount: number
+  balance: number
+  status: string
+  method: string
+  paidDate: string | null
+  receiptNo: string | null
+  lines: StatementLine[]
+}
+interface StatementResponse {
+  student: {
+    id: string
+    studentId: string
+    fullName: string
+    gender: string
+    status: string
+    admissionDate: string | null
+    guardians: { name: string; phone: string; relationship: string; isPrimary: boolean }[]
+    enrollments: { program: string | null; programColor: string | null; class: string | null }[]
+  }
+  months: StatementMonth[]
+  totals: { billed: number; paid: number; balance: number; billCount: number }
+  generatedAt: string
+}
+
+function statementStatusClasses(status: string): string {
+  switch (status) {
+    case 'Paid':
+      return 'border-transparent bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+    case 'Partial':
+      return 'border-transparent bg-blue-500/15 text-blue-700 dark:text-blue-300'
+    case 'Overdue':
+      return 'border-transparent bg-red-500/15 text-red-700 dark:text-red-300'
+    default:
+      return 'border-transparent bg-amber-500/15 text-amber-700 dark:text-amber-300'
+  }
+}
+
+function StudentStatementDialog({
+  studentId,
+  onClose,
+}: {
+  studentId: string
+  onClose: () => void
+}) {
+  const [data, setData] = useState<StatementResponse | null>(null)
+  const [error, setError] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    api<StatementResponse>(`/api/payments/statement?studentId=${studentId}`)
+      .then((d) => {
+        if (alive) setData(d)
+      })
+      .catch(() => {
+        if (alive) setError(true)
+      })
+    return () => {
+      alive = false
+    }
+  }, [studentId])
+
+  const handlePrint = useCallback(() => {
+    if (typeof window !== 'undefined') window.print()
+  }, [])
+
+  const primaryGuardian = data?.student.guardians.find((g) => g.isPrimary) ?? data?.student.guardians[0]
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto scroll-thin sm:max-w-xl">
+        <DialogHeader className="sr-only">
+          <DialogTitle>Fee statement</DialogTitle>
+          <DialogDescription>
+            Printable statement of all billed months, payments and outstanding balance.
+          </DialogDescription>
+        </DialogHeader>
+
+        {error ? (
+          <div className="p-6 text-center">
+            <EmptyState
+              icon={AlertCircle}
+              title="Failed to load statement"
+              description="Try reopening the statement."
+            />
+          </div>
+        ) : !data ? (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : (
+          <>
+            <div className="statement-print rounded-lg border">
+              {/* Header */}
+              <div className="flex items-center justify-between gap-3 border-b p-4">
+                <div className="flex items-center gap-3">
+                  <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-lg ring-1 ring-border">
+                    <img src="/sanomin-logo.jpg" alt="SANOMIN" className="h-full w-full object-cover" />
+                  </div>
+                  <div className="leading-tight">
+                    <p className="text-sm font-bold">SANOMIN</p>
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                      International Preschool
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="text-sm font-extrabold uppercase tracking-widest">
+                    Fee Statement
+                  </p>
+                  <p className="text-[10px] text-muted-foreground">
+                    As of {new Date(data.generatedAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                  </p>
+                </div>
+              </div>
+
+              {/* Student meta */}
+              <div className="grid grid-cols-2 gap-3 border-b p-4 sm:grid-cols-4">
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Student</p>
+                  <p className="mt-0.5 text-sm font-semibold">{data.student.fullName}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Student ID</p>
+                  <p className="mt-0.5 font-mono text-sm">{data.student.studentId}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Guardian
+                  </p>
+                  <p className="mt-0.5 truncate text-sm">
+                    {primaryGuardian ? primaryGuardian.name : '—'}
+                    {primaryGuardian?.phone ? (
+                      <span className="block font-mono text-[10px] text-muted-foreground">
+                        {primaryGuardian.phone}
+                      </span>
+                    ) : null}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Enrolled in
+                  </p>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {data.student.enrollments.filter((e) => e.program).slice(0, 4).map((e, i) => (
+                      <span
+                        key={i}
+                        className="inline-flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium"
+                      >
+                        <span
+                          className="size-1.5 rounded-full"
+                          style={{ backgroundColor: e.programColor ?? 'var(--muted-foreground)' }}
+                        />
+                        {e.program}
+                      </span>
+                    ))}
+                    {data.student.enrollments.length === 0 && <span className="text-sm">—</span>}
+                  </div>
+                </div>
+              </div>
+
+              {/* Months table */}
+              <div className="max-h-[46vh] overflow-y-auto scroll-thin">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-muted/70 backdrop-blur">
+                    <tr className="border-b text-left text-[10px] uppercase tracking-wider text-muted-foreground">
+                      <th className="px-4 py-2 font-medium">Month</th>
+                      <th className="px-2 py-2 font-medium">Items</th>
+                      <th className="px-2 py-2 text-right font-medium">Billed</th>
+                      <th className="px-2 py-2 text-right font-medium">Paid</th>
+                      <th className="px-4 py-2 text-right font-medium">Balance</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.months.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">
+                          No bills issued for this student yet.
+                        </td>
+                      </tr>
+                    )}
+                    {data.months.map((m) => (
+                      <tr key={m.id} className="border-b align-top last:border-0">
+                        <td className="px-4 py-2.5">
+                          <p className="whitespace-nowrap text-xs font-semibold">
+                            {monthLabel(m.month)}
+                          </p>
+                          <div className="mt-1 flex flex-wrap items-center gap-1">
+                            <Badge variant="outline" className={`px-1.5 py-0 text-[9px] ${statementStatusClasses(m.status)}`}>
+                              {m.status}
+                            </Badge>
+                            {m.receiptNo && (
+                              <span className="font-mono text-[9px] text-muted-foreground">{m.receiptNo}</span>
+                            )}
+                          </div>
+                          {m.paidDate && (
+                            <p className="mt-0.5 text-[9px] text-muted-foreground">
+                              paid {fmtDate(m.paidDate)} · {m.method}
+                            </p>
+                          )}
+                        </td>
+                        <td className="px-2 py-2.5">
+                          <div className="space-y-0.5">
+                            {m.lines.map((l, i) => (
+                              <p key={i} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                                <span
+                                  className="size-1.5 shrink-0 rounded-full"
+                                  style={{ backgroundColor: l.color ?? 'var(--muted-foreground)' }}
+                                />
+                                {l.description}
+                              </p>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="whitespace-nowrap px-2 py-2.5 text-right text-xs tabular-nums">
+                          {currency(m.amount)}
+                        </td>
+                        <td className="whitespace-nowrap px-2 py-2.5 text-right text-xs tabular-nums text-emerald-600 dark:text-emerald-400">
+                          {currency(m.paidAmount)}
+                        </td>
+                        <td
+                          className={`whitespace-nowrap px-4 py-2.5 text-right text-xs font-semibold tabular-nums ${
+                            m.balance > 0
+                              ? 'text-red-600 dark:text-red-400'
+                              : 'text-emerald-600 dark:text-emerald-400'
+                          }`}
+                        >
+                          {currency(m.balance)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Totals */}
+              <div className="space-y-1 border-t bg-muted/30 p-4 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Total billed ({data.totals.billCount} bills)</span>
+                  <span className="font-semibold tabular-nums">{currency(data.totals.billed)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Total paid</span>
+                  <span className="font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
+                    {currency(data.totals.paid)}
+                  </span>
+                </div>
+                <div className="flex justify-between border-t pt-1.5">
+                  <span className="font-semibold">Outstanding balance</span>
+                  <span
+                    className={`text-base font-bold tabular-nums ${
+                      data.totals.balance > 0
+                        ? 'text-red-600 dark:text-red-400'
+                        : 'text-emerald-600 dark:text-emerald-400'
+                    }`}
+                  >
+                    {currency(data.totals.balance)}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={onClose}>
+                Close
+              </Button>
+              <Button onClick={handlePrint} className="gap-2">
+                <Printer className="h-4 w-4" /> Print statement
+              </Button>
+            </DialogFooter>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   )

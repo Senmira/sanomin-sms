@@ -245,12 +245,18 @@
   .receipt-print,
   .receipt-print *,
   .payslip-print,
-  .payslip-print * {
+  .payslip-print *,
+  .statement-print,
+  .statement-print *,
+  .register-print,
+  .register-print * {
     visibility: visible !important;
   }
   /* Pin the sheet to the page origin and give it the full width */
   .receipt-print,
-  .payslip-print {
+  .payslip-print,
+  .statement-print,
+  .register-print {
     position: absolute !important;
     inset: 0 auto auto 0 !important;
     width: 100% !important;
@@ -258,6 +264,14 @@
     margin: 0 !important;
     border-radius: 0 !important;
     box-shadow: none !important;
+  }
+  /* Register prints its own full grid at a readable-but-compact size */
+  .register-print table {
+    font-size: 9px !important;
+  }
+  .register-print th,
+  .register-print td {
+    padding: 2px 3px !important;
   }
   /* Neutralise dialog chrome around the sheet */
   [data-slot="dialog-overlay"],
@@ -284,9 +298,15 @@
     background: #fff !important;
   }
   .receipt-print *,
-  .payslip-print * {
+  .payslip-print *,
+  .statement-print *,
+  .register-print * {
     color: #0f172a !important;
     background-color: transparent !important;
     border-color: #cbd5e1 !important;
+  }
+  /* Keep register status colors readable on paper */
+  .register-print .reg-cell {
+    color: #0f172a !important;
   }
 }

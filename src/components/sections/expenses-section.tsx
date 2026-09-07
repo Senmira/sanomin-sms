@@ -13,9 +13,11 @@ import {
   MoreVertical,
   Loader2,
   AlertCircle,
+  CheckCircle2,
   PieChart,
   Calculator,
   CreditCard,
+  Target,
 } from 'lucide-react'
 
 import { api } from '@/lib/api'
@@ -203,6 +205,30 @@ export function ExpensesSection() {
   const [deleteTarget, setDeleteTarget] = useState<ExpenseRow | null>(null)
   const [deleting, setDeleting] = useState(false)
 
+  // Monthly budgets per category (vs actual spend)
+  const [budgetsOpen, setBudgetsOpen] = useState(false)
+  const [budgets, setBudgets] = useState<Record<string, number>>({})
+  const [budgetDrafts, setBudgetDrafts] = useState<Record<string, string>>({})
+  const [savingBudgets, setSavingBudgets] = useState(false)
+  const [budgetsLoaded, setBudgetsLoaded] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    if (budgetsLoaded) return
+    api<{ budgets: Record<string, number> }>('/api/expenses/budgets')
+      .then((r) => {
+        if (!alive) return
+        setBudgets(r.budgets || {})
+        setBudgetsLoaded(true)
+      })
+      .catch(() => {
+        if (alive) setBudgetsLoaded(true)
+      })
+    return () => {
+      alive = false
+    }
+  }, [budgetsLoaded])
+
   // ─── Debounce search input ──────────────────────────────────────────────
   useEffect(() => {
     const h = setTimeout(() => setDebouncedSearch(search.trim()), 250)
@@ -253,6 +279,36 @@ export function ExpensesSection() {
   }, [month, debouncedSearch, categoryFilter])
 
   const fetchExpenses = useCallback(() => reloadRef.current(), [])
+
+  // ─── Budgets ──────────────────────────────────────────────────────
+  const openBudgetsDialog = useCallback(() => {
+    const drafts: Record<string, string> = {}
+    for (const c of EXPENSE_CATEGORIES) drafts[c] = budgets[c] ? String(budgets[c]) : ''
+    setBudgetDrafts(drafts)
+    setBudgetsOpen(true)
+  }, [budgets])
+
+  const saveBudgets = useCallback(async () => {
+    setSavingBudgets(true)
+    try {
+      const payload: Record<string, number> = {}
+      for (const [cat, val] of Object.entries(budgetDrafts)) {
+        const n = Number(val)
+        if (val.trim() !== '' && Number.isFinite(n) && n > 0) payload[cat] = n
+      }
+      await api('/api/expenses/budgets', {
+        method: 'PUT',
+        body: JSON.stringify({ budgets: payload }),
+      })
+      setBudgets(payload)
+      setBudgetsOpen(false)
+      toast.success('Monthly budgets saved')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to save budgets')
+    } finally {
+      setSavingBudgets(false)
+    }
+  }, [budgetDrafts])
 
   // ─── Delete ─────────────────────────────────────────────────────────────
   const handleDelete = useCallback(async () => {
@@ -328,6 +384,9 @@ export function ExpensesSection() {
         icon={<ReceiptText className="h-5 w-5" />}
         actions={
           <>
+            <Button variant="outline" size="sm" onClick={openBudgetsDialog} className="gap-2">
+              <Target className="h-4 w-4" /> Budgets
+            </Button>
             <Button variant="outline" size="sm" onClick={exportCsv} className="gap-2">
               <Download className="h-4 w-4" /> Export CSV
             </Button>
@@ -383,6 +442,59 @@ export function ExpensesSection() {
           Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-28" />)
         )}
       </div>
+
+      {/* Budget vs actual (only when at least one budget is set) */}
+      {Object.keys(budgets).length > 0 && summary && (
+        <Card className="p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-sm font-semibold">
+              <Target className="h-4 w-4 text-primary" />
+              Budget vs actual
+              <span className="text-xs font-normal text-muted-foreground">
+                {monthLabel(month)}
+              </span>
+            </div>
+            <Button variant="ghost" size="sm" onClick={openBudgetsDialog} className="h-7 gap-1 text-xs">
+              <Pencil className="h-3 w-3" /> Edit budgets
+            </Button>
+          </div>
+          <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2 lg:grid-cols-3">
+            {EXPENSE_CATEGORIES.filter((c) => budgets[c]).map((cat) => {
+              const budget = budgets[cat]
+              const spent = summary.byCategory.find((b) => b.category === cat)?.total ?? 0
+              const ratio = budget > 0 ? spent / budget : 0
+              const over = spent > budget
+              const barColor =
+                ratio >= 1
+                  ? 'bg-red-500'
+                  : ratio >= 0.8
+                    ? 'bg-amber-500'
+                    : 'bg-emerald-500'
+              return (
+                <div key={cat} className="min-w-0">
+                  <div className="mb-1 flex items-baseline justify-between gap-2 text-xs">
+                    <span className="truncate font-medium">{cat}</span>
+                    <span className="shrink-0 tabular-nums text-muted-foreground">
+                      {currencyCompact(spent)} / {currencyCompact(budget)}
+                      {over && (
+                        <span className="ml-1 font-semibold text-red-600 dark:text-red-400">
+                          +{currencyCompact(spent - budget)} over
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                    <div
+                      className={`h-full rounded-full transition-all duration-500 ${barColor}`}
+                      style={{ width: `${Math.min(100, Math.round(ratio * 100))}%` }}
+                    />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </Card>
+      )}
 
       {/* Month selector + Category filter + search */}
       <Card className="p-4">
@@ -601,6 +713,68 @@ export function ExpensesSection() {
           }}
         />
       )}
+
+      {/* Budgets dialog */}
+      <Dialog open={budgetsOpen} onOpenChange={setBudgetsOpen}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto scroll-thin sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <Target className="h-4 w-4" />
+              </div>
+              Monthly budgets
+            </DialogTitle>
+            <DialogDescription>
+              Set a spending limit per category. Leave blank for no budget. Progress bars on the
+              Expenses page compare each month&apos;s actual spend against these limits.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2">
+            {EXPENSE_CATEGORIES.map((cat) => {
+              const spentThisMonth =
+                summary?.byCategory.find((b) => b.category === cat)?.total ?? 0
+              return (
+                <div
+                  key={cat}
+                  className="flex items-center justify-between gap-3 rounded-lg border bg-muted/20 px-3 py-2"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{cat}</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {monthLabel(month)}: {currency(spentThisMonth)}
+                    </p>
+                  </div>
+                  <div className="flex w-32 shrink-0 items-center gap-1.5">
+                    <span className="text-xs text-muted-foreground">LKR</span>
+                    <Input
+                      type="number"
+                      min={0}
+                      step={100}
+                      placeholder="—"
+                      value={budgetDrafts[cat] ?? ''}
+                      onChange={(e) =>
+                        setBudgetDrafts((prev) => ({ ...prev, [cat]: e.target.value }))
+                      }
+                      className="h-8 text-sm"
+                    />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBudgetsOpen(false)} disabled={savingBudgets}>
+              Cancel
+            </Button>
+            <Button onClick={saveBudgets} disabled={savingBudgets} className="gap-2">
+              {savingBudgets ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+              Save budgets
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Delete confirm */}
       <ConfirmDialog

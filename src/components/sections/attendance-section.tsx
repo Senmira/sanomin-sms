@@ -28,6 +28,9 @@ import {
   ChevronRight,
   Building2,
   Briefcase,
+  BookOpen,
+  Printer,
+  Download,
 } from 'lucide-react'
 
 import { api } from '@/lib/api'
@@ -2021,7 +2024,7 @@ function SummaryChip({
 // Main Section
 // ════════════════════════════════════════════════════════════════════════════
 export function AttendanceSection() {
-  const [activeTab, setActiveTab] = useState<'today' | 'history'>('today')
+  const [activeTab, setActiveTab] = useState<'today' | 'history' | 'register'>('today')
   const [manualOpen, setManualOpen] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
 
@@ -2208,9 +2211,9 @@ export function AttendanceSection() {
         />
       </div>
 
-      {/* Tabs: Today's Log | History */}
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'today' | 'history')}>
-        <TabsList className="grid w-full max-w-md grid-cols-2">
+      {/* Tabs: Today's Log | History | Register */}
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'today' | 'history' | 'register')}>
+        <TabsList className="grid w-full max-w-lg grid-cols-3">
           <TabsTrigger value="today" className="gap-2">
             <ClipboardList className="h-4 w-4" />
             Today&apos;s Log
@@ -2218,6 +2221,10 @@ export function AttendanceSection() {
           <TabsTrigger value="history" className="gap-2">
             <History className="h-4 w-4" />
             History
+          </TabsTrigger>
+          <TabsTrigger value="register" className="gap-2">
+            <BookOpen className="h-4 w-4" />
+            Register
           </TabsTrigger>
         </TabsList>
 
@@ -2247,6 +2254,10 @@ export function AttendanceSection() {
 
         <TabsContent value="history" className="mt-4">
           <HistoryView />
+        </TabsContent>
+
+        <TabsContent value="register" className="mt-4">
+          <RegisterView />
         </TabsContent>
       </Tabs>
 
@@ -2285,6 +2296,404 @@ export function AttendanceSection() {
         confirmText="Delete"
         onConfirm={confirmDelete}
       />
+    </div>
+  )
+}
+
+// ─── Class attendance register (monthly grid, printable) ───────────────────
+interface RegisterDay {
+  day: number
+  dow: string
+  isWeekend: boolean
+  isFuture: boolean
+}
+interface RegisterStudent {
+  id: string
+  studentId: string
+  fullName: string
+  cells: (string | null)[]
+  present: number
+  late: number
+  absent: number
+  leave: number
+  rate: number | null
+}
+interface RegisterResponse {
+  class: {
+    id: string
+    name: string
+    teacher: string | null
+    program: string | null
+    programColor: string | null
+    schedule: string
+    room: string | null
+  }
+  month: string
+  monthLabel: string
+  days: RegisterDay[]
+  students: RegisterStudent[]
+  dayTotals: { day: number; present: number; late: number; absent: number; marked: number }[]
+  totalStudents: number
+}
+
+const REGISTER_MONTHS = 6
+
+function registerMonthOptions(n = REGISTER_MONTHS): string[] {
+  const out: string[] = []
+  const d = new Date()
+  for (let i = 0; i < n; i++) {
+    const t = new Date(d.getFullYear(), d.getMonth() - i, 1)
+    out.push(`${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}`)
+  }
+  return out
+}
+
+function registerMonthLabel(m: string): string {
+  const [y, mm] = m.split('-').map((x) => parseInt(x, 10))
+  return new Date(y, mm - 1, 1).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })
+}
+
+function registerCellDisplay(status: string | null, day: RegisterDay): { text: string; cls: string } {
+  if (status === 'Present') return { text: 'P', cls: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300' }
+  if (status === 'Late') return { text: 'L', cls: 'bg-amber-500/20 text-amber-700 dark:text-amber-300' }
+  if (status === 'Absent') return { text: 'A', cls: 'bg-red-500/15 text-red-700 dark:text-red-300' }
+  if (status === 'Leave') return { text: 'V', cls: 'bg-teal-500/15 text-teal-700 dark:text-teal-300' }
+  if (day.isFuture) return { text: '', cls: 'bg-muted/20' }
+  return { text: '·', cls: 'text-muted-foreground/40' }
+}
+
+function RegisterView() {
+  const monthOptions = useMemo(() => registerMonthOptions(), [])
+  const [classId, setClassId] = useState('')
+  const [month, setMonth] = useState(monthOptions[0])
+  const [classes, setClasses] = useState<ClassRow[]>([])
+  const [classesLoaded, setClassesLoaded] = useState(false)
+  const [data, setData] = useState<RegisterResponse | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(false)
+  const [refetchTick, setRefetchTick] = useState(0)
+
+  useEffect(() => {
+    let alive = true
+    if (classesLoaded) return
+    api<{ data: ClassRow[] }>('/api/classes?active=true&limit=200')
+      .then((res) => {
+        if (!alive) return
+        setClasses(res.data || [])
+        setClassesLoaded(true)
+      })
+      .catch(() => {
+        if (alive) setClassesLoaded(true)
+      })
+    return () => {
+      alive = false
+    }
+  }, [classesLoaded])
+
+  useEffect(() => {
+    if (!classId) return
+    let alive = true
+    const run = () => {
+      if (!alive) return
+      setLoading(true)
+      setError(false)
+      api<RegisterResponse>(`/api/attendance/register?classId=${classId}&month=${month}`)
+        .then((d) => {
+          if (alive) setData(d)
+        })
+        .catch(() => {
+          if (alive) {
+            setData(null)
+            setError(true)
+          }
+        })
+        .finally(() => {
+          if (alive) setLoading(false)
+        })
+    }
+    const t = setTimeout(run, 0)
+    return () => {
+      alive = false
+      clearTimeout(t)
+    }
+  }, [classId, month, refetchTick])
+
+  const selectedClass = classes.find((c) => c.id === classId)
+
+  const exportCsv = useCallback(() => {
+    if (!data) return
+    const rows: (string | number)[][] = [
+      [`Class Attendance Register — ${data.class.name} — ${data.monthLabel}`],
+      [`Teacher: ${data.class.teacher ?? '—'} · Program: ${data.class.program ?? '—'} · Schedule: ${data.class.schedule || '—'}`],
+      [],
+      ['Student ID', 'Name', ...data.days.map((d) => `${d.day} ${d.dow}`), 'Present', 'Late', 'Absent', 'Leave', 'Rate %'],
+      ...data.students.map((s) => [
+        s.studentId,
+        s.fullName,
+        ...s.cells.map((c) => c ?? ''),
+        s.present,
+        s.late,
+        s.absent,
+        s.leave,
+        s.rate ?? '',
+      ]),
+    ]
+    const csv = rows
+      .map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(','))
+      .join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `register-${data.class.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-${month}.csv`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    toast.success(`Exported register for ${data.students.length} students`)
+  }, [data, month])
+
+  const handlePrint = useCallback(() => {
+    // Landscape gives the 31-day grid room to breathe on paper
+    const style = document.createElement('style')
+    style.id = 'register-print-page'
+    style.textContent = '@page { size: A4 landscape; margin: 8mm; }'
+    document.head.appendChild(style)
+    window.print()
+    window.addEventListener(
+      'afterprint',
+      () => document.getElementById('register-print-page')?.remove(),
+      { once: true },
+    )
+  }, [])
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* Controls */}
+      <Card>
+        <CardContent className="flex flex-col gap-3 p-4 lg:flex-row lg:items-end lg:justify-between">
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="grid gap-1">
+              <Label className="text-xs text-muted-foreground">Class</Label>
+              <Select value={classId} onValueChange={(v) => {
+                setClassId(v)
+                setData(null)
+                setError(false)
+              }}>
+                <SelectTrigger className="w-[230px]">
+                  <SelectValue placeholder="Select a class…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {classes.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-1">
+              <Label className="text-xs text-muted-foreground">Month</Label>
+              <Select value={month} onValueChange={setMonth}>
+                <SelectTrigger className="w-[160px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {monthOptions.map((m) => (
+                    <SelectItem key={m} value={m}>
+                      {registerMonthLabel(m)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={exportCsv} disabled={!data} className="gap-2">
+              <Download className="h-4 w-4" /> Export CSV
+            </Button>
+            <Button variant="outline" size="sm" onClick={handlePrint} disabled={!data} className="gap-2">
+              <Printer className="h-4 w-4" /> Print register
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {!classId ? (
+        <Card>
+          <CardContent className="p-6">
+            <EmptyState
+              icon={BookOpen}
+              title="Select a class"
+              description="Choose a class above to view its monthly attendance register — every enrolled student across each day of the month."
+              className="border-dashed"
+            />
+          </CardContent>
+        </Card>
+      ) : loading && !data ? (
+        <Card>
+          <CardContent className="space-y-2 p-4">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="h-10 w-full" />
+            ))}
+          </CardContent>
+        </Card>
+      ) : error || !data ? (
+        <Card>
+          <CardContent className="p-6">
+            <EmptyState
+              icon={AlertCircle}
+              title="Failed to load register"
+              description="Something went wrong. Try again."
+              action={
+                <Button size="sm" onClick={() => setRefetchTick((n) => n + 1)}>
+                  Retry
+                </Button>
+              }
+            />
+          </CardContent>
+        </Card>
+      ) : data.students.length === 0 ? (
+        <Card>
+          <CardContent className="p-6">
+            <EmptyState
+              icon={Users2}
+              title="No students enrolled"
+              description={`${data.class.name} has no active students for ${data.monthLabel}. Enroll students in the Classes section first.`}
+              className="border-dashed"
+            />
+          </CardContent>
+        </Card>
+      ) : (
+        <Card className="p-0">
+          <div className="register-print min-w-0">
+            {/* Sheet header (prints too) */}
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
+              <div className="flex items-center gap-3">
+                <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-lg ring-1 ring-border">
+                  <img src="/sanomin-logo.jpg" alt="SANOMIN" className="h-full w-full object-cover" />
+                </div>
+                <div className="leading-tight">
+                  <p className="text-sm font-bold">SANOMIN</p>
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    International Preschool
+                  </p>
+                </div>
+              </div>
+              <div className="text-right">
+                <p className="text-sm font-extrabold uppercase tracking-widest">
+                  Attendance Register
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {data.class.name} · {data.monthLabel}
+                </p>
+                <p className="text-[11px] text-muted-foreground">
+                  {[data.class.program, data.class.teacher, data.class.schedule, data.class.room]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </p>
+              </div>
+            </div>
+
+            <div className="scroll-thin max-h-[62vh] overflow-auto p-0">
+              <Table className="table-zebra min-w-[900px]">
+                <TableHeader className="sticky top-0 z-10 bg-muted/80 backdrop-blur">
+                  <TableRow>
+                    <TableHead className="sticky left-0 z-20 bg-muted/95 min-w-[150px]">
+                      Student
+                    </TableHead>
+                    {data.days.map((d) => (
+                      <TableHead
+                        key={d.day}
+                        className={`px-0 text-center text-[10px] ${d.isWeekend ? 'text-muted-foreground/50' : ''}`}
+                        title={`${d.day} ${data.monthLabel} (${d.dow})`}
+                      >
+                        {d.day}
+                      </TableHead>
+                    ))}
+                    <TableHead className="text-center text-[10px]">P</TableHead>
+                    <TableHead className="text-center text-[10px]">L</TableHead>
+                    <TableHead className="text-center text-[10px]">A</TableHead>
+                    <TableHead className="text-center text-[10px]">%</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {data.students.map((s) => (
+                    <TableRow key={s.id} className="animate-row-in">
+                      <TableCell className="sticky left-0 z-10 bg-card/95">
+                        <p className="truncate text-xs font-medium">{s.fullName}</p>
+                        <p className="font-mono text-[10px] text-muted-foreground">{s.studentId}</p>
+                      </TableCell>
+                      {s.cells.map((c, i) => {
+                        const disp = registerCellDisplay(c, data.days[i])
+                        return (
+                          <TableCell key={i} className="px-0 text-center">
+                            <span
+                              className={`reg-cell inline-flex h-5 w-5 items-center justify-center rounded text-[10px] font-semibold ${disp.cls}`}
+                            >
+                              {disp.text}
+                            </span>
+                          </TableCell>
+                        )
+                      })}
+                      <TableCell className="text-center text-xs font-medium tabular-nums text-emerald-600 dark:text-emerald-400">
+                        {s.present}
+                      </TableCell>
+                      <TableCell className="text-center text-xs font-medium tabular-nums text-amber-600 dark:text-amber-400">
+                        {s.late}
+                      </TableCell>
+                      <TableCell className="text-center text-xs font-medium tabular-nums text-red-600 dark:text-red-400">
+                        {s.absent}
+                      </TableCell>
+                      <TableCell className="text-center text-xs font-semibold tabular-nums">
+                        {s.rate === null ? '—' : `${s.rate}%`}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+                <tfoot>
+                  <TableRow className="border-t-2 bg-muted/50 font-semibold">
+                    <TableCell className="sticky left-0 z-10 bg-muted/95 text-xs">
+                      Present that day
+                    </TableCell>
+                    {data.dayTotals.map((t) => (
+                      <TableCell key={t.day} className="px-0 text-center text-[10px] tabular-nums">
+                        {t.marked > 0 ? t.present : ''}
+                      </TableCell>
+                    ))}
+                    <TableCell colSpan={4} />
+                  </TableRow>
+                </tfoot>
+              </Table>
+            </div>
+
+            {/* Legend */}
+            <div className="flex flex-wrap items-center gap-3 border-t px-4 py-2.5 text-[11px] text-muted-foreground">
+              <span className="inline-flex items-center gap-1">
+                <span className="reg-cell inline-flex h-4 w-4 items-center justify-center rounded bg-emerald-500/15 text-[9px] font-bold text-emerald-700">P</span>
+                Present
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="reg-cell inline-flex h-4 w-4 items-center justify-center rounded bg-amber-500/20 text-[9px] font-bold text-amber-700">L</span>
+                Late
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="reg-cell inline-flex h-4 w-4 items-center justify-center rounded bg-red-500/15 text-[9px] font-bold text-red-700">A</span>
+                Absent
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="reg-cell inline-flex h-4 w-4 items-center justify-center rounded bg-teal-500/15 text-[9px] font-bold text-teal-700">V</span>
+                Leave
+              </span>
+              <span>· unmarked / not yet due</span>
+              <span className="ml-auto">
+                {data.totalStudents} student{data.totalStudents === 1 ? '' : 's'} ·{' '}
+                {data.students.filter((s) => s.rate !== null).length} with records
+              </span>
+            </div>
+          </div>
+        </Card>
+      )}
     </div>
   )
 }
