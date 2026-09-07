@@ -35,6 +35,7 @@ import {
   AlertCircle,
   Clock,
   History,
+  Printer,
 } from 'lucide-react'
 
 import { api } from '@/lib/api'
@@ -1676,6 +1677,117 @@ function payrollMonthLabel(m: string): string {
   })
 }
 
+// ─── Payslip print / save-as-PDF ───────────────────────────────────────────
+// Opens a print-ready payslip window for one payroll month entry. Users can
+// print it or save it as PDF via the browser print dialog.
+function printPayslip(
+  teacher: { fullName: string; teacherId: string; type: string; epfNo?: string | null },
+  entry: {
+    month: string
+    gross: number
+    netSalary: number
+    epfEmployee: number
+    epfEmployer: number
+    etfEmployer: number
+    status: string
+    method: string | null
+    paidDate: string | null
+    note: string | null
+  },
+) {
+  const win = window.open('', '_blank', 'width=860,height=1000')
+  if (!win) {
+    toast.error('Pop-up blocked — allow pop-ups to print payslips.')
+    return
+  }
+  const lkr = (n: number) =>
+    `LKR ${Number(n || 0).toLocaleString('en-LK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  const epfNo = teacher.epfNo ? String(teacher.epfNo) : '—'
+  const paid = entry.status === 'Paid'
+  // EPF employee is 8% of basic → recover basic; when absent (external
+  // rate-only teachers) the whole gross is shown as the rate.
+  const basic = entry.epfEmployee > 0 ? entry.epfEmployee / 0.08 : 0
+  const basicRow = basic > 0 ? basic : entry.gross
+  const allowRow = Math.max(0, entry.gross - basicRow)
+  const generated = new Date().toLocaleString('en-GB', {
+    day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+  })
+  win.document.write(`<!doctype html>
+<html><head><meta charset="utf-8" />
+<title>Payslip — ${teacher.fullName} — ${payrollMonthLabel(entry.month)}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, Helvetica, sans-serif; background: #f1f5f9; color: #0f172a; padding: 24px; }
+  .sheet { max-width: 800px; margin: 0 auto; background: #fff; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden; }
+  .head { display: flex; justify-content: space-between; align-items: center; padding: 22px 28px; background: #0f172a; color: #fff; }
+  .brand { font-size: 19px; font-weight: 700; letter-spacing: .4px; }
+  .brand small { display: block; font-size: 10.5px; font-weight: 400; opacity: .75; margin-top: 2px; letter-spacing: 2.2px; text-transform: uppercase; }
+  .slip { text-align: right; }
+  .slip h2 { font-size: 18px; letter-spacing: 3px; }
+  .slip p { font-size: 12px; opacity: .8; margin-top: 2px; }
+  .meta { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding: 20px 28px; border-bottom: 1px solid #e2e8f0; }
+  .meta .cell .k { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #64748b; }
+  .meta .cell .v { font-size: 13.5px; font-weight: 600; margin-top: 3px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: 1px; color: #64748b; padding: 12px 28px 8px; border-bottom: 1px solid #e2e8f0; }
+  td { padding: 10px 28px; border-bottom: 1px solid #f1f5f9; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.total td { font-weight: 700; background: #f8fafc; }
+  .net { display: flex; justify-content: space-between; align-items: center; margin: 20px 28px; padding: 16px 20px; border-radius: 10px; background: #ecfdf5; border: 1px solid #a7f3d0; }
+  .net .k { font-size: 12px; text-transform: uppercase; letter-spacing: 1.2px; color: #065f46; font-weight: 700; }
+  .net .v { font-size: 22px; font-weight: 800; color: #047857; font-variant-numeric: tabular-nums; }
+  .note { margin: 0 28px 18px; font-size: 12.5px; color: #475569; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 8px; padding: 10px 14px; }
+  .foot { display: flex; justify-content: space-between; align-items: flex-end; padding: 18px 28px 24px; font-size: 11px; color: #94a3b8; border-top: 1px solid #e2e8f0; }
+  .sig { text-align: center; font-size: 11px; color: #475569; }
+  .sig .line { width: 180px; border-top: 1px solid #94a3b8; margin-top: 34px; padding-top: 4px; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+  .badge.paid { background: #d1fae5; color: #065f46; }
+  .badge.pending { background: #fef3c7; color: #92400e; }
+  @media print { body { background: #fff; padding: 0; } .sheet { border: none; border-radius: 0; } }
+</style></head>
+<body>
+  <div class="sheet">
+    <div class="head">
+      <div style="display:flex;align-items:center;gap:12px;">
+        <img src="/sanomin-logo.jpg" alt="SANOMIN" style="width:40px;height:40px;border-radius:8px;object-fit:cover;border:1px solid rgba(255,255,255,.25);" />
+        <div class="brand">SANOMIN<small>International Preschool</small></div>
+      </div>
+      <div class="slip"><h2>PAYSLIP</h2><p>${payrollMonthLabel(entry.month)}</p></div>
+    </div>
+    <div class="meta">
+      <div class="cell"><div class="k">Employee</div><div class="v">${teacher.fullName}</div></div>
+      <div class="cell"><div class="k">Employee ID</div><div class="v">${teacher.teacherId}</div></div>
+      <div class="cell"><div class="k">Employment</div><div class="v">${teacher.type} teacher</div></div>
+      <div class="cell"><div class="k">EPF Number</div><div class="v">${epfNo}</div></div>
+      <div class="cell"><div class="k">Payment method</div><div class="v">${entry.method || '—'}</div></div>
+      <div class="cell"><div class="k">Status</div><div class="v"><span class="badge ${paid ? 'paid' : 'pending'}">${entry.status}</span>${entry.paidDate ? ` &nbsp;${new Date(entry.paidDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}` : ''}</div></div>
+    </div>
+    <table>
+      <tr><th>Earnings</th><th class="num">Amount</th></tr>
+      <tr><td>Basic salary</td><td class="num">${lkr(basicRow)}</td></tr>
+      <tr><td>Allowances</td><td class="num">${lkr(allowRow)}</td></tr>
+      <tr class="total"><td>Gross salary</td><td class="num">${lkr(entry.gross)}</td></tr>
+      <tr><th>Deductions</th><th class="num">Amount</th></tr>
+      <tr><td>EPF — employee (8% of basic)</td><td class="num">− ${lkr(entry.epfEmployee)}</td></tr>
+      <tr class="total"><td>Total deductions</td><td class="num">− ${lkr(entry.epfEmployee)}</td></tr>
+    </table>
+    <div class="net"><span class="k">Net salary payable</span><span class="v">${lkr(entry.netSalary)}</span></div>
+    <table>
+      <tr><th>Employer contributions (paid by institute)</th><th class="num">Amount</th></tr>
+      <tr><td>EPF — employer (12% of basic)</td><td class="num">${lkr(entry.epfEmployer)}</td></tr>
+      <tr><td>ETF — employer (3% of basic)</td><td class="num">${lkr(entry.etfEmployer)}</td></tr>
+    </table>
+    ${entry.note ? `<div class="note"><strong>Note:</strong> ${entry.note}</div>` : ''}
+    <div class="foot">
+      <span>Generated by SANOMIN SMS · ${generated}<br/>Computer-generated payslip — no signature required.</span>
+      <div class="sig"><div class="line">Authorized signature</div></div>
+    </div>
+  </div>
+  <script>window.onload = function () { setTimeout(function () { window.print(); }, 250); };</script>
+</body></html>`)
+  win.document.close()
+}
+
 function ProfileDialog({
   teacher,
   onClose,
@@ -2114,6 +2226,16 @@ function ProfileDialog({
                         >
                           {currency(h.netSalary)}
                         </p>
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          className="shrink-0"
+                          title={`Print / save payslip for ${payrollMonthLabel(h.month)}`}
+                          aria-label={`Print payslip for ${payrollMonthLabel(h.month)}`}
+                          onClick={() => printPayslip(teacher, h)}
+                        >
+                          <Printer className="h-4 w-4" />
+                        </Button>
                       </div>
                     )
                   })}

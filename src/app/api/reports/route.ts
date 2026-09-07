@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 
-// GET /api/reports?type=attendance|enrollment|heatmap
+// GET /api/reports?type=attendance|enrollment|heatmap|financial
 //   attendance: ?from=yyyy-mm-dd &to=yyyy-mm-dd → daily aggregates + method/status breakdown + by program
 //   enrollment: → by program, by age group, by gender, by religion, by status, recent admissions
 //   heatmap: ?month=YYYY-MM → daily attendance grid for the month (rate per day)
+//   financial: ?month=YYYY-MM → fees vs expenses vs payroll + tuition 25% institute-share breakdown
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
   const type = searchParams.get('type') || 'attendance'
@@ -15,7 +16,236 @@ export async function GET(req: Request) {
   if (type === 'heatmap') {
     return heatmapReport(searchParams)
   }
+  if (type === 'financial') {
+    return financialReport(searchParams)
+  }
   return attendanceReport(searchParams)
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100
+}
+
+function monthKeyOf(d: Date): string {
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`
+}
+
+// ─── Financial report: money in / money out for one month ───────────────────
+// Money IN : fees collected (Payment.paidAmount for the month)
+//            + institute share of tuition class revenue (Class.instituteSharePct)
+// Money OUT: operating expenses (Expense) + payroll employer cost (EPF/ETF)
+async function financialReport(searchParams: URLSearchParams) {
+  const monthStr = searchParams.get('month') // "2026-09"
+  const now = new Date()
+  const year = monthStr ? parseInt(monthStr.split('-')[0], 10) : now.getFullYear()
+  const month = monthStr ? parseInt(monthStr.split('-')[1], 10) - 1 : now.getMonth() // 0-indexed
+  const monthKey = `${year}-${String(month + 1).padStart(2, '0')}`
+
+  const firstDay = new Date(Date.UTC(year, month, 1))
+  const nextMonthFirst = new Date(Date.UTC(year, month + 1, 1))
+
+  // ── 1. Expenses ───────────────────────────────────────────────────────────
+  const expenses = await db.expense.findMany({
+    where: { date: { gte: firstDay, lt: nextMonthFirst } },
+    select: { amount: true, category: true, method: true },
+  })
+  const expenseTotal = round2(expenses.reduce((s, e) => s + e.amount, 0))
+  const catMap: Record<string, { total: number; count: number }> = {}
+  const methodMap: Record<string, number> = { Cash: 0, Bank: 0, Card: 0 }
+  for (const e of expenses) {
+    if (!catMap[e.category]) catMap[e.category] = { total: 0, count: 0 }
+    catMap[e.category].total += e.amount
+    catMap[e.category].count++
+    if (e.method in methodMap) (methodMap as any)[e.method] += e.amount
+  }
+  const byCategory = Object.entries(catMap)
+    .map(([category, v]) => ({ category, total: round2(v.total), count: v.count }))
+    .sort((a, b) => b.total - a.total)
+
+  // ── 2. Fee payments (bills keyed by month string) ─────────────────────────
+  const payments = await db.payment.findMany({
+    where: { month: monthKey },
+    select: { amount: true, paidAmount: true, status: true },
+  })
+  const billed = round2(payments.reduce((s, p) => s + p.amount, 0))
+  const collected = round2(payments.reduce((s, p) => s + p.paidAmount, 0))
+
+  // ── 3. Payroll (live register semantics: snapshot record overrides live) ──
+  const activeTeachers = await db.teacher.findMany({
+    where: { status: 'Active' },
+    select: { id: true, basicSalary: true, allowances: true },
+  })
+  const monthRecords = await db.payrollRecord.findMany({ where: { month: monthKey } })
+  const recMap = new Map(monthRecords.map((r) => [r.teacherId, r]))
+  let payrollCost = 0
+  let payrollNet = 0
+  let paidCount = 0
+  let pendingCount = 0
+  for (const t of activeTeachers) {
+    const rec = recMap.get(t.id)
+    const basic = rec ? rec.basicSalary : t.basicSalary
+    const allow = rec ? rec.allowances : t.allowances
+    const gross = (basic || 0) + (allow || 0)
+    const net = gross - (basic || 0) * 0.08
+    const employer = gross + (basic || 0) * 0.12 + (basic || 0) * 0.03
+    payrollCost += employer
+    payrollNet += net
+    if (rec?.status === 'Paid') paidCount++
+    else pendingCount++
+  }
+  payrollCost = round2(payrollCost)
+  payrollNet = round2(payrollNet)
+
+  // ── 4. Tuition class revenue share (teacher pays institute a % of class revenue)
+  const classes = await db.class.findMany({
+    where: { active: true, teacherId: { not: null } },
+    include: {
+      teacher: { select: { id: true, teacherId: true, fullName: true, type: true } },
+      program: { select: { code: true, name: true, color: true } },
+    },
+  })
+  const enrollGroups = await db.enrollment.groupBy({
+    by: ['classId'],
+    where: { status: 'Active', classId: { not: null } },
+    _count: { classId: true },
+  })
+  const enrolledByClass = new Map<string, number>()
+  for (const g of enrollGroups) {
+    if (g.classId) enrolledByClass.set(g.classId, g._count.classId)
+  }
+
+  const shareClasses: {
+    classId: string
+    className: string
+    program: string | null
+    programColor: string | null
+    teacherId: string
+    teacherName: string
+    teacherType: string
+    enrolled: number
+    fee: number
+    sharePct: number
+    gross: number
+    instituteAmount: number
+    teacherAmount: number
+  }[] = []
+  for (const c of classes) {
+    if (!c.teacher) continue
+    const enrolled = enrolledByClass.get(c.id) || 0
+    const gross = round2((c.fee || 0) * enrolled)
+    if (gross <= 0) continue // nothing to split
+    const pct = Math.min(100, Math.max(0, c.instituteSharePct))
+    const instituteAmount = round2((gross * pct) / 100)
+    shareClasses.push({
+      classId: c.id,
+      className: c.name,
+      program: c.program?.name ?? null,
+      programColor: c.program?.color ?? null,
+      teacherId: c.teacher.id,
+      teacherName: c.teacher.fullName,
+      teacherType: c.teacher.type,
+      enrolled,
+      fee: c.fee,
+      sharePct: pct,
+      gross,
+      instituteAmount,
+      teacherAmount: round2(gross - instituteAmount),
+    })
+  }
+  shareClasses.sort((a, b) => b.gross - a.gross)
+
+  // roll up per teacher
+  const teachMap: Record<string, {
+    teacherId: string; teacherRef: string; teacherName: string; teacherType: string
+    classCount: number; enrolled: number; gross: number; instituteAmount: number; teacherAmount: number
+  }> = {}
+  for (const c of shareClasses) {
+    if (!teachMap[c.teacherId]) {
+      teachMap[c.teacherId] = {
+        teacherId: c.teacherId,
+        teacherRef: '',
+        teacherName: c.teacherName,
+        teacherType: c.teacherType,
+        classCount: 0, enrolled: 0, gross: 0, instituteAmount: 0, teacherAmount: 0,
+      }
+    }
+    const t = teachMap[c.teacherId]
+    t.classCount++
+    t.enrolled += c.enrolled
+    t.gross = round2(t.gross + c.gross)
+    t.instituteAmount = round2(t.instituteAmount + c.instituteAmount)
+    t.teacherAmount = round2(t.teacherAmount + c.teacherAmount)
+  }
+  const byTeacher = Object.values(teachMap).sort((a, b) => b.gross - a.gross)
+  const shareTotals = {
+    gross: round2(shareClasses.reduce((s, c) => s + c.gross, 0)),
+    institute: round2(shareClasses.reduce((s, c) => s + c.instituteAmount, 0)),
+    teacher: round2(shareClasses.reduce((s, c) => s + c.teacherAmount, 0)),
+  }
+
+  // ── 5. 6-month trend ending at the selected month ─────────────────────────
+  const liveEmployerCost = activeTeachers.reduce((s, t) => {
+    const gross = (t.basicSalary || 0) + (t.allowances || 0)
+    return s + gross + (t.basicSalary || 0) * 0.15 // EPF 12% + ETF 3%
+  }, 0)
+  const trendMonths: { month: string; label: string; collected: number; expenses: number; payroll: number }[] = []
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(Date.UTC(year, month - i, 1))
+    const key = monthKeyOf(d)
+    const start = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1))
+    const end = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1))
+    const [pSum, eSum, recs] = await Promise.all([
+      db.payment.aggregate({ where: { month: key }, _sum: { paidAmount: true } }),
+      db.expense.aggregate({ where: { date: { gte: start, lt: end } }, _sum: { amount: true } }),
+      db.payrollRecord.findMany({ where: { month: key }, select: { employerCost: true } }),
+    ])
+    trendMonths.push({
+      month: key,
+      label: d.toLocaleDateString('en-GB', { month: 'short', timeZone: 'UTC' }),
+      collected: round2(pSum._sum.paidAmount || 0),
+      expenses: round2(eSum._sum.amount || 0),
+      payroll: recs.length > 0 ? round2(recs.reduce((s, r) => s + r.employerCost, 0)) : round2(liveEmployerCost),
+    })
+  }
+
+  return NextResponse.json({
+    month: monthKey,
+    monthLabel: new Date(Date.UTC(year, month, 1)).toLocaleDateString('en-GB', {
+      month: 'long', year: 'numeric', timeZone: 'UTC',
+    }),
+    fees: {
+      billed,
+      collected,
+      outstanding: round2(billed - collected),
+      billCount: payments.length,
+    },
+    expenses: {
+      total: expenseTotal,
+      count: expenses.length,
+      byCategory,
+      byMethod: methodMap,
+    },
+    payroll: {
+      teacherCount: activeTeachers.length,
+      paidCount,
+      pendingCount,
+      totalNet: payrollNet,
+      totalEmployerCost: payrollCost,
+    },
+    revenueShare: {
+      classes: shareClasses,
+      byTeacher,
+      totals: shareTotals,
+    },
+    summary: {
+      collected,
+      instituteShare: shareTotals.institute,
+      expenses: expenseTotal,
+      payrollCost,
+      net: round2(collected + shareTotals.institute - expenseTotal - payrollCost),
+    },
+    trend: trendMonths,
+  })
 }
 
 // Heatmap: daily attendance rate for a given month (or current month)

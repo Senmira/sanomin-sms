@@ -19,11 +19,12 @@ import {
   StickyNote,
   Undo2,
   X,
+  Pencil,
 } from 'lucide-react'
 
 import { api } from '@/lib/api'
 import { useAppStore } from '@/lib/store'
-import { PayrollRow, PayrollSummary, PAYROLL_METHODS } from '@/lib/types'
+import { PayrollRow, PayrollSummary, PAYROLL_METHODS, salaryBreakdown } from '@/lib/types'
 import { currency, currencyCompact, fmtDate, initials, avatarColor } from '@/lib/format'
 
 import { SectionHeader } from '@/components/shared/section-header'
@@ -145,6 +146,13 @@ export function PayrollSection() {
   const [pendingTarget, setPendingTarget] = useState<PayrollRow | null>(null)
   const [payslipTarget, setPayslipTarget] = useState<PayrollRow | null>(null)
 
+  // Quick salary setup for teachers with no salary configured (banner)
+  const [salaryOpen, setSalaryOpen] = useState(false)
+  const [salaryDrafts, setSalaryDrafts] = useState<
+    Record<string, { basic: string; allow: string; epf: string }>
+  >( {})
+  const [savingSalaries, setSavingSalaries] = useState(false)
+
   // ─── Load payroll register for the selected month + status ─────────────
   const reloadRef = useRef<() => void>(() => {})
 
@@ -248,6 +256,68 @@ export function PayrollSection() {
 
   // Teachers with no salary configured (net LKR 0) — surface a fix-it banner
   const noSalaryRows = useMemo(() => rows.filter((r) => r.netSalary <= 0), [rows])
+
+  // ─── Quick salary setup (banner dialog) ──────────────────────────────────
+  const openSalaryDialog = useCallback(() => {
+    const drafts: Record<string, { basic: string; allow: string; epf: string }> = {}
+    for (const r of noSalaryRows) {
+      drafts[r.teacher.id] = { basic: '', allow: '', epf: r.teacher.epfNo ?? '' }
+    }
+    setSalaryDrafts(drafts)
+    setSalaryOpen(true)
+  }, [noSalaryRows])
+
+  const updateSalaryDraft = useCallback(
+    (id: string, field: 'basic' | 'allow' | 'epf', value: string) => {
+      setSalaryDrafts((prev) => ({
+        ...prev,
+        [id]: { ...prev[id], [field]: value },
+      }))
+    },
+    [],
+  )
+
+  const draftsWithValue = useMemo(
+    () =>
+      Object.entries(salaryDrafts).filter(
+        ([, d]) => Number(d.basic || 0) > 0 || Number(d.allow || 0) > 0,
+      ),
+    [salaryDrafts],
+  )
+
+  const saveSalaries = useCallback(async () => {
+    if (draftsWithValue.length === 0) return
+    setSavingSalaries(true)
+    let ok = 0
+    const failures: string[] = []
+    for (const [teacherId, d] of draftsWithValue) {
+      const row = noSalaryRows.find((r) => r.teacher.id === teacherId)
+      try {
+        await api(`/api/teachers/${teacherId}`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            basicSalary: Math.max(0, Number(d.basic || 0)),
+            allowances: Math.max(0, Number(d.allow || 0)),
+            epfNo: d.epf.trim() ? d.epf.trim() : null,
+          }),
+        })
+        ok++
+      } catch {
+        failures.push(row?.teacher.fullName ?? teacherId)
+      }
+    }
+    setSavingSalaries(false)
+    if (ok > 0) {
+      toast.success(
+        `Salary updated for ${ok} teacher${ok === 1 ? '' : 's'} — register refreshed`,
+      )
+      setSalaryOpen(false)
+      fetchRegister()
+    }
+    if (failures.length > 0) {
+      toast.error(`Failed to update: ${failures.join(', ')}`)
+    }
+  }, [draftsWithValue, noSalaryRows, fetchRegister])
 
   // ─── CSV export ─────────────────────────────────────────────────────────
   const exportCsv = useCallback(() => {
@@ -463,6 +533,15 @@ export function PayrollSection() {
               the Teachers section.
             </p>
           </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="shrink-0 border-amber-500/40 text-amber-800 hover:bg-amber-500/20 hover:text-amber-900 dark:text-amber-200 dark:hover:text-amber-100"
+            onClick={openSalaryDialog}
+          >
+            <Pencil className="h-4 w-4" />
+            Set salaries now
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -757,7 +836,114 @@ export function PayrollSection() {
         }}
       />
 
-      {/* Printable payslip */}
+      {/* Quick salary setup dialog (from zero-salary banner) */}
+      <Dialog open={salaryOpen} onOpenChange={setSalaryOpen}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto scroll-thin sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400">
+                <Pencil className="h-4 w-4" />
+              </div>
+              Set salaries
+            </DialogTitle>
+            <DialogDescription>
+              Enter a basic salary (and optional allowances) for each teacher. EPF (8% of basic) is
+              deducted automatically; employer EPF 12% + ETF 3% is added on top.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            {noSalaryRows.length === 0 && (
+              <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+                All teachers have a salary configured.
+              </p>
+            )}
+            {noSalaryRows.map((r) => {
+              const d = salaryDrafts[r.teacher.id] ?? { basic: '', allow: '', epf: '' }
+              const net = salaryBreakdown(Number(d.basic || 0), Number(d.allow || 0)).netSalary
+              return (
+                <div key={r.teacher.id} className="rounded-lg border bg-muted/20 p-3">
+                  <div className="mb-2.5 flex items-center gap-2.5">
+                    <Avatar className="h-8 w-8">
+                      <AvatarFallback className={`text-xs ${avatarColor(r.teacher.fullName)}`}>
+                        {initials(r.teacher.fullName)}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium">{r.teacher.fullName}</p>
+                      <p className="text-[11px] text-muted-foreground">
+                        {r.teacher.teacherId} · {r.teacher.type}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Net</p>
+                      <p
+                        className={`text-sm font-semibold tabular-nums ${
+                          net > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'
+                        }`}
+                      >
+                        {currency(net)}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="grid gap-1">
+                      <Label className="text-xs text-muted-foreground">Basic salary</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        step={100}
+                        placeholder="0"
+                        value={d.basic}
+                        onChange={(e) => updateSalaryDraft(r.teacher.id, 'basic', e.target.value)}
+                      />
+                    </div>
+                    <div className="grid gap-1">
+                      <Label className="text-xs text-muted-foreground">Allowances</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        step={100}
+                        placeholder="0"
+                        value={d.allow}
+                        onChange={(e) => updateSalaryDraft(r.teacher.id, 'allow', e.target.value)}
+                      />
+                    </div>
+                    <div className="grid gap-1">
+                      <Label className="text-xs text-muted-foreground">EPF no</Label>
+                      <Input
+                        placeholder="Optional"
+                        value={d.epf}
+                        onChange={(e) => updateSalaryDraft(r.teacher.id, 'epf', e.target.value)}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSalaryOpen(false)} disabled={savingSalaries}>
+              Cancel
+            </Button>
+            <Button
+              onClick={saveSalaries}
+              disabled={savingSalaries || draftsWithValue.length === 0}
+              className="gap-2"
+            >
+              {savingSalaries ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <CheckCircle2 className="h-4 w-4" />
+              )}
+              Save {draftsWithValue.length > 0 ? draftsWithValue.length : ''} salar
+              {draftsWithValue.length === 1 ? 'y' : 'ies'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {payslipTarget && (
         <PayslipDialog row={payslipTarget} onClose={() => setPayslipTarget(null)} />
       )}

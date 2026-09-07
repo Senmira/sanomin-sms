@@ -150,6 +150,29 @@ export async function GET() {
   ])
   const totalExpenses = monthExpenses.reduce((s, e) => s + e.amount, 0)
   const round2 = (n: number) => Math.round(n * 100) / 100
+
+  // Institute share of tuition class revenue: each class pays the institute
+  // instituteSharePct % of (class fee × active enrolments) per month.
+  const [shareClasses, enrollCounts] = await Promise.all([
+    db.class.findMany({
+      where: { active: true, teacherId: { not: null } },
+      select: { id: true, fee: true, instituteSharePct: true },
+    }),
+    db.enrollment.groupBy({
+      by: ['classId'],
+      where: { status: 'Active', classId: { not: null } },
+      _count: { classId: true },
+    }),
+  ])
+  const enrollMap = new Map(enrollCounts.map((g) => [g.classId, g._count.classId]))
+  const tuitionShare = round2(
+    shareClasses.reduce((s, c) => {
+      const enrolled = enrollMap.get(c.id) || 0
+      const gross = (c.fee || 0) * enrolled
+      return s + (gross * Math.min(100, Math.max(0, c.instituteSharePct))) / 100
+    }, 0),
+  )
+
   // Same net-salary semantics as /api/payroll: EPF 8% on basic; rate-only
   // external teachers count their monthly tuition rate with no deductions.
   const payrollNet = activeTeachers.reduce((sum, t) => {
@@ -247,7 +270,8 @@ export async function GET() {
       pendingCount,
       expenses: round2(totalExpenses),
       payroll: round2(payrollNet),
-      net: round2(totalCollected - totalExpenses - payrollNet),
+      tuitionShare,
+      net: round2(totalCollected + tuitionShare - totalExpenses - payrollNet),
     },
     announcements: recentAnnouncements.map((a) => ({
       ...a,

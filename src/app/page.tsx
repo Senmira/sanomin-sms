@@ -33,18 +33,20 @@ export default function Home() {
 
   return (
     <AppShell>
-      {section === 'dashboard' && <DashboardSection />}
-      {section === 'students' && <StudentsSection />}
-      {section === 'teachers' && <TeachersSection />}
-      {section === 'payroll' && <PayrollSection />}
-      {section === 'attendance' && <AttendanceSection />}
-      {section === 'classes' && <ClassesSection />}
-      {section === 'programs' && <ProgramsSection />}
-      {section === 'fees' && <FeesSection />}
-      {section === 'expenses' && <ExpensesSection />}
-      {section === 'announcements' && <AnnouncementsSection />}
-      {section === 'reports' && <ReportsSection />}
-      {section === 'settings' && <SettingsSection />}
+      <div key={section} className="animate-section-in">
+        {section === 'dashboard' && <DashboardSection />}
+        {section === 'students' && <StudentsSection />}
+        {section === 'teachers' && <TeachersSection />}
+        {section === 'payroll' && <PayrollSection />}
+        {section === 'attendance' && <AttendanceSection />}
+        {section === 'classes' && <ClassesSection />}
+        {section === 'programs' && <ProgramsSection />}
+        {section === 'fees' && <FeesSection />}
+        {section === 'expenses' && <ExpensesSection />}
+        {section === 'announcements' && <AnnouncementsSection />}
+        {section === 'reports' && <ReportsSection />}
+        {section === 'settings' && <SettingsSection />}
+      </div>
     </AppShell>
   )
 }

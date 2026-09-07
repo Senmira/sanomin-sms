@@ -105,6 +105,7 @@ interface DashboardData {
     pendingCount: number
     expenses: number
     payroll: number
+    tuitionShare: number
     net: number
   }
   announcements: Array<{
@@ -525,6 +526,15 @@ export function DashboardSection() {
                   <span className="size-1.5 rounded-full bg-emerald-500" />
                   Collected {currencyCompact(data.fees.totalCollected)}
                 </span>
+                {data.fees.tuitionShare > 0 && (
+                  <span
+                    className="inline-flex items-center gap-1"
+                    title="Institute share of tuition class revenue"
+                  >
+                    <span className="size-1.5 rounded-full bg-purple-500" />
+                    Tuition share +{currencyCompact(data.fees.tuitionShare)}
+                  </span>
+                )}
                 <span className="inline-flex items-center gap-1">
                   <span className="size-1.5 rounded-full bg-red-400" />
                   Expenses {currencyCompact(data.fees.expenses)}
@@ -534,6 +544,12 @@ export function DashboardSection() {
                   Payroll {currencyCompact(data.fees.payroll)}
                 </span>
               </div>
+              <button
+                className="mt-2 inline-flex items-center gap-0.5 text-[11px] font-medium text-primary hover:underline"
+                onClick={() => setSection('reports')}
+              >
+                Full financial report <ArrowRight className="h-3 w-3" />
+              </button>
             </div>
           </div>
         </CardContent>
@@ -541,7 +557,7 @@ export function DashboardSection() {
 
       {/* Recent activity + Age group */}
       <div className="grid gap-4 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
+        <Card className="min-w-0 lg:col-span-2">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-base font-semibold">Recent Attendance Activity</CardTitle>
             <Activity className="h-4 w-4 text-muted-foreground" />
@@ -591,11 +607,11 @@ export function DashboardSection() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="min-w-0">
           <CardHeader className="pb-2">
             <CardTitle className="text-base font-semibold">Students by Age Group</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="min-w-0">
             <ResponsiveContainer width="100%" height={220}>
               <BarChart data={ageData} layout="vertical" margin={{ left: 8, right: 16 }}>
                 <CartesianGrid strokeDasharray="3 3" opacity={0.5} horizontal={false} />

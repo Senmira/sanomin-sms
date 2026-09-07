@@ -1,0 +1,738 @@
+     1→'use client'
+     2→
+     3→import { useEffect, useState } from 'react'
+     4→import {
+     5→  ResponsiveContainer,
+     6→  BarChart,
+     7→  Bar,
+     8→  LineChart,
+     9→  Line,
+    10→  XAxis,
+    11→  YAxis,
+    12→  CartesianGrid,
+    13→  Tooltip,
+    14→  PieChart,
+    15→  Pie,
+    16→  Cell,
+    17→  Legend,
+    18→  RadialBarChart,
+    19→  RadialBar,
+    20→} from 'recharts'
+    21→import { api } from '@/lib/api'
+    22→import { SectionHeader } from '@/components/shared/section-header'
+    23→import { StatCard } from '@/components/shared/stat-card'
+    24→import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+    25→import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+    26→import { Button } from '@/components/ui/button'
+    27→import { Input } from '@/components/ui/input'
+    28→import { Label } from '@/components/ui/label'
+    29→import { Badge } from '@/components/ui/badge'
+    30→import { Skeleton } from '@/components/ui/skeleton'
+    31→import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+    32→import {
+    33→  FileBarChart,
+    34→  Users,
+    35→  ScanLine,
+    36→  Clock,
+    37→  TrendingUp,
+    38→  Download,
+    39→  GraduationCap,
+    40→  CalendarCheck,
+    41→  Calendar,
+    42→  ChevronLeft,
+    43→  ChevronRight,
+    44→} from 'lucide-react'
+    45→import { initials, avatarColor, fmtDate, currency } from '@/lib/format'
+    46→
+    47→interface AttendanceReport {
+    48→  range: { from: string; to: string }
+    49→  totals: { records: number; studentRecords: number; teacherRecords: number; present: number; late: number; absent: number }
+    50→  daily: { date: string; students: number; teachers: number; late: number; present: number }[]
+    51→  methodCount: Record<string, number>
+    52→  statusCount: Record<string, number>
+    53→  programCount: { code: string; name: string; color: string; count: number }[]
+    54→  teacherTypeCount: { Internal: number; External: number }
+    55→  topAttendees: { name: string; ref: string; type: string; count: number }[]
+    56→}
+    57→
+    58→interface EnrollmentReport {
+    59→  totals: { students: number; active: number; inactive: number; graduated: number; recentAdmissions: number }
+    60→  byProgram: { code: string; name: string; color: string; count: number; classes: number }[]
+    61→  byAgeGroup: Record<string, number>
+    62→  byGender: { Male: number; Female: number }
+    63→  byReligion: Record<string, number>
+    64→  byStatus: Record<string, number>
+    65→  byNationality: Record<string, number>
+    66→  recentAdmissions: { studentId: string; fullName: string; gender: string; admissionDate: string | null; programs: string[] }[]
+    67→}
+    68→
+    69→interface HeatmapCell {
+    70→  day: number | null
+    71→  present: number
+    72→  late: number
+    73→  absent: number
+    74→  students: number
+    75→  teachers: number
+    76→  rate: number | null
+    77→  isFuture: boolean
+    78→  isToday: boolean
+    79→}
+    80→interface HeatmapReport {
+    81→  month: string
+    82→  monthLabel: string
+    83→  totalStudents: number
+    84→  daysInMonth: number
+    85→  activeDays: number
+    86→  cells: HeatmapCell[]
+    87→  summary: {
+    88→    present: number
+    89→    late: number
+    90→    absent: number
+    91→    avgRate: number
+    92→    bestDay: { day: number; rate: number } | null
+    93→    worstDay: { day: number; rate: number } | null
+    94→  }
+    95→}
+    96→
+    97→const METHOD_COLORS: Record<string, string> = {
+    98→  Barcode: '#1e40af',
+    99→  Fingerprint: '#7c3aed',
+   100→  Manual: '#d97706',
+   101→}
+   102→const STATUS_COLORS: Record<string, string> = {
+   103→  Present: '#16a34a',
+   104→  Late: '#d97706',
+   105→  Absent: '#dc2626',
+   106→  Leave: '#0d9488',
+   107→}
+   108→
+   109→export function ReportsSection() {
+   110→  return (
+   111→    <div className="flex flex-col gap-6">
+   112→      <SectionHeader
+   113→        title="Reports"
+   114→        description="Attendance & enrollment analytics across the school"
+   115→        icon={<FileBarChart className="h-5 w-5" />}
+   116→      />
+   117→      <Tabs defaultValue="attendance">
+   118→        <TabsList>
+   119→          <TabsTrigger value="attendance" className="gap-1.5">
+   120→            <ScanLine className="h-4 w-4" /> Attendance
+   121→          </TabsTrigger>
+   122→          <TabsTrigger value="heatmap" className="gap-1.5">
+   123→            <Calendar className="h-4 w-4" /> Heatmap
+   124→          </TabsTrigger>
+   125→          <TabsTrigger value="enrollment" className="gap-1.5">
+   126→            <Users className="h-4 w-4" /> Enrollment
+   127→          </TabsTrigger>
+   128→        </TabsList>
+   129→        <TabsContent value="attendance" className="mt-4">
+   130→          <AttendanceReportPanel />
+   131→        </TabsContent>
+   132→        <TabsContent value="heatmap" className="mt-4">
+   133→          <HeatmapPanel />
+   134→        </TabsContent>
+   135→        <TabsContent value="enrollment" className="mt-4">
+   136→          <EnrollmentReportPanel />
+   137→        </TabsContent>
+   138→      </Tabs>
+   139→    </div>
+   140→  )
+   141→}
+   142→
+   143→function AttendanceReportPanel() {
+   144→  const today = new Date().toISOString().slice(0, 10)
+   145→  const twoWeeksAgo = new Date(Date.now() - 13 * 86400000).toISOString().slice(0, 10)
+   146→  const [from, setFrom] = useState(twoWeeksAgo)
+   147→  const [to, setTo] = useState(today)
+   148→  const [data, setData] = useState<AttendanceReport | null>(null)
+   149→  const [loading, setLoading] = useState(true)
+   150→
+   151→  useEffect(() => {
+   152→    let alive = true
+   153→    setLoading(true)
+   154→    api<AttendanceReport>(`/api/reports?type=attendance&from=${from}&to=${to}`)
+   155→      .then((d) => alive && setData(d))
+   156→      .catch(() => alive && setData(null))
+   157→      .finally(() => alive && setLoading(false))
+   158→    return () => {
+   159→      alive = false
+   160→    }
+   161→  }, [from, to])
+   162→
+   163→  if (loading || !data) {
+   164→    return (
+   165→      <div className="grid gap-4">
+   166→        <Skeleton className="h-16" />
+   167→        <Skeleton className="h-80" />
+   168→      </div>
+   169→    )
+   170→  }
+   171→
+   172→  const t = data.totals
+   173→  const methodData = Object.entries(data.methodCount).map(([k, v]) => ({ name: k, value: v, color: METHOD_COLORS[k] }))
+   174→  const statusData = Object.entries(data.statusCount).map(([k, v]) => ({ name: k, value: v, color: STATUS_COLORS[k] }))
+   175→  const teacherTypeData = [
+   176→    { name: 'Internal', value: data.teacherTypeCount.Internal, color: '#1e40af' },
+   177→    { name: 'External', value: data.teacherTypeCount.External, color: '#7c3aed' },
+   178→  ]
+   179→  const lateRate = t.records ? Math.round((t.late / t.records) * 100) : 0
+   180→
+   181→  const exportCsv = () => {
+   182→    const rows = [
+   183→      ['Date', 'Students', 'Teachers', 'Present', 'Late'],
+   184→      ...data.daily.map((d) => [d.date, d.students, d.teachers, d.present, d.late]),
+   185→    ]
+   186→    downloadCsv('attendance_report.csv', rows)
+   187→  }
+   188→
+   189→  return (
+   190→    <div className="flex flex-col gap-4">
+   191→      {/* Date range + export */}
+   192→      <Card>
+   193→        <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-end sm:justify-between">
+   194→          <div className="flex flex-wrap items-end gap-3">
+   195→            <div className="grid gap-1">
+   196→              <Label className="text-xs text-muted-foreground">From</Label>
+   197→              <Input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} className="w-44" />
+   198→            </div>
+   199→            <div className="grid gap-1">
+   200→              <Label className="text-xs text-muted-foreground">To</Label>
+   201→              <Input type="date" value={to} min={from} max={today} onChange={(e) => setTo(e.target.value)} className="w-44" />
+   202→            </div>
+   203→          </div>
+   204→          <Button variant="outline" size="sm" onClick={exportCsv}>
+   205→            <Download className="mr-2 h-4 w-4" /> Export CSV
+   206→          </Button>
+   207→        </CardContent>
+   208→      </Card>
+   209→
+   210→      {/* Stat cards */}
+   211→      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+   212→        <StatCard label="Total Records" value={t.records} icon={ScanLine} hint={`${t.studentRecords} student · ${t.teacherRecords} teacher`} accent="blue" />
+   213→        <StatCard label="Present" value={t.present} icon={CalendarCheck} hint={`${t.records ? Math.round((t.present / t.records) * 100) : 0}% of records`} accent="green" />
+   214→        <StatCard label="Late Arrivals" value={t.late} icon={Clock} hint={`${lateRate}% late rate`} accent="amber" />
+   215→        <StatCard label="Date Range" value={`${data.daily.length}d`} icon={TrendingUp} hint={fmtDate(data.range.from)} accent="purple" />
+   216→      </div>
+   217→
+   218→      {/* Daily trend */}
+   219→      <Card>
+   220→        <CardHeader className="pb-2">
+   221→          <CardTitle className="text-base">Daily Attendance Trend</CardTitle>
+   222→        </CardHeader>
+   223→        <CardContent>
+   224→          <ResponsiveContainer width="100%" height={280}>
+   225→            <LineChart data={data.daily} margin={{ left: -20, right: 8, top: 8 }}>
+   226→              <CartesianGrid strokeDasharray="3 3" opacity={0.5} />
+   227→              <XAxis dataKey="date" tick={{ fontSize: 11 }} stroke="var(--muted-foreground)" tickFormatter={(d) => d.slice(5)} />
+   228→              <YAxis tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" allowDecimals={false} />
+   229→              <Tooltip contentStyle={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 12, fontSize: 12 }} />
+   230→              <Legend wrapperStyle={{ fontSize: 12 }} />
+   231→              <Line type="monotone" dataKey="students" name="Students" stroke="#1e40af" strokeWidth={2} dot={{ r: 3 }} />
+   232→              <Line type="monotone" dataKey="teachers" name="Teachers" stroke="#7c3aed" strokeWidth={2} dot={{ r: 3 }} />
+   233→              <Line type="monotone" dataKey="late" name="Late" stroke="#d97706" strokeWidth={2} strokeDasharray="4 4" dot={false} />
+   234→            </LineChart>
+   235→          </ResponsiveContainer>
+   236→        </CardContent>
+   237→      </Card>
+   238→
+   239→      <div className="grid gap-4 lg:grid-cols-3">
+   240→        {/* Method breakdown */}
+   241→        <Card>
+   242→          <CardHeader className="pb-2">
+   243→            <CardTitle className="text-base">Check-in Methods</CardTitle>
+   244→          </CardHeader>
+   245→          <CardContent>
+   246→            <ResponsiveContainer width="100%" height={200}>
+   247→              <PieChart>
+   248→                <Pie data={methodData} dataKey="value" nameKey="name" innerRadius={45} outerRadius={75} paddingAngle={3}>
+   249→                  {methodData.map((e, i) => <Cell key={i} fill={e.color} />)}
+   250→                </Pie>
+   251→                <Tooltip contentStyle={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 12, fontSize: 12 }} />
+   252→                <Legend wrapperStyle={{ fontSize: 11 }} />
+   253→              </PieChart>
+   254→            </ResponsiveContainer>
+   255→          </CardContent>
+   256→        </Card>
+   257→
+   258→        {/* Status breakdown */}
+   259→        <Card>
+   260→          <CardHeader className="pb-2">
+   261→            <CardTitle className="text-base">Status Distribution</CardTitle>
+   262→          </CardHeader>
+   263→          <CardContent>
+   264→            <ResponsiveContainer width="100%" height={200}>
+   265→              <PieChart>
+   266→                <Pie data={statusData} dataKey="value" nameKey="name" innerRadius={45} outerRadius={75} paddingAngle={3}>
+   267→                  {statusData.map((e, i) => <Cell key={i} fill={e.color} />)}
+   268→                </Pie>
+   269→                <Tooltip contentStyle={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 12, fontSize: 12 }} />
+   270→                <Legend wrapperStyle={{ fontSize: 11 }} />
+   271→              </PieChart>
+   272→            </ResponsiveContainer>
+   273→          </CardContent>
+   274→        </Card>
+   275→
+   276→        {/* Teacher type */}
+   277→        <Card>
+   278→          <CardHeader className="pb-2">
+   279→            <CardTitle className="text-base">Teacher Attendance by Type</CardTitle>
+   280→          </CardHeader>
+   281→          <CardContent>
+   282→            <ResponsiveContainer width="100%" height={200}>
+   283→              <BarChart data={teacherTypeData} margin={{ left: -20, right: 16, top: 8 }}>
+   284→                <CartesianGrid strokeDasharray="3 3" opacity={0.5} />
+   285→                <XAxis dataKey="name" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" />
+   286→                <YAxis tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" allowDecimals={false} />
+   287→                <Tooltip contentStyle={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 12, fontSize: 12 }} />
+   288→                <Bar dataKey="value" radius={[6, 6, 0, 0]}>
+   289→                  {teacherTypeData.map((e, i) => <Cell key={i} fill={e.color} />)}
+   290→                </Bar>
+   291→              </BarChart>
+   292→            </ResponsiveContainer>
+   293→          </CardContent>
+   294→        </Card>
+   295→      </div>
+   296→
+   297→      {/* Attendance by program + top attendees */}
+   298→      <div className="grid gap-4 lg:grid-cols-2">
+   299→        <Card>
+   300→          <CardHeader className="pb-2">
+   301→            <CardTitle className="text-base">Attendance by Program</CardTitle>
+   302→          </CardHeader>
+   303→          <CardContent>
+   304→            <ResponsiveContainer width="100%" height={240}>
+   305→              <BarChart data={data.programCount} layout="vertical" margin={{ left: 8, right: 24 }}>
+   306→                <CartesianGrid strokeDasharray="3 3" opacity={0.5} horizontal={false} />
+   307→                <XAxis type="number" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" allowDecimals={false} />
+   308→                <YAxis dataKey="code" type="category" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" width={70} />
+   309→                <Tooltip contentStyle={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 12, fontSize: 12 }} />
+   310→                <Bar dataKey="count" name="Attendance" radius={[0, 6, 6, 0]}>
+   311→                  {data.programCount.map((e, i) => <Cell key={i} fill={e.color} />)}
+   312→                </Bar>
+   313→              </BarChart>
+   314→            </ResponsiveContainer>
+   315→          </CardContent>
+   316→        </Card>
+   317→
+   318→        <Card>
+   319→          <CardHeader className="pb-2">
+   320→            <CardTitle className="text-base">Top Attendees (most present)</CardTitle>
+   321→          </CardHeader>
+   322→          <CardContent>
+   323→            <div className="scroll-thin max-h-60 space-y-2 overflow-y-auto pr-1">
+   324→              {data.topAttendees.length === 0 && (
+   325→                <p className="py-6 text-center text-xs text-muted-foreground">No data in this range.</p>
+   326→              )}
+   327→              {data.topAttendees.map((p, i) => (
+   328→                <div key={p.ref + i} className="flex items-center gap-3 rounded-lg border p-2">
+   329→                  <span className="w-5 text-center text-xs font-bold text-muted-foreground">{i + 1}</span>
+   330→                  <Avatar className="h-8 w-8">
+   331→                    <AvatarFallback className={avatarColor(p.name)}>{initials(p.name)}</AvatarFallback>
+   332→                  </Avatar>
+   333→                  <div className="min-w-0 flex-1">
+   334→                    <p className="truncate text-sm font-medium">{p.name}</p>
+   335→                    <p className="text-xs text-muted-foreground">{p.ref}</p>
+   336→                  </div>
+   337→                  <Badge variant={p.type === 'Teacher' ? 'secondary' : 'default'} className="text-[10px]">
+   338→                    {p.type}
+   339→                  </Badge>
+   340→                  <span className="text-sm font-bold text-primary">{p.count}</span>
+   341→                </div>
+   342→              ))}
+   343→            </div>
+   344→          </CardContent>
+   345→        </Card>
+   346→      </div>
+   347→    </div>
+   348→  )
+   349→}
+   350→
+   351→function EnrollmentReportPanel() {
+   352→  const [data, setData] = useState<EnrollmentReport | null>(null)
+   353→  const [loading, setLoading] = useState(true)
+   354→
+   355→  useEffect(() => {
+   356→    let alive = true
+   357→    api<EnrollmentReport>('/api/reports?type=enrollment')
+   358→      .then((d) => alive && setData(d))
+   359→      .finally(() => alive && setLoading(false))
+   360→    return () => {
+   361→      alive = false
+   362→    }
+   363→  }, [])
+   364→
+   365→  if (loading || !data) {
+   366→    return (
+   367→      <div className="grid gap-4">
+   368→        <Skeleton className="h-16" />
+   369→        <Skeleton className="h-80" />
+   370→      </div>
+   371→    )
+   372→  }
+   373→
+   374→  const t = data.totals
+   375→  const ageData = Object.entries(data.byAgeGroup).sort().map(([name, value]) => ({ name, value }))
+   376→  const religionData = Object.entries(data.byReligion).map(([name, value]) => ({ name, value }))
+   377→  const statusData = Object.entries(data.byStatus).map(([name, value]) => ({ name, value, color: name === 'Active' ? '#16a34a' : name === 'Inactive' ? '#d97706' : '#7c3aed' }))
+   378→  const revenuePotential = data.byProgram.reduce((sum, p) => sum + p.count * (p.count > 0 ? 1 : 0), 0) // placeholder
+   379→
+   380→  const exportCsv = () => {
+   381→    const rows = [
+   382→      ['Program', 'Name', 'Enrollments', 'Classes'],
+   383→      ...data.byProgram.map((p) => [p.code, p.name, p.count, p.classes]),
+   384→    ]
+   385→    downloadCsv('enrollment_report.csv', rows)
+   386→  }
+   387→
+   388→  return (
+   389→    <div className="flex flex-col gap-4">
+   390→      <div className="flex justify-end">
+   391→        <Button variant="outline" size="sm" onClick={exportCsv}>
+   392→          <Download className="mr-2 h-4 w-4" /> Export CSV
+   393→        </Button>
+   394→      </div>
+   395→
+   396→      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+   397→        <StatCard label="Total Students" value={t.students} icon={Users} accent="blue" />
+   398→        <StatCard label="Active" value={t.active} icon={GraduationCap} hint={`${t.students ? Math.round((t.active / t.students) * 100) : 0}% active`} accent="green" />
+   399→        <StatCard label="Graduated" value={t.graduated} icon={TrendingUp} accent="purple" />
+   400→        <StatCard label="New (30 days)" value={t.recentAdmissions} icon={CalendarCheck} accent="amber" />
+   401→      </div>
+   402→
+   403→      <div className="grid gap-4 lg:grid-cols-2">
+   404→        <Card>
+   405→          <CardHeader className="pb-2">
+   406→            <CardTitle className="text-base">Enrollments by Program</CardTitle>
+   407→          </CardHeader>
+   408→          <CardContent>
+   409→            <ResponsiveContainer width="100%" height={260}>
+   410→              <BarChart data={data.byProgram} margin={{ left: -20, right: 8, top: 8 }}>
+   411→                <CartesianGrid strokeDasharray="3 3" opacity={0.5} />
+   412→                <XAxis dataKey="code" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" />
+   413→                <YAxis tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" allowDecimals={false} />
+   414→                <Tooltip contentStyle={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 12, fontSize: 12 }} />
+   415→                <Bar dataKey="count" name="Students" radius={[6, 6, 0, 0]}>
+   416→                  {data.byProgram.map((e, i) => <Cell key={i} fill={e.color} />)}
+   417→                </Bar>
+   418→              </BarChart>
+   419→            </ResponsiveContainer>
+   420→          </CardContent>
+   421→        </Card>
+   422→
+   423→        <Card>
+   424→          <CardHeader className="pb-2">
+   425→            <CardTitle className="text-base">Students by Age Group</CardTitle>
+   426→          </CardHeader>
+   427→          <CardContent>
+   428→            <ResponsiveContainer width="100%" height={260}>
+   429→              <BarChart data={ageData} layout="vertical" margin={{ left: 8, right: 16 }}>
+   430→                <CartesianGrid strokeDasharray="3 3" opacity={0.5} horizontal={false} />
+   431→                <XAxis type="number" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" allowDecimals={false} />
+   432→                <YAxis dataKey="name" type="category" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" width={50} />
+   433→                <Tooltip contentStyle={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 12, fontSize: 12 }} />
+   434→                <Bar dataKey="value" name="Students" radius={[0, 6, 6, 0]} fill="#7c3aed" />
+   435→              </BarChart>
+   436→            </ResponsiveContainer>
+   437→          </CardContent>
+   438→        </Card>
+   439→      </div>
+   440→
+   441→      <div className="grid gap-4 lg:grid-cols-3">
+   442→        <Card>
+   443→          <CardHeader className="pb-2">
+   444→            <CardTitle className="text-base">Status</CardTitle>
+   445→          </CardHeader>
+   446→          <CardContent>
+   447→            <ResponsiveContainer width="100%" height={200}>
+   448→              <PieChart>
+   449→                <Pie data={statusData} dataKey="value" nameKey="name" innerRadius={45} outerRadius={75} paddingAngle={3}>
+   450→                  {statusData.map((e, i) => <Cell key={i} fill={e.color} />)}
+   451→                </Pie>
+   452→                <Tooltip contentStyle={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 12, fontSize: 12 }} />
+   453→                <Legend wrapperStyle={{ fontSize: 11 }} />
+   454→              </PieChart>
+   455→            </ResponsiveContainer>
+   456→          </CardContent>
+   457→        </Card>
+   458→
+   459→        <Card className="lg:col-span-2">
+   460→          <CardHeader className="pb-2">
+   461→            <CardTitle className="text-base">Religion Distribution</CardTitle>
+   462→          </CardHeader>
+   463→          <CardContent>
+   464→            <ResponsiveContainer width="100%" height={200}>
+   465→              <BarChart data={religionData} margin={{ left: -20, right: 8, top: 8 }}>
+   466→                <CartesianGrid strokeDasharray="3 3" opacity={0.5} />
+   467→                <XAxis dataKey="name" tick={{ fontSize: 11 }} stroke="var(--muted-foreground)" />
+   468→                <YAxis tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" allowDecimals={false} />
+   469→                <Tooltip contentStyle={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 12, fontSize: 12 }} />
+   470→                <Bar dataKey="value" name="Students" radius={[6, 6, 0, 0]} fill="#1e40af" />
+   471→              </BarChart>
+   472→            </ResponsiveContainer>
+   473→          </CardContent>
+   474→        </Card>
+   475→      </div>
+   476→
+   477→      {/* Recent admissions */}
+   478→      <Card>
+   479→        <CardHeader className="pb-2">
+   480→          <CardTitle className="text-base">Recent Admissions (last 30 days)</CardTitle>
+   481→        </CardHeader>
+   482→        <CardContent>
+   483→          <div className="scroll-thin max-h-72 space-y-2 overflow-y-auto pr-1">
+   484→            {data.recentAdmissions.length === 0 && (
+   485→              <p className="py-6 text-center text-xs text-muted-foreground">No admissions in the last 30 days.</p>
+   486→            )}
+   487→            {data.recentAdmissions.map((s) => (
+   488→              <div key={s.studentId} className="flex items-center gap-3 rounded-lg border p-2.5">
+   489→                <Avatar className="h-9 w-9">
+   490→                  <AvatarFallback className={avatarColor(s.fullName)}>{initials(s.fullName)}</AvatarFallback>
+   491→                </Avatar>
+   492→                <div className="min-w-0 flex-1">
+   493→                  <p className="truncate text-sm font-medium">{s.fullName}</p>
+   494→                  <p className="text-xs text-muted-foreground">{s.studentId} · {s.gender}</p>
+   495→                </div>
+   496→                <div className="flex flex-wrap gap-1">
+   497→                  {s.programs.map((p) => (
+   498→                    <Badge key={p} variant="outline" className="text-[10px]">{p}</Badge>
+   499→                  ))}
+   500→                </div>
+   501→                <span className="text-xs text-muted-foreground">{fmtDate(s.admissionDate)}</span>
+   502→              </div>
+   503→            ))}
+   504→          </div>
+   505→        </CardContent>
+   506→      </Card>
+   507→    </div>
+   508→  )
+   509→}
+   510→
+   511→function downloadCsv(filename: string, rows: (string | number)[][]) {
+   512→  const csv = rows
+   513→    .map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(','))
+   514→    .join('\n')
+   515→  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+   516→  const url = URL.createObjectURL(blob)
+   517→  const a = document.createElement('a')
+   518→  a.href = url
+   519→  a.download = filename
+   520→  a.click()
+   521→  URL.revokeObjectURL(url)
+   522→}
+   523→
+   524→// ─── Heatmap Panel ───────────────────────────────────────────────────────
+   525→const WEEKDAY_HEADERS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+   526→
+   527→function rateColor(rate: number | null, isFuture: boolean): { bg: string; text: string; border: string } {
+   528→  if (isFuture) return { bg: 'transparent', text: 'text-muted-foreground/40', border: 'border-border/40' }
+   529→  if (rate === null) return { bg: 'bg-muted/20', text: 'text-muted-foreground/50', border: 'border-border/50' }
+   530→  if (rate >= 90) return { bg: 'bg-emerald-500/25 dark:bg-emerald-500/30', text: 'text-emerald-700 dark:text-emerald-300', border: 'border-emerald-500/40' }
+   531→  if (rate >= 75) return { bg: 'bg-emerald-500/15 dark:bg-emerald-500/20', text: 'text-emerald-600 dark:text-emerald-400', border: 'border-emerald-500/30' }
+   532→  if (rate >= 50) return { bg: 'bg-amber-500/15 dark:bg-amber-500/20', text: 'text-amber-600 dark:text-amber-400', border: 'border-amber-500/30' }
+   533→  if (rate > 0) return { bg: 'bg-red-500/15 dark:bg-red-500/20', text: 'text-red-600 dark:text-red-400', border: 'border-red-500/30' }
+   534→  return { bg: 'bg-muted/30', text: 'text-muted-foreground', border: 'border-border' }
+   535→}
+   536→
+   537→function HeatmapPanel() {
+   538→  const now = new Date()
+   539→  const [month, setMonth] = useState(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`)
+   540→  const [data, setData] = useState<HeatmapReport | null>(null)
+   541→  const [loading, setLoading] = useState(true)
+   542→  const [hovered, setHovered] = useState<HeatmapCell | null>(null)
+   543→
+   544→  useEffect(() => {
+   545→    let alive = true
+   546→    Promise.resolve().then(() => alive && setLoading(true))
+   547→    api<HeatmapReport>(`/api/reports?type=heatmap&month=${month}`)
+   548→      .then((d) => alive && setData(d))
+   549→      .catch(() => alive && setData(null))
+   550→      .finally(() => alive && setLoading(false))
+   551→    return () => {
+   552→      alive = false
+   553→    }
+   554→  }, [month])
+   555→
+   556→  const goPrev = () => {
+   557→    const [y, m] = month.split('-').map(Number)
+   558→    const d = new Date(y, m - 1, 1)
+   559→    d.setMonth(d.getMonth() - 1)
+   560→    setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
+   561→  }
+   562→  const goNext = () => {
+   563→    const [y, m] = month.split('-').map(Number)
+   564→    const d = new Date(y, m - 1, 1)
+   565→    d.setMonth(d.getMonth() + 1)
+   566→    setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
+   567→  }
+   568→  const goToday = () => setMonth(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`)
+   569→
+   570→  if (loading || !data) {
+   571→    return (
+   572→      <div className="grid gap-4">
+   573→        <Skeleton className="h-16" />
+   574→        <Skeleton className="h-96" />
+   575→      </div>
+   576→    )
+   577→  }
+   578→
+   579→  const s = data.summary
+   580→  const isCurrentMonth = month === `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+   581→
+   582→  return (
+   583→    <div className="flex flex-col gap-4">
+   584→      {/* Stat cards */}
+   585→      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+   586→        <StatCard label="Avg Attendance Rate" value={`${s.avgRate}%`} icon={TrendingUp} accent="green" hint={`Across ${data.activeDays} active days`} />
+   587→        <StatCard label="Present" value={s.present} icon={CalendarCheck} accent="blue" hint="This month" />
+   588→        <StatCard label="Late Arrivals" value={s.late} icon={Clock} accent="amber" hint="This month" />
+   589→        <StatCard label="Best Day" value={s.bestDay ? `${s.bestDay.rate}%` : '—'} icon={TrendingUp} accent="purple" hint={s.bestDay ? `Day ${s.bestDay.day}` : 'No data'} />
+   590→      </div>
+   591→
+   592→      <Card>
+   593→        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
+   594→          <div className="flex items-center gap-3">
+   595→            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+   596→              <Calendar className="h-5 w-5" />
+   597→            </div>
+   598→            <div>
+   599→              <CardTitle className="text-base font-semibold">{data.monthLabel}</CardTitle>
+   600→              <p className="text-xs text-muted-foreground">Daily student attendance rate · {data.totalStudents} active students</p>
+   601→            </div>
+   602→          </div>
+   603→          <div className="flex items-center gap-1.5">
+   604→            <Button variant="outline" size="icon" className="h-8 w-8" onClick={goPrev} title="Previous month">
+   605→              <ChevronLeft className="h-4 w-4" />
+   606→            </Button>
+   607→            {!isCurrentMonth && (
+   608→              <Button variant="outline" size="sm" className="h-8" onClick={goToday}>
+   609→                Today
+   610→              </Button>
+   611→            )}
+   612→            <Button variant="outline" size="icon" className="h-8 w-8" onClick={goNext} disabled={isCurrentMonth} title="Next month">
+   613→              <ChevronRight className="h-4 w-4" />
+   614→            </Button>
+   615→          </div>
+   616→        </CardHeader>
+   617→        <CardContent>
+   618→          {/* Calendar grid */}
+   619→          <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
+   620→            {WEEKDAY_HEADERS.map((d) => (
+   621→              <div key={d} className="pb-1.5 text-center text-[10px] font-semibold uppercase tracking-wider text-muted-foreground sm:text-xs">
+   622→                {d}
+   623→              </div>
+   624→            ))}
+   625→            {data.cells.map((c, i) => {
+   626→              if (c.day === null) {
+   627→                return <div key={i} className="aspect-square" />
+   628→              }
+   629→              const colors = rateColor(c.rate, c.isFuture)
+   630→              return (
+   631→                <div
+   632→                  key={i}
+   633→                  onMouseEnter={() => setHovered(c)}
+   634→                  onMouseLeave={() => setHovered(null)}
+   635→                  className={`group relative flex aspect-square cursor-pointer flex-col items-center justify-center rounded-lg border p-1 text-center transition-all hover:scale-105 hover:shadow-md ${colors.bg} ${colors.border} ${c.isToday ? 'ring-2 ring-primary ring-offset-1 ring-offset-background' : ''}`}
+   636→                  title={c.rate !== null ? `Day ${c.day}: ${c.rate}% present (${c.present}/${data.totalStudents})` : `Day ${c.day}: no data`}
+   637→                >
+   638→                  <span className={`text-xs font-bold sm:text-sm ${colors.text}`}>{c.day}</span>
+   639→                  {c.rate !== null && !c.isFuture && (
+   640→                    <span className={`text-[9px] font-medium sm:text-[10px] ${colors.text} opacity-80`}>
+   641→                      {c.rate}%
+   642→                    </span>
+   643→                  )}
+   644→                  {c.isFuture && (
+   645→                    <span className="text-[9px] text-muted-foreground/30">—</span>
+   646→                  )}
+   647→                  {c.isToday && (
+   648→                    <span className="absolute -top-1 -right-1 flex h-2 w-2">
+   649→                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
+   650→                      <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
+   651→                    </span>
+   652→                  )}
+   653→                </div>
+   654→              )
+   655→            })}
+   656→          </div>
+   657→
+   658→          {/* Legend + hovered detail */}
+   659→          <div className="mt-4 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
+   660→            <div className="flex flex-wrap items-center gap-3 text-[11px]">
+   661→              <span className="font-medium text-muted-foreground">Rate:</span>
+   662→              <div className="flex items-center gap-1.5">
+   663→                <span className="h-3 w-3 rounded bg-emerald-500/25" />
+   664→                <span className="text-muted-foreground">≥90%</span>
+   665→              </div>
+   666→              <div className="flex items-center gap-1.5">
+   667→                <span className="h-3 w-3 rounded bg-emerald-500/15" />
+   668→                <span className="text-muted-foreground">75-89%</span>
+   669→              </div>
+   670→              <div className="flex items-center gap-1.5">
+   671→                <span className="h-3 w-3 rounded bg-amber-500/15" />
+   672→                <span className="text-muted-foreground">50-74%</span>
+   673→              </div>
+   674→              <div className="flex items-center gap-1.5">
+   675→                <span className="h-3 w-3 rounded bg-red-500/15" />
+   676→                <span className="text-muted-foreground">&lt;50%</span>
+   677→              </div>
+   678→              <div className="flex items-center gap-1.5">
+   679→                <span className="h-3 w-3 rounded bg-muted/30 ring-1 ring-border" />
+   680→                <span className="text-muted-foreground">No data</span>
+   681→              </div>
+   682→            </div>
+   683→            {hovered && hovered.day ? (
+   684→              <div className="flex items-center gap-3 rounded-lg border bg-muted/30 px-3 py-1.5 text-xs">
+   685→                <span className="font-semibold">Day {hovered.day}</span>
+   686→                {hovered.rate !== null ? (
+   687→                  <>
+   688→                    <Badge variant="outline" className={hovered.rate >= 75 ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : hovered.rate >= 50 ? 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400' : 'border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400'}>
+   689→                      {hovered.rate}% present
+   690→                    </Badge>
+   691→                    <span className="text-muted-foreground">{hovered.present} present · {hovered.late} late · {hovered.absent} absent</span>
+   692→                  </>
+   693→                ) : (
+   694→                  <span className="text-muted-foreground">No attendance recorded</span>
+   695→                )}
+   696→              </div>
+   697→            ) : (
+   698→              <div className="text-[11px] text-muted-foreground">Hover a day for details</div>
+   699→            )}
+   700→          </div>
+   701→        </CardContent>
+   702→      </Card>
+   703→
+   704→      {/* Best/Worst day insights */}
+   705→      {(s.bestDay || s.worstDay) && (
+   706→        <div className="grid gap-4 sm:grid-cols-2">
+   707→          {s.bestDay && (
+   708→            <Card className="border-emerald-500/20">
+   709→              <CardContent className="flex items-center gap-3 p-4">
+   710→                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+   711→                  <TrendingUp className="h-5 w-5" />
+   712→                </div>
+   713→                <div>
+   714→                  <p className="text-xs font-medium text-muted-foreground">Best attendance day</p>
+   715→                  <p className="text-sm font-semibold">Day {s.bestDay.day} — {s.bestDay.rate}% present</p>
+   716→                </div>
+   717→              </CardContent>
+   718→            </Card>
+   719→          )}
+   720→          {s.worstDay && (
+   721→            <Card className="border-red-500/20">
+   722→              <CardContent className="flex items-center gap-3 p-4">
+   723→                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-red-500/15 text-red-600 dark:text-red-400">
+   724→                  <Clock className="h-5 w-5" />
+   725→                </div>
+   726→                <div>
+   727→                  <p className="text-xs font-medium text-muted-foreground">Lowest attendance day</p>
+   728→                  <p className="text-sm font-semibold">Day {s.worstDay.day} — {s.worstDay.rate}% present</p>
+   729→                </div>
+   730→              </CardContent>
+   731→            </Card>
+   732→          )}
+   733→        </div>
+   734→      )}
+   735→    </div>
+   736→  )
+   737→}
+   738→
