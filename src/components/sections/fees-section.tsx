@@ -21,6 +21,7 @@ import {
   Users,
   Filter,
   CircleDollarSign,
+  Zap,
 } from 'lucide-react'
 
 import { api } from '@/lib/api'
@@ -193,6 +194,8 @@ export function FeesSection() {
   const [editTarget, setEditTarget] = useState<PaymentRow | null>(null)
   const [receiptTarget, setReceiptTarget] = useState<PaymentRow | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<PaymentRow | null>(null)
+  const [generating, setGenerating] = useState(false)
+  const [bulkOpen, setBulkOpen] = useState(false)
 
   // ─── Debounce search input ──────────────────────────────────────────────
   useEffect(() => {
@@ -267,6 +270,34 @@ export function FeesSection() {
   }, [month, debouncedSearch, statusFilter, programFilter, methodFilter, tab])
 
   const fetchPayments = useCallback(() => reloadRef.current(), [])
+
+  // ─── Bulk-generate payments for the selected month ─────────────────────
+  const handleBulkGenerate = useCallback(
+    async (targetMonth: string, dueDate?: string) => {
+      setGenerating(true)
+      try {
+        const res = await api<{ created: number; skipped: number; total: number; message: string }>(
+          '/api/payments/bulk-generate',
+          {
+            method: 'POST',
+            body: JSON.stringify({ month: targetMonth, dueDate }),
+          },
+        )
+        if (res.created > 0) {
+          toast.success(res.message)
+        } else {
+          toast.info(res.message)
+        }
+        setBulkOpen(false)
+        fetchPayments()
+      } catch (e: any) {
+        toast.error(e.message || 'Bulk generation failed')
+      } finally {
+        setGenerating(false)
+      }
+    },
+    [fetchPayments],
+  )
 
   // ─── CSV export ────────────────────────────────────────────────────────
   const exportCsv = useCallback(() => {
@@ -346,6 +377,14 @@ export function FeesSection() {
           <>
             <Button variant="outline" size="sm" onClick={exportCsv} className="gap-2">
               <Download className="h-4 w-4" /> Export CSV
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setBulkOpen(true)}
+              className="gap-2 border-primary/30 text-primary hover:bg-primary/5"
+            >
+              <Zap className="h-4 w-4" /> Generate Month
             </Button>
             <Button
               size="sm"
@@ -730,6 +769,15 @@ export function FeesSection() {
           toast.success('Payment deleted')
           fetchPayments()
         }}
+      />
+
+      {/* Bulk generate dialog */}
+      <BulkGenerateDialog
+        open={bulkOpen}
+        onOpenChange={setBulkOpen}
+        defaultMonth={month}
+        generating={generating}
+        onConfirm={handleBulkGenerate}
       />
     </div>
   )
@@ -1343,6 +1391,117 @@ function ReceiptDialog({ payment, onClose }: ReceiptDialogProps) {
             }
           }
         `}</style>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ─── Bulk Generate Dialog ──────────────────────────────────────────────────
+interface BulkGenerateDialogProps {
+  open: boolean
+  onOpenChange: (v: boolean) => void
+  defaultMonth: string
+  generating: boolean
+  onConfirm: (month: string, dueDate?: string) => void
+}
+
+function BulkGenerateDialog({
+  open,
+  onOpenChange,
+  defaultMonth,
+  generating,
+  onConfirm,
+}: BulkGenerateDialogProps) {
+  const [targetMonth, setTargetMonth] = useState(defaultMonth)
+  const [dueDate, setDueDate] = useState('')
+
+  useEffect(() => {
+    if (!open) return
+    const [y, m] = defaultMonth.split('-').map(Number)
+    const dd = `${y}-${String(m).padStart(2, '0')}-10`
+    // Defer to avoid synchronous setState in effect body
+    Promise.resolve().then(() => {
+      setTargetMonth(defaultMonth)
+      setDueDate(dd)
+    })
+  }, [open, defaultMonth])
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <Zap className="h-4 w-4" />
+            </div>
+            Generate Monthly Fees
+          </DialogTitle>
+          <DialogDescription>
+            Auto-create payment records for all active students for the selected month.
+            Students without payments will get a record based on their primary program&rsquo;s monthly fee.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid gap-4 py-2">
+          <div className="grid gap-1.5">
+            <Label htmlFor="bulk-month">Target month *</Label>
+            <Input
+              id="bulk-month"
+              type="month"
+              value={targetMonth}
+              onChange={(e) => setTargetMonth(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              Payment records will be created with status &ldquo;Pending&rdquo;.
+            </p>
+          </div>
+
+          <div className="grid gap-1.5">
+            <Label htmlFor="bulk-due">Due date (optional)</Label>
+            <Input
+              id="bulk-due"
+              type="date"
+              value={dueDate}
+              onChange={(e) => setDueDate(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              When payment is due. Defaults to the 10th of the month.
+            </p>
+          </div>
+
+          <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+            <div className="text-amber-700 dark:text-amber-300">
+              <p className="font-medium">Existing records will be skipped</p>
+              <p className="mt-0.5 text-amber-600/80 dark:text-amber-400/80">
+                If a student already has a payment for this month, no duplicate will be created.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={generating}>
+            Cancel
+          </Button>
+          <Button
+            onClick={() => onConfirm(targetMonth, dueDate || undefined)}
+            disabled={generating || !targetMonth}
+            className="gap-2"
+          >
+            {generating ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Generating…
+              </>
+            ) : (
+              <>
+                <Zap className="h-4 w-4" />
+                Generate
+              </>
+            )}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )

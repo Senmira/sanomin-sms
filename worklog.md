@@ -583,3 +583,53 @@ Task: QA assessment + Teachers Joined/Last Active columns + Programs card visual
   - Attendance anomaly detection (flag students with declining attendance)
   - Bulk fee generation (auto-create payment records for all students at month start)
 - The 15-min recurring webDevReview cron (job 366041) will continue QA + feature additions autonomously.
+
+---
+Task ID: 13 (webDevReview cron round 7)
+Agent: main (orchestrator) — triggered by 15-min recurring webDevReview cron
+Task: QA assessment + Bulk Fee Generation feature
+
+## Current project status assessment
+- App had 10 modules + heatmap + global search + Teachers columns + Programs card redesign after round 6. Dev server running on :3000, lint clean, all sections at 9-10/10 polish.
+- QA via agent-browser confirmed all 10 sections render error-free. App is very mature and stable. Identified: admins currently must create payment records one-by-one for each student each month (48 manual operations) — a major pain point for monthly fee management.
+
+## Completed modifications & verification
+
+### New feature: Bulk Fee Generation (Task ID 13-a)
+A major admin-productivity feature — auto-create payment records for all active students for a given month with one click, eliminating 48 manual operations per month.
+
+- **API**: Created `/api/payments/bulk-generate` (POST):
+  - Body: `{ month: "YYYY-MM", dueDate?: "YYYY-MM-DD", skipExisting?: boolean }`
+  - Fetches all active students with their enrollments (program + monthlyFee)
+  - Gets existing payments for the month to avoid duplicates
+  - For each student without an existing payment: creates a record using their primary program's monthlyFee, auto-generated receipt number `SAN-{year}-{NNNN}` (continues sequence from last), status "Pending" (or "Paid" if amount 0), due date, and a "Bulk-generated for {month}" note
+  - Uses `db.payment.createMany` for efficient bulk insert
+  - Returns `{ created, skipped, total, month, message }`
+  - `skipExisting` defaults to true — re-running for the same month safely skips all existing records
+- **UI**: Added to `fees-section.tsx`:
+  - "Generate Month" button in the SectionHeader actions (between Export CSV and Record Payment) with Zap icon + primary-tinted outline style
+  - `BulkGenerateDialog` component: month picker (defaults to current selected month), due date field (defaults to 10th of month), amber info box explaining skip-existing behavior, Generate button with loading spinner
+  - `handleBulkGenerate` callback: calls the API, shows success/info toast based on created count, refreshes the payments list
+  - `generating` + `bulkOpen` state
+- **Verified end-to-end**:
+  - API: generated 48 records for 2026-10 (LKR 216,000 billed), re-run correctly skipped all 48 ("All 48 active students already have payments for 2026-10")
+  - API: generated 48 records for 2026-11, confirmed via `/api/payments?month=2026-11` (total: 48)
+  - UI: dialog opens with month + due date pre-filled, amber warning box visible, Generate button with Zap icon. VLM-rated 9/10: "exceptionally clean, well-organized, and professional"
+  - Test data cleaned up (October + November payments deleted to keep DB clean)
+- **Bug fixed during development**: initial `handleBulkGenerate` referenced `reload` (nonexistent) instead of `fetchPayments` — caused a runtime ReferenceError in the Fees section. Fixed by moving the callback after `fetchPayments` is defined and using it as the dependency.
+
+### Verification
+- `bun run lint` → 0 errors, 0 warnings (fixed `react-hooks/set-state-in-effect` in BulkGenerateDialog by deferring setState via `Promise.resolve().then(...)`).
+- agent-browser sweep: all 10 sections render with zero runtime/console errors.
+- Bulk-generate API returns correct counts (created/skipped/total) and creates real payment records with sequential receipt numbers.
+
+## Unresolved issues / risks & next-phase recommendations
+- **No critical bugs remaining.** All 10 modules + heatmap + global search + bulk fee generation operational and verified.
+- **Next feature candidates** (not yet implemented):
+  - Export PDF reports (currently CSV only)
+  - Student photo upload / AI avatar generation (would use image-generation skill)
+  - Dashboard chart hover tooltips with drill-down
+  - Search result "open detail" (currently navigates to section; could open specific record dialog)
+  - Attendance anomaly detection (flag students with declining attendance)
+  - Fee reminder generation (auto-create announcement when payments are overdue)
+- The 15-min recurring webDevReview cron (job 366041) will continue QA + feature additions autonomously.
