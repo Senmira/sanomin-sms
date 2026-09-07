@@ -22,6 +22,7 @@ import {
   Filter,
   CircleDollarSign,
   Zap,
+  BellRing,
 } from 'lucide-react'
 
 import { api } from '@/lib/api'
@@ -196,6 +197,7 @@ export function FeesSection() {
   const [deleteTarget, setDeleteTarget] = useState<PaymentRow | null>(null)
   const [generating, setGenerating] = useState(false)
   const [bulkOpen, setBulkOpen] = useState(false)
+  const [sendingReminder, setSendingReminder] = useState(false)
 
   // ─── Debounce search input ──────────────────────────────────────────────
   useEffect(() => {
@@ -299,6 +301,31 @@ export function FeesSection() {
     [fetchPayments],
   )
 
+  // ─── Send fee reminder (auto-create announcement for outstanding fees) ──
+  const handleSendReminder = useCallback(async () => {
+    setSendingReminder(true)
+    try {
+      const res = await api<{
+        announcement: { id: string; title: string } | null
+        outstandingCount: number
+        outstandingAmount: number
+        message: string
+      }>('/api/payments/send-reminder', {
+        method: 'POST',
+        body: JSON.stringify({ month }),
+      })
+      if (res.announcement) {
+        toast.success(res.message, { duration: 6000 })
+      } else {
+        toast.info(res.message)
+      }
+    } catch (e: any) {
+      toast.error(e.message || 'Failed to send reminder')
+    } finally {
+      setSendingReminder(false)
+    }
+  }, [month])
+
   // ─── CSV export ────────────────────────────────────────────────────────
   const exportCsv = useCallback(() => {
     const headers = [
@@ -385,6 +412,20 @@ export function FeesSection() {
               className="gap-2 border-primary/30 text-primary hover:bg-primary/5"
             >
               <Zap className="h-4 w-4" /> Generate Month
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleSendReminder}
+              disabled={sendingReminder}
+              className="gap-2 border-amber-500/40 text-amber-600 hover:bg-amber-500/5 dark:text-amber-400"
+            >
+              {sendingReminder ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <BellRing className="h-4 w-4" />
+              )}
+              Send Reminder
             </Button>
             <Button
               size="sm"

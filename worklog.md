@@ -734,3 +734,59 @@ A modal dialog that opens when an admin clicks any Attendance Alerts tile on the
   - Search result "open detail" (currently navigates to section; could open specific record dialog)
   - Attendance notes/intervention tracking (record follow-up actions for at-risk students)
 - The 15-min recurring webDevReview cron (job 366041) will continue QA + feature additions autonomously.
+
+---
+Task ID: 16 (webDevReview cron round 10)
+Agent: main (orchestrator) — triggered by 15-min recurring webDevReview cron
+Task: QA assessment + Fee Reminder Generation feature (auto-create announcement for outstanding fees)
+
+## Current project status assessment
+- App had 10 modules + heatmap + global search + bulk fee generation + at-risk detection + at-risk detail view after round 9. Dev server running on :3000, lint clean, all sections at 9-10/10 polish.
+- QA via agent-browser confirmed all 10 sections render error-free. App is very mature. Identified opportunity: admins must manually compose announcements to remind parents about outstanding fees — a repetitive monthly task that can be automated by connecting the Fees + Announcements modules.
+
+## Completed modifications & verification
+
+### New feature: Fee Reminder Generation (Task ID 16-a)
+Connects the Fees and Announcements modules — auto-creates a high-priority announcement notifying parents about outstanding fees with one click.
+
+- **API**: Created `/api/payments/send-reminder` (POST):
+  - Body: `{ month?: "YYYY-MM" }` (defaults to current month)
+  - Queries all outstanding payments (Pending/Partial/Overdue) for the month
+  - If none outstanding: returns info message "No outstanding fees for {month}. All payments are settled."
+  - Otherwise: computes outstanding count, total outstanding amount, breakdown by status (overdue/pending/partial)
+  - Auto-generates a structured announcement body with:
+    - Polite greeting to parents
+    - Breakdown of outstanding payments (overdue/pending/partial counts)
+    - Total outstanding amount in LKR
+    - Payment instructions (Cash/Card/Bank/Online at accounts desk)
+    - Contact info for queries
+    - SANOMIN Administration signature
+  - Creates an `Announcement` with: category "Payment", audience "Parents", priority "High" if overdue > 0 else "Normal", pinned true, 14-day expiry
+  - Returns `{ announcement: { id, title }, outstandingCount, outstandingAmount, overdueCount, pendingCount, partialCount, month, message }`
+- **UI**: Added "Send Reminder" button to the Fees section header:
+  - Amber-tinted outline button with BellRing icon (between Generate Month and Record Payment)
+  - Loading spinner when sending
+  - On success: shows a 6-second toast with the full message (count + amount)
+  - On no outstanding fees: shows info toast
+  - Added `BellRing` icon import + `sendingReminder` state + `handleSendReminder` callback
+- **Verified end-to-end**:
+  - API: created announcement "Fee Payment Reminder — September 2026" (High priority, Payment category) for 16 outstanding payments (LKR 57,900, 3 overdue, 8 pending, 5 partial)
+  - UI: clicking "Send Reminder" button created the announcement, confirmed via `/api/announcements?q=Fee+Payment+Reminder` (found: 1)
+  - VLM-verified: all 4 action buttons visible (Export CSV, Generate Month, Send Reminder [amber bell], Record Payment)
+  - Test announcement cleaned up after verification
+
+### Verification
+- `bun run lint` → 0 errors, 0 warnings.
+- agent-browser sweep: all 10 sections render with zero runtime/console errors.
+- Send-reminder API returns 200 with correct announcement creation + outstanding fee breakdown.
+- The created announcement appears in the Announcements module (category Payment, audience Parents, priority High, pinned).
+
+## Unresolved issues / risks & next-phase recommendations
+- **No critical bugs remaining.** All 10 modules + heatmap + global search + bulk fee generation + at-risk detection + at-risk detail view + fee reminder generation operational and verified.
+- **Next feature candidates** (not yet implemented):
+  - Export PDF reports (currently CSV only)
+  - Student photo upload / AI avatar generation (would use image-generation skill)
+  - Search result "open detail" (currently navigates to section; could open specific record dialog)
+  - Attendance notes/intervention tracking (record follow-up actions for at-risk students)
+  - Dashboard chart hover tooltips with drill-down
+- The 15-min recurring webDevReview cron (job 366041) will continue QA + feature additions autonomously.
