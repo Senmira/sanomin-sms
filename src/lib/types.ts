@@ -289,7 +289,10 @@ export interface ExpenseSummary {
   count: number
   byCategory: ExpenseByCategory[]
   methodTotals: Record<string, number>
+  statusTotals?: Record<string, { count: number; total: number }>
 }
+
+export type ExpenseStatus = 'Pending' | 'Approved' | 'Rejected'
 
 export interface ExpenseRow {
   id: string
@@ -300,6 +303,9 @@ export interface ExpenseRow {
   method: ExpenseMethod
   vendor: string | null
   note: string | null
+  status: ExpenseStatus
+  reviewedAt: string | null
+  reviewedBy: string | null
   createdAt: string
 }
 

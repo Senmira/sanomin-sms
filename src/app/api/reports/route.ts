@@ -44,9 +44,9 @@ async function financialReport(searchParams: URLSearchParams) {
   const firstDay = new Date(Date.UTC(year, month, 1))
   const nextMonthFirst = new Date(Date.UTC(year, month + 1, 1))
 
-  // ── 1. Expenses ───────────────────────────────────────────────────────────
+  // ── 1. Expenses (approved only — rejected rows are voided) ───────────────
   const expenses = await db.expense.findMany({
-    where: { date: { gte: firstDay, lt: nextMonthFirst } },
+    where: { date: { gte: firstDay, lt: nextMonthFirst }, status: { not: 'Rejected' } },
     select: { amount: true, category: true, method: true },
   })
   const expenseTotal = round2(expenses.reduce((s, e) => s + e.amount, 0))
@@ -270,7 +270,7 @@ async function financialReport(searchParams: URLSearchParams) {
     const end = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1))
     const [pSum, eSum, recs] = await Promise.all([
       db.payment.aggregate({ where: { month: key }, _sum: { paidAmount: true } }),
-      db.expense.aggregate({ where: { date: { gte: start, lt: end } }, _sum: { amount: true } }),
+      db.expense.aggregate({ where: { date: { gte: start, lt: end }, status: { not: 'Rejected' } }, _sum: { amount: true } }),
       db.payrollRecord.findMany({ where: { month: key }, select: { employerCost: true } }),
     ])
     trendMonths.push({

@@ -90,8 +90,10 @@ export async function GET(req: Request) {
       select: { amount: true, paidAmount: true, status: true },
     }),
     db.expense.findMany({
-      where: { date: { gte: monthStart, lt: monthEnd } },
-      select: { amount: true, category: true },
+      // Digest reports approved spend; rejected rows are voided. Pending rows
+      // are surfaced separately as an "awaiting approval" callout.
+      where: { date: { gte: monthStart, lt: monthEnd }, status: { not: 'Rejected' } },
+      select: { amount: true, category: true, status: true },
     }),
     db.payrollRecord.findMany({
       where: { month: monthKey, status: 'Paid' },
@@ -156,6 +158,8 @@ export async function GET(req: Request) {
     byCategory.set(e.category, (byCategory.get(e.category) ?? 0) + e.amount)
   }
   const topCategory = [...byCategory.entries()].sort((a, b) => b[1] - a[1])[0] ?? null
+  const pendingExpenses = monthExpenses.filter((e) => e.status === 'Pending')
+  const pendingExpenseTotal = pendingExpenses.reduce((n, e) => n + e.amount, 0)
 
   // ── Payroll (current month, paid) ──
   const paidSalaries = monthPayroll.reduce((n, p) => n + p.netSalary, 0)
@@ -213,6 +217,8 @@ export async function GET(req: Request) {
       total: expenseTotal,
       count: monthExpenses.length,
       topCategory: topCategory ? { name: topCategory[0], total: topCategory[1] } : null,
+      pendingCount: pendingExpenses.length,
+      pendingTotal: pendingExpenseTotal,
     },
     payroll: { paidCount: paidTeachers, paidTotal: paidSalaries },
     people: { celebrationsCount: celebrations.length, celebrations: celebrations.slice(0, 5) },
@@ -247,6 +253,9 @@ export async function GET(req: Request) {
     '',
     `FINANCES — ${monthLabel}`,
     `• Expenses ${lkr(expenseTotal)}${topCategory ? ` (top: ${topCategory[0]} ${lkr(topCategory[1])})` : ''}`,
+    ...(pendingExpenses.length > 0
+      ? [`• ⏳ ${pendingExpenses.length} expense${pendingExpenses.length === 1 ? '' : 's'} awaiting approval — ${lkr(pendingExpenseTotal)}`]
+      : []),
     ...(paidTeachers > 0
       ? [`• Salaries paid to ${paidTeachers} staff member${paidTeachers === 1 ? '' : 's'} — ${lkr(paidSalaries)}`]
       : []),

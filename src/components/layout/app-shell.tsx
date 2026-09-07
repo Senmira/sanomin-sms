@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, type ReactNode } from 'react'
+import { useState, useEffect, useCallback, type ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/lib/store'
 import type { SectionKey } from '@/lib/types'
@@ -22,6 +22,8 @@ import {
   Bell,
   ChevronRight,
   ShieldCheck,
+  CheckCircle2,
+  Loader2,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ThemeToggle } from '@/components/theme-toggle'
@@ -32,6 +34,11 @@ import {
   SheetContent,
   SheetTrigger,
 } from '@/components/ui/sheet'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover'
 import {
   Command,
   CommandEmpty,
@@ -349,6 +356,145 @@ function CommandPalette({
   )
 }
 
+// ─── Notifications bell ───────────────────────────────────────────────────
+// Aggregated actionable alerts (overdue bills, pending expense approvals,
+// attendance concerns, unpaid salaries, celebrations) from /api/notifications.
+// Badge shows the total; opening the popover refetches. Clicking an alert
+// jumps to the matching module.
+
+interface NotificationAlert {
+  key: string
+  section: SectionKey
+  severity: 'high' | 'medium' | 'low' | 'info'
+  title: string
+  detail: string
+  count: number
+}
+
+const SEVERITY_STYLES: Record<NotificationAlert['severity'], { dot: string }> = {
+  high: { dot: 'bg-red-500' },
+  medium: { dot: 'bg-amber-500' },
+  low: { dot: 'bg-sky-500' },
+  info: { dot: 'bg-emerald-500' },
+}
+
+function NotificationsBell() {
+  const { setSection } = useAppStore()
+  const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [alerts, setAlerts] = useState<NotificationAlert[]>([])
+  const [total, setTotal] = useState(0)
+
+  const load = useCallback(() => {
+    setLoading(true)
+    fetch('/api/notifications')
+      .then((r) => r.json())
+      .then((d: { alerts?: NotificationAlert[]; total?: number }) => {
+        setAlerts(d.alerts || [])
+        setTotal(d.total || 0)
+      })
+      .catch(() => {
+        setAlerts([])
+        setTotal(0)
+      })
+      .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => {
+    const t = setTimeout(load, 400)
+    return () => clearTimeout(t)
+  }, [load])
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(v) => {
+        setOpen(v)
+        if (v) load()
+      }}
+    >
+      <PopoverTrigger asChild>
+        <Button variant="ghost" size="icon" className="relative" aria-label={`Notifications${total > 0 ? ` (${total} alerts)` : ''}`}>
+          <Bell className="h-5 w-5" />
+          {total > 0 && (
+            <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[9px] font-bold text-destructive-foreground ring-2 ring-background tabular-nums">
+              {total > 99 ? '99+' : total}
+            </span>
+          )}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-[340px] p-0 sm:w-[380px]">
+        <div className="flex items-center justify-between border-b px-4 py-3">
+          <div>
+            <p className="text-sm font-semibold">Notifications</p>
+            <p className="text-[11px] text-muted-foreground">
+              {loading ? 'Checking…' : total > 0 ? `${alerts.length} item${alerts.length === 1 ? '' : 's'} need attention` : 'Everything looks good'}
+            </p>
+          </div>
+          <span className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10">
+            <Bell className="h-3.5 w-3.5 text-primary" />
+          </span>
+        </div>
+
+        <div className="scroll-thin max-h-[min(420px,60vh)] overflow-y-auto">
+          {loading && alerts.length === 0 ? (
+            <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading alerts…
+            </div>
+          ) : alerts.length === 0 ? (
+            <div className="flex flex-col items-center gap-2 px-6 py-10 text-center">
+              <span className="flex h-11 w-11 items-center justify-center rounded-full bg-emerald-500/10">
+                <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+              </span>
+              <p className="text-sm font-medium">You&apos;re all caught up</p>
+              <p className="text-xs text-muted-foreground">
+                No overdue bills, pending approvals, or attendance concerns right now.
+              </p>
+            </div>
+          ) : (
+            <ul className="py-1.5">
+              {alerts.map((a) => {
+                const s = SEVERITY_STYLES[a.severity]
+                return (
+                  <li key={a.key}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSection(a.section)
+                        setOpen(false)
+                      }}
+                      className="group flex w-full items-start gap-3 px-4 py-2.5 text-left transition-colors hover:bg-muted/60"
+                    >
+                      <span className={cn('mt-1.5 h-2 w-2 shrink-0 rounded-full', s.dot)} />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center justify-between gap-2">
+                          <span className="truncate text-[13px] font-medium">{a.title}</span>
+                          <span className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[10px] font-semibold text-muted-foreground tabular-nums">
+                            {a.count}
+                          </span>
+                        </span>
+                        <span className="mt-0.5 block text-[11px] leading-snug text-muted-foreground">
+                          {a.detail}
+                        </span>
+                      </span>
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </div>
+
+        {alerts.length > 0 && (
+          <div className="border-t px-4 py-2 text-center text-[10px] text-muted-foreground">
+            Click an alert to open the related module
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 export function AppShell({ children }: { children: ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false)
   const { section, commandOpen, setCommandOpen } = useAppStore()
@@ -422,10 +568,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Button variant="ghost" size="icon" className="md:hidden" onClick={() => setCommandOpen(true)}>
               <Search className="h-5 w-5" />
             </Button>
-            <Button variant="ghost" size="icon" className="relative">
-              <Bell className="h-5 w-5" />
-              <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-destructive ring-2 ring-background" />
-            </Button>
+            <NotificationsBell />
             <ThemeToggle />
             <Avatar className="h-9 w-9 ring-1 ring-border">
               <AvatarFallback className="bg-brand-gradient text-xs font-semibold text-white">

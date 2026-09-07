@@ -46,7 +46,8 @@ export async function GET(req: Request) {
   const [budgets, expenses] = await Promise.all([
     readBudgets(),
     db.expense.findMany({
-      where: { date: { gte: firstDay, lt: nextMonth } },
+      // Budget tracking counts approved spend; rejected rows are voided.
+      where: { date: { gte: firstDay, lt: nextMonth }, status: { not: 'Rejected' } },
       select: { category: true, amount: true },
     }),
   ])

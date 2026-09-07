@@ -140,7 +140,8 @@ export async function GET() {
   const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999)
   const [monthExpenses, activeTeachers] = await Promise.all([
     db.expense.findMany({
-      where: { date: { gte: monthStart, lte: monthEnd } },
+      // Rejected (voided) expenses never count toward the cash position.
+      where: { date: { gte: monthStart, lte: monthEnd }, status: { not: 'Rejected' } },
       select: { amount: true },
     }),
     db.teacher.findMany({

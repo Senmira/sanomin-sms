@@ -3,12 +3,14 @@ import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 
 // ─── Expenses — institute operating expenses & outgoings ────────────────────
-// GET  /api/expenses?month=YYYY-MM&q=&category=&limit=&page=
-//      → { data, summary: { total, count, byCategory, methodTotals },
+// GET  /api/expenses?month=YYYY-MM&q=&category=&status=&limit=&page=
+//      → { data, summary: { total, count, byCategory, methodTotals, statusTotals },
 //          page, totalPages, total }
-// POST /api/expenses { date, category, description, amount, method?, vendor?, note? }
+// POST /api/expenses { date, category, description, amount, method?, vendor?,
+//                      note?, status? }
 
 const ALLOWED_METHODS = new Set(['Cash', 'Bank', 'Card'])
+const ALLOWED_STATUSES = new Set(['Pending', 'Approved', 'Rejected'])
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100
@@ -44,6 +46,9 @@ function serialize(e: ExpenseRecord) {
     method: e.method,
     vendor: e.vendor,
     note: e.note,
+    status: e.status,
+    reviewedAt: e.reviewedAt ? e.reviewedAt.toISOString() : null,
+    reviewedBy: e.reviewedBy,
     createdAt: e.createdAt.toISOString(),
     updatedAt: e.updatedAt.toISOString(),
   }
@@ -56,6 +61,7 @@ export async function GET(req: Request) {
   const url = new URL(req.url)
   const q = url.searchParams.get('q')?.trim() || ''
   const category = url.searchParams.get('category')?.trim() || ''
+  const status = url.searchParams.get('status')?.trim() || ''
   const month = url.searchParams.get('month')?.trim() || currentMonth()
   const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10) || 1)
   const limit = Math.min(
@@ -67,10 +73,18 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'month must be YYYY-MM' }, { status: 400 })
   }
 
+  if (status && !ALLOWED_STATUSES.has(status)) {
+    return NextResponse.json(
+      { error: `status must be one of ${Array.from(ALLOWED_STATUSES).join(', ')}` },
+      { status: 400 },
+    )
+  }
+
   const where: Prisma.ExpenseWhereInput = {}
   const { start, end } = monthRange(month)
   where.date = { gte: start, lt: end }
   if (category) where.category = category
+  if (status) where.status = status
   if (q) {
     where.OR = [
       { description: { contains: q } },
@@ -79,7 +93,7 @@ export async function GET(req: Request) {
     ]
   }
 
-  const [total, rows, agg, byCat, byMethod] = await Promise.all([
+  const [total, rows, agg, byCat, byMethod, byStatus] = await Promise.all([
     db.expense.count({ where }),
     db.expense.findMany({
       where,
@@ -103,6 +117,14 @@ export async function GET(req: Request) {
       where,
       _sum: { amount: true },
     }),
+    // Status split ignores the status filter so tab counts stay stable while
+    // the user switches tabs.
+    db.expense.groupBy({
+      by: ['status'],
+      where: { date: where.date, ...(category ? { category } : {}), ...(q ? { OR: where.OR } : {}) },
+      _count: { _all: true },
+      _sum: { amount: true },
+    }),
   ])
 
   const byCategory = byCat
@@ -118,6 +140,20 @@ export async function GET(req: Request) {
     if (m.method in methodTotals) methodTotals[m.method] = round2(m._sum.amount ?? 0)
   }
 
+  const statusTotals: Record<string, { count: number; total: number }> = {
+    Pending: { count: 0, total: 0 },
+    Approved: { count: 0, total: 0 },
+    Rejected: { count: 0, total: 0 },
+  }
+  for (const s of byStatus) {
+    if (s.status in statusTotals) {
+      statusTotals[s.status] = {
+        count: s._count._all,
+        total: round2(s._sum.amount ?? 0),
+      }
+    }
+  }
+
   const totalPages = Math.max(1, Math.ceil(total / limit))
 
   return NextResponse.json({
@@ -127,6 +163,7 @@ export async function GET(req: Request) {
       count: agg._count._all,
       byCategory,
       methodTotals,
+      statusTotals,
     },
     page,
     totalPages,
@@ -143,6 +180,7 @@ interface ExpenseBody {
   method?: string | null
   vendor?: string | null
   note?: string | null
+  status?: string | null
 }
 
 function parseIsoDate(v: unknown): Date | null {
@@ -199,6 +237,13 @@ function validate(
   }
   if (body.note !== undefined) {
     values.note = body.note?.trim() || null
+  }
+  if (body.status !== undefined && body.status !== null && body.status !== '') {
+    const st = body.status.trim()
+    if (!ALLOWED_STATUSES.has(st)) {
+      return { error: `status must be one of ${Array.from(ALLOWED_STATUSES).join(', ')}` }
+    }
+    values.status = st
   }
 
   return { values: values as Prisma.ExpenseUncheckedCreateInput }

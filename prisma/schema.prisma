@@ -248,6 +248,12 @@ model Expense {
   method      String   @default("Cash")    // Cash | Bank | Card
   vendor      String?
   note        String?
+  // Approval lifecycle: entries flagged "Pending" await an owner review;
+  // Rejected rows are voided and excluded from every financial aggregate.
+  // Legacy rows (and recurring-template/bulk-created rows) default Approved.
+  status      String   @default("Approved") // Pending | Approved | Rejected
+  reviewedAt  DateTime?                     // when Approved/Rejected was set
+  reviewedBy  String?                       // reviewer label (no auth system)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 }

@@ -14,11 +14,15 @@ import {
   Loader2,
   AlertCircle,
   CheckCircle2,
+  CheckCheck,
+  Clock,
   PieChart,
   Calculator,
   CreditCard,
   Target,
   Repeat,
+  RotateCcw,
+  XCircle,
 } from 'lucide-react'
 
 import { api } from '@/lib/api'
@@ -26,6 +30,7 @@ import {
   ExpenseRow,
   ExpenseSummary,
   ExpenseMethod,
+  ExpenseStatus,
   EXPENSE_METHODS,
   EXPENSE_CATEGORIES,
 } from '@/lib/types'
@@ -157,6 +162,19 @@ function methodBadgeClasses(method: string): string {
   }
 }
 
+function statusBadgeClasses(status: ExpenseStatus): string {
+  switch (status) {
+    case 'Pending':
+      return 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+    case 'Approved':
+      return 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+    case 'Rejected':
+      return 'border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-300'
+    default:
+      return 'border-transparent bg-muted text-muted-foreground'
+  }
+}
+
 // ─── Response shapes ──────────────────────────────────────────────────────
 interface ExpenseListResponse {
   data: ExpenseRow[]
@@ -175,6 +193,7 @@ interface ExpenseFormState {
   amount: string
   method: ExpenseMethod
   note: string
+  needsApproval: boolean
 }
 
 function emptyForm(): ExpenseFormState {
@@ -186,6 +205,7 @@ function emptyForm(): ExpenseFormState {
     amount: '',
     method: 'Cash',
     note: '',
+    needsApproval: false,
   }
 }
 
@@ -193,6 +213,7 @@ function emptyForm(): ExpenseFormState {
 export function ExpensesSection() {
   const [month, setMonth] = useState<string>(currentMonth())
   const [categoryFilter, setCategoryFilter] = useState<string>('all')
+  const [statusFilter, setStatusFilter] = useState<'all' | ExpenseStatus>('all')
   const [search, setSearch] = useState<string>('')
   const [debouncedSearch, setDebouncedSearch] = useState<string>('')
 
@@ -216,6 +237,11 @@ export function ExpensesSection() {
 
   // Recurring monthly expense templates
   const [recurringOpen, setRecurringOpen] = useState(false)
+
+  // Approval workflow
+  const [approveAllOpen, setApproveAllOpen] = useState(false)
+  const [approvingAll, setApprovingAll] = useState(false)
+  const [statusBusyId, setStatusBusyId] = useState<string | null>(null)
 
   useEffect(() => {
     let alive = true
@@ -250,6 +276,7 @@ export function ExpensesSection() {
     params.set('limit', '200')
     if (debouncedSearch) params.set('q', debouncedSearch)
     if (categoryFilter !== 'all') params.set('category', categoryFilter)
+    if (statusFilter !== 'all') params.set('status', statusFilter)
     const url = `/api/expenses?${params.toString()}`
 
     const run = () => {
@@ -281,7 +308,7 @@ export function ExpensesSection() {
       alive = false
       clearTimeout(t)
     }
-  }, [month, debouncedSearch, categoryFilter])
+  }, [month, debouncedSearch, categoryFilter, statusFilter])
 
   const fetchExpenses = useCallback(() => reloadRef.current(), [])
 
@@ -315,6 +342,54 @@ export function ExpensesSection() {
     }
   }, [budgetDrafts])
 
+  // ─── Approval status transitions ────────────────────────────────────────
+  const setStatus = useCallback(
+    async (row: ExpenseRow, status: ExpenseStatus) => {
+      setStatusBusyId(row.id)
+      try {
+        await api(`/api/expenses/${row.id}`, {
+          method: 'PUT',
+          body: JSON.stringify({ status }),
+        })
+        toast.success(
+          status === 'Approved'
+            ? `Approved — "${row.description}"`
+            : status === 'Rejected'
+              ? `Rejected — "${row.description}"`
+              : `Back to pending — "${row.description}"`,
+        )
+        fetchExpenses()
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : 'Failed to update status')
+      } finally {
+        setStatusBusyId(null)
+      }
+    },
+    [fetchExpenses],
+  )
+
+  const approveAllPending = useCallback(async () => {
+    setApprovingAll(true)
+    try {
+      const params = new URLSearchParams({ month, limit: '200', status: 'Pending' })
+      const res = await api<{ data: ExpenseRow[] }>(`/api/expenses?${params.toString()}`)
+      const pending = res.data || []
+      for (const row of pending) {
+        await api(`/api/expenses/${row.id}`, {
+          method: 'PUT',
+          body: JSON.stringify({ status: 'Approved' }),
+        })
+      }
+      toast.success(`Approved ${pending.length} pending ${pending.length === 1 ? 'expense' : 'expenses'}`)
+      setApproveAllOpen(false)
+      fetchExpenses()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to approve all')
+    } finally {
+      setApprovingAll(false)
+    }
+  }, [month, fetchExpenses])
+
   // ─── Delete ─────────────────────────────────────────────────────────────
   const handleDelete = useCallback(async () => {
     if (!deleteTarget) return
@@ -332,7 +407,7 @@ export function ExpensesSection() {
 
   // ─── CSV export ────────────────────────────────────────────────────────
   const exportCsv = useCallback(() => {
-    const headers = ['Date', 'Category', 'Description', 'Vendor', 'Method', 'Amount', 'Note']
+    const headers = ['Date', 'Category', 'Description', 'Vendor', 'Method', 'Amount', 'Status', 'Note']
     const escape = (v: string | number | null | undefined): string => {
       const s = v === null || v === undefined ? '' : String(v)
       return `"${s.replace(/"/g, '""')}"`
@@ -347,6 +422,7 @@ export function ExpensesSection() {
           escape(r.vendor ?? ''),
           escape(r.method),
           escape(r.amount),
+          escape(r.status),
           escape(r.note ?? ''),
         ].join(','),
       )
@@ -366,10 +442,11 @@ export function ExpensesSection() {
 
   const clearFilters = useCallback(() => {
     setCategoryFilter('all')
+    setStatusFilter('all')
     setSearch('')
   }, [])
 
-  const hasFilters = categoryFilter !== 'all' || debouncedSearch !== ''
+  const hasFilters = categoryFilter !== 'all' || debouncedSearch !== '' || statusFilter !== 'all'
 
   // ─── Derived stats ──────────────────────────────────────────────────────
   const topCategory = summary?.byCategory?.[0] ?? null
@@ -557,7 +634,99 @@ export function ExpensesSection() {
             )}
           </div>
         </div>
+
+        {/* Approval status tabs (counts stay month-wide regardless of active tab) */}
+        {(() => {
+          const st = summary?.statusTotals
+          const tabs: { key: 'all' | ExpenseStatus; label: string; count: number | null }[] = [
+            { key: 'all', label: 'All', count: null },
+            { key: 'Pending', label: 'Pending', count: st?.Pending?.count ?? 0 },
+            { key: 'Approved', label: 'Approved', count: st?.Approved?.count ?? 0 },
+            { key: 'Rejected', label: 'Rejected', count: st?.Rejected?.count ?? 0 },
+          ]
+          return (
+            <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t pt-3">
+              <span className="mr-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                Approval
+              </span>
+              {tabs.map((t) => {
+                const active = statusFilter === t.key
+                return (
+                  <button
+                    key={t.key}
+                    type="button"
+                    onClick={() => setStatusFilter(t.key)}
+                    aria-pressed={active}
+                    className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-all ${
+                      active
+                        ? 'border-primary bg-primary text-primary-foreground shadow-sm'
+                        : 'border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground'
+                    }`}
+                  >
+                    {t.key === 'Pending' && (
+                      <Clock className={`h-3 w-3 ${active ? '' : 'text-amber-500'}`} />
+                    )}
+                    {t.key === 'Approved' && (
+                      <CheckCircle2 className={`h-3 w-3 ${active ? '' : 'text-emerald-500'}`} />
+                    )}
+                    {t.key === 'Rejected' && (
+                      <XCircle className={`h-3 w-3 ${active ? '' : 'text-red-500'}`} />
+                    )}
+                    {t.label}
+                    {t.count !== null && (
+                      <span
+                        className={`rounded-full px-1.5 py-px text-[10px] font-semibold tabular-nums ${
+                          active
+                            ? 'bg-primary-foreground/20 text-primary-foreground'
+                            : 'bg-muted text-muted-foreground'
+                        }`}
+                      >
+                        {t.count}
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+          )
+        })()}
       </Card>
+
+      {/* Pending approval callout strip */}
+      {summary?.statusTotals && summary.statusTotals.Pending.count > 0 && (
+        <div className="flex flex-col gap-3 rounded-xl border border-amber-500/40 bg-amber-500/[0.07] p-4 sm:flex-row sm:items-center">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400">
+              <Clock className="h-4 w-4" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-amber-700 dark:text-amber-300">
+                {summary.statusTotals.Pending.count} expense{summary.statusTotals.Pending.count === 1 ? '' : 's'} awaiting approval
+              </p>
+              <p className="text-xs text-amber-700/80 dark:text-amber-300/80">
+                {currency(summary.statusTotals.Pending.total)} not yet reviewed · these still count toward this month&apos;s cash position
+              </p>
+            </div>
+          </div>
+          <div className="flex shrink-0 gap-2 sm:ml-auto">
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-amber-500/50 text-amber-700 hover:bg-amber-500/10 dark:text-amber-300"
+              onClick={() => setStatusFilter('Pending')}
+            >
+              Review
+            </Button>
+            <Button
+              size="sm"
+              className="gap-1.5 bg-emerald-600 text-white hover:bg-emerald-700"
+              onClick={() => setApproveAllOpen(true)}
+            >
+              <CheckCheck className="h-4 w-4" /> Approve all
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Table */}
       <Card className="p-0">
@@ -599,7 +768,7 @@ export function ExpensesSection() {
           </div>
         ) : (
           <div className="scroll-thin max-h-[62vh] overflow-y-auto">
-            <Table className="table-zebra min-w-[860px]">
+            <Table className="table-zebra min-w-[980px]">
               <TableHeader className="sticky top-0 z-10 bg-muted/80 backdrop-blur">
                 <TableRow>
                   <TableHead className="w-[110px]">Date</TableHead>
@@ -607,13 +776,23 @@ export function ExpensesSection() {
                   <TableHead>Description</TableHead>
                   <TableHead className="w-[170px]">Note</TableHead>
                   <TableHead className="w-[90px]">Method</TableHead>
+                  <TableHead className="w-[110px]">Status</TableHead>
                   <TableHead className="text-right">Amount</TableHead>
                   <TableHead className="w-[60px] text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {rows.map((r) => (
-                  <TableRow key={r.id} className="animate-row-in hover:bg-muted/40">
+                  <TableRow
+                    key={r.id}
+                    className={`animate-row-in hover:bg-muted/40 ${
+                      r.status === 'Rejected'
+                        ? 'opacity-55'
+                        : r.status === 'Pending'
+                          ? 'bg-amber-500/[0.05]'
+                          : ''
+                    }`}
+                  >
                     <TableCell>
                       <span className="text-sm tabular-nums">{fmtDate(r.date)}</span>
                     </TableCell>
@@ -664,6 +843,24 @@ export function ExpensesSection() {
                         {r.method}
                       </Badge>
                     </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant="outline"
+                        className={`gap-1 font-medium ${statusBadgeClasses(r.status)}`}
+                        title={
+                          r.reviewedAt
+                            ? `${r.status === 'Approved' ? 'Approved' : 'Rejected'} by ${r.reviewedBy ?? 'Administrator'} · ${new Date(r.reviewedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`
+                            : r.status === 'Pending'
+                              ? 'Awaiting approval'
+                              : undefined
+                        }
+                      >
+                        {r.status === 'Pending' && <Clock className="h-3 w-3" />}
+                        {r.status === 'Approved' && <CheckCircle2 className="h-3 w-3" />}
+                        {r.status === 'Rejected' && <XCircle className="h-3 w-3" />}
+                        {r.status}
+                      </Badge>
+                    </TableCell>
                     <TableCell className="text-right text-sm font-semibold tabular-nums text-rose-600 dark:text-rose-400">
                       {currency(r.amount)}
                     </TableCell>
@@ -675,7 +872,34 @@ export function ExpensesSection() {
                             <span className="sr-only">Open actions</span>
                           </Button>
                         </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-40">
+                        <DropdownMenuContent align="end" className="w-44">
+                          {r.status === 'Pending' && (
+                            <DropdownMenuItem
+                              onClick={() => setStatus(r, 'Approved')}
+                              className="text-emerald-600 focus:text-emerald-700 dark:text-emerald-400"
+                            >
+                              {statusBusyId === r.id ? (
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              ) : (
+                                <CheckCircle2 className="mr-2 h-4 w-4" />
+                              )}
+                              Approve
+                            </DropdownMenuItem>
+                          )}
+                          {r.status === 'Pending' && (
+                            <DropdownMenuItem
+                              onClick={() => setStatus(r, 'Rejected')}
+                              className="text-red-600 focus:text-red-700 dark:text-red-400"
+                            >
+                              <XCircle className="mr-2 h-4 w-4" /> Reject
+                            </DropdownMenuItem>
+                          )}
+                          {r.status !== 'Pending' && (
+                            <DropdownMenuItem onClick={() => setStatus(r, 'Pending')}>
+                              <RotateCcw className="mr-2 h-4 w-4" /> Mark pending
+                            </DropdownMenuItem>
+                          )}
+                          {r.status !== 'Pending' && <DropdownMenuSeparator />}
                           <DropdownMenuItem onClick={() => setEditTarget(r)}>
                             <Pencil className="mr-2 h-4 w-4" /> Edit
                           </DropdownMenuItem>
@@ -792,6 +1016,17 @@ export function ExpensesSection() {
         </DialogContent>
       </Dialog>
 
+      {/* Approve-all confirm */}
+      <ConfirmDialog
+        open={approveAllOpen}
+        onOpenChange={(v) => !v && !approvingAll && setApproveAllOpen(false)}
+        title="Approve all pending expenses?"
+        description={`Every pending expense for ${monthLabel(month)} will be marked Approved and counted as reviewed spend. This action can be undone per-row via “Mark pending”.`}
+        confirmText={approvingAll ? 'Approving…' : 'Approve all'}
+        cancelText="Cancel"
+        onConfirm={approveAllPending}
+      />
+
       {/* Delete confirm */}
       <ConfirmDialog
         open={!!deleteTarget}
@@ -841,6 +1076,7 @@ function ExpenseDialog({ mode, expense, onClose, onSaved }: ExpenseDialogProps) 
           amount: String(expense.amount),
           method: expense.method,
           note: expense.note ?? '',
+          needsApproval: expense.status === 'Pending',
         }
       : emptyForm(),
   )
@@ -876,6 +1112,7 @@ function ExpenseDialog({ mode, expense, onClose, onSaved }: ExpenseDialogProps) 
         amount: amountNum,
         method: form.method,
         note: form.note.trim() || null,
+        ...(!isEdit && form.needsApproval ? { status: 'Pending' } : {}),
       }
       if (isEdit && expense) {
         await api(`/api/expenses/${expense.id}`, {
@@ -888,7 +1125,11 @@ function ExpenseDialog({ mode, expense, onClose, onSaved }: ExpenseDialogProps) 
           method: 'POST',
           body: JSON.stringify(payload),
         })
-        toast.success('Expense added')
+        toast.success(
+          form.needsApproval
+            ? 'Expense added — flagged for approval'
+            : 'Expense added',
+        )
       }
       onSaved()
     } catch (e) {
@@ -1012,6 +1253,27 @@ function ExpenseDialog({ mode, expense, onClose, onSaved }: ExpenseDialogProps) 
               onChange={(e) => setField('note', e.target.value)}
             />
           </div>
+
+          {/* Approval flag (create mode only — review state is managed from
+              the row menu afterwards) */}
+          {!isEdit && (
+            <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-dashed bg-muted/20 p-3 transition-colors hover:bg-muted/40">
+              <Switch
+                checked={form.needsApproval}
+                onCheckedChange={(v) => setField('needsApproval', v)}
+                className="mt-0.5"
+              />
+              <span className="min-w-0">
+                <span className="flex items-center gap-1.5 text-sm font-medium">
+                  <Clock className="h-3.5 w-3.5 text-amber-500" />
+                  Submit for approval
+                </span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  Entry will sit as <span className="font-medium text-amber-600 dark:text-amber-400">Pending</span> until the owner reviews it.
+                </span>
+              </span>
+            </label>
+          )}
         </div>
 
         <DialogFooter>

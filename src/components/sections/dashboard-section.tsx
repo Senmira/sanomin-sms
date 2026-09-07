@@ -49,6 +49,7 @@ import {
   Newspaper,
   Copy,
   CalendarClock,
+  Printer,
 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { toast } from 'sonner'
@@ -1551,6 +1552,7 @@ function WeeklyDigestCard() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [posting, setPosting] = useState(false)
   const [copied, setCopied] = useState(false)
+  const school = useSchoolInfo()
 
   const generate = (d: string = windowDays) => {
     setLoading(true)
@@ -1596,6 +1598,48 @@ function WeeklyDigestCard() {
     } finally {
       setPosting(false)
     }
+  }
+
+  // Print / save-as-PDF: opens a self-contained branded letter document in a
+  // popup and triggers the browser print dialog (works headless & in every
+  // browser — no dependency on the app's print CSS cascade).
+  const printDigest = () => {
+    if (!data) return
+    const w = window.open('', '_blank', 'width=820,height=940')
+    if (!w) {
+      toast.error('Popup blocked — allow popups for this site to print')
+      return
+    }
+    const esc = (s: string) =>
+      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    const gen = new Date(data.generatedAt).toLocaleString('en-GB', {
+      day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit',
+    })
+    const now = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"/><title>${esc(school.name)} — ${esc(String(data.days))}-Day Digest</title><style>
+      * { box-sizing: border-box; }
+      body { font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; color: #0f172a; margin: 0; background: #fff; }
+      .wrap { max-width: 760px; margin: 0 auto; padding: 36px 28px; }
+      header { display: flex; gap: 16px; align-items: center; border-bottom: 3px solid #0f172a; padding-bottom: 18px; }
+      header img { width: 56px; height: 56px; border-radius: 12px; object-fit: cover; }
+      h1 { font-size: 21px; margin: 0; letter-spacing: -0.01em; }
+      .sub { color: #475569; font-size: 12px; margin-top: 2px; }
+      .meta { margin: 22px 0 4px; font-size: 16px; font-weight: 700; }
+      .gen { color: #64748b; font-size: 11.5px; margin: 0 0 14px; }
+      pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.62; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 18px 22px; white-space: pre-wrap; margin: 0; }
+      footer { margin-top: 26px; padding-top: 12px; border-top: 1px solid #e2e8f0; color: #64748b; font-size: 11px; display: flex; justify-content: space-between; gap: 12px; }
+      @media print { body { background: #fff; } @page { size: A4 portrait; margin: 14mm; } }
+    </style></head><body><div class="wrap">
+      <header>
+        <img src="${school.logoUrl}" alt="logo" />
+        <div><h1>${esc(school.name)}</h1><div class="sub">${esc(school.subtitle)}${school.address ? ' · ' + esc(school.address) : ''}</div></div>
+      </header>
+      <p class="meta">${esc(String(data.days))}-Day Digest — ${esc(data.period.label)}</p>
+      <p class="gen">Generated ${esc(gen)}</p>
+      <pre>${esc(data.text)}</pre>
+      <footer><span>${esc(school.name)}${school.phone ? ' · ' + esc(school.phone) : ''}</span><span>Printed ${esc(now)}</span></footer>
+    </div><script>window.onload=function(){setTimeout(function(){window.print()},200)}</script></body></html>`)
+    w.document.close()
   }
 
   const a = data?.attendance
@@ -1813,6 +1857,13 @@ function WeeklyDigestCard() {
                 <Copy className="h-4 w-4" />
               )}
               {copied ? 'Copied!' : 'Copy text'}
+            </Button>
+            <Button
+              variant="outline"
+              className="gap-2"
+              onClick={printDigest}
+            >
+              <Printer className="h-4 w-4" /> Print / PDF
             </Button>
             <Button variant="ghost" onClick={() => setDialogOpen(false)}>
               Close

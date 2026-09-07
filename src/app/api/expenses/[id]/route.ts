@@ -2,11 +2,14 @@ import { NextResponse } from 'next/server'
 import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 
-// ─── GET / PUT / DELETE /api/expenses/[id] ──────────────────────────────────
+// ─── GET / PUT / DELETE /api/expenses/[id] ──────────────────────────────
 // PUT is partial-tolerant: absent fields keep their existing values, present
 // fields are fully validated (same rules as POST /api/expenses).
+// Status transitions (Pending → Approved/Rejected, back to Pending) stamp
+// reviewedAt + reviewedBy on the row for the approvals audit trail.
 
 const ALLOWED_METHODS = new Set(['Cash', 'Bank', 'Card'])
+const ALLOWED_STATUSES = new Set(['Pending', 'Approved', 'Rejected'])
 
 function serialize(e: ExpenseRecord) {
   return {
@@ -18,6 +21,9 @@ function serialize(e: ExpenseRecord) {
     method: e.method,
     vendor: e.vendor,
     note: e.note,
+    status: e.status,
+    reviewedAt: e.reviewedAt ? e.reviewedAt.toISOString() : null,
+    reviewedBy: e.reviewedBy,
     createdAt: e.createdAt.toISOString(),
     updatedAt: e.updatedAt.toISOString(),
   }
@@ -48,6 +54,8 @@ interface UpdateBody {
   method?: string | null
   vendor?: string | null
   note?: string | null
+  status?: string | null
+  reviewedBy?: string | null
 }
 
 function parseIsoDate(v: unknown): Date | null {
@@ -73,7 +81,7 @@ export async function PUT(req: Request, { params }: RouteCtx) {
 
   const existing = await db.expense.findUnique({
     where: { id },
-    select: { id: true },
+    select: { id: true, status: true },
   })
   if (!existing) {
     return NextResponse.json({ error: 'Expense not found' }, { status: 404 })
@@ -116,6 +124,27 @@ export async function PUT(req: Request, { params }: RouteCtx) {
   }
   if (body.vendor !== undefined) data.vendor = body.vendor?.trim() || null
   if (body.note !== undefined) data.note = body.note?.trim() || null
+  if (body.status !== undefined && body.status !== null && body.status !== '') {
+    const st = body.status.trim()
+    if (!ALLOWED_STATUSES.has(st)) {
+      return NextResponse.json(
+        { error: `status must be one of ${Array.from(ALLOWED_STATUSES).join(', ')}` },
+        { status: 400 },
+      )
+    }
+    data.status = st
+    // Stamp review metadata only on an actual status change.
+    if (st !== existing.status) {
+      if (st === 'Approved' || st === 'Rejected') {
+        data.reviewedAt = new Date()
+        data.reviewedBy = body.reviewedBy?.trim() || 'Administrator'
+      } else {
+        // Back to Pending — clear the previous review stamp.
+        data.reviewedAt = null
+        data.reviewedBy = null
+      }
+    }
+  }
 
   try {
     const updated = await db.expense.update({ where: { id }, data })
