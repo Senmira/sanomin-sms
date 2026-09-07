@@ -14,10 +14,16 @@ type TeacherWithRelations = Prisma.TeacherGetPayload<{
       }
     }
     _count: { select: { classes: true, attendance: true } }
+    attendance: {
+      orderBy: { date: 'desc' }
+      take: 1
+      select: { date: true, checkIn: true }
+    }
   }
 }>
 
 function serialize(t: TeacherWithRelations) {
+  const lastAtt = t.attendance[0]
   return {
     id: t.id,
     teacherId: t.teacherId,
@@ -35,6 +41,7 @@ function serialize(t: TeacherWithRelations) {
     status: t.status,
     hireDate: t.hireDate ? t.hireDate.toISOString() : null,
     monthlyRate: t.monthlyRate,
+    lastActive: lastAtt ? (lastAtt.checkIn ?? lastAtt.date).toISOString() : null,
     classes: t.classes.map((c) => ({
       id: c.id,
       name: c.name,
@@ -79,6 +86,11 @@ export async function GET(req: Request) {
             select: { id: true, name: true, dayOfWeek: true, startTime: true },
           },
           _count: { select: { classes: true, attendance: true } },
+          attendance: {
+            orderBy: { date: 'desc' },
+            take: 1,
+            select: { date: true, checkIn: true },
+          },
         },
         orderBy: [{ type: 'asc' }, { teacherId: 'asc' }],
         skip: (page - 1) * limit,

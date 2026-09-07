@@ -516,79 +516,88 @@ function ProgramCard({
   const classes = program._count?.classes ?? 0
   const color = program.color || '#7c3aed'
 
+  const revenue = enrolled * (program.monthlyFee || 0)
   return (
-    <Card className="group relative overflow-hidden p-0 transition-shadow hover:shadow-md">
-      {/* Top color accent bar */}
+    <Card className="card-lift group relative overflow-hidden p-0">
+      {/* Colored header section with gradient */}
       <div
-        className="h-1.5 w-full"
-        style={{ backgroundColor: color }}
-        aria-hidden
-      />
-      <div className="flex flex-col gap-4 p-5">
-        <div className="flex items-start justify-between gap-2">
+        className="relative flex items-center gap-3 p-5 pb-4"
+        style={{
+          background: `linear-gradient(135deg, ${color}18, ${color}06)`,
+        }}
+      >
+        <div
+          className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl text-sm font-bold text-white shadow-sm"
+          style={{ backgroundColor: color }}
+          aria-hidden
+        >
+          {program.code.slice(0, 2).toUpperCase()}
+        </div>
+        <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span
-              className="flex h-9 w-9 items-center justify-center rounded-lg text-xs font-bold text-white"
-              style={{ backgroundColor: color }}
-              aria-hidden
-            >
-              {program.code.slice(0, 2)}
-            </span>
-            <div>
-              <Badge variant="secondary" className="font-mono uppercase">
-                {program.code}
+            <Badge variant="secondary" className="font-mono uppercase text-[10px]">
+              {program.code}
+            </Badge>
+            {!program.active && (
+              <Badge variant="outline" className="text-[10px] text-muted-foreground">
+                Inactive
               </Badge>
-              {!program.active && (
-                <Badge variant="outline" className="ml-1.5 text-muted-foreground">
-                  Inactive
-                </Badge>
-              )}
-            </div>
+            )}
           </div>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8">
-                <MoreVertical className="h-4 w-4" />
-                <span className="sr-only">Open menu</span>
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={onEdit}>
-                <Pencil className="mr-2 h-4 w-4" />
-                Edit
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => onToggleActive(!program.active)}
-              >
-                <Power className="mr-2 h-4 w-4" />
-                {program.active ? 'Deactivate' : 'Activate'}
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                onClick={onDelete}
-                className="text-destructive focus:text-destructive"
-              >
-                <Trash2 className="mr-2 h-4 w-4" />
-                Delete
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <h3 className="mt-1 truncate text-base font-semibold leading-tight">{program.name}</h3>
+        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0">
+              <MoreVertical className="h-4 w-4" />
+              <span className="sr-only">Open menu</span>
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={onEdit}>
+              <Pencil className="mr-2 h-4 w-4" />
+              Edit
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => onToggleActive(!program.active)}
+            >
+              <Power className="mr-2 h-4 w-4" />
+              {program.active ? 'Deactivate' : 'Activate'}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={onDelete}
+              className="text-destructive focus:text-destructive"
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
+      <div className="flex flex-col gap-4 p-5 pt-3">
+        <p className="line-clamp-2 text-sm text-muted-foreground">
+          {program.description || 'No description provided.'}
+        </p>
+
+        {/* Fee + revenue highlight */}
+        <div className="flex items-end justify-between gap-2 rounded-lg border bg-muted/30 p-3">
+          <div>
+            <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Monthly fee</p>
+            <p className="text-lg font-bold tracking-tight">
+              {currency(program.monthlyFee || 0)}
+            </p>
+          </div>
+          <div className="text-right">
+            <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Revenue/mo</p>
+            <p className="text-sm font-semibold text-emerald-600 dark:text-emerald-400">
+              {currency(revenue)}
+            </p>
+          </div>
         </div>
 
-        <div>
-          <h3 className="text-lg font-semibold leading-tight">{program.name}</h3>
-          <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
-            {program.description || 'No description provided.'}
-          </p>
-        </div>
-
-        <div className="flex items-baseline gap-1.5">
-          <span className="text-xl font-bold tracking-tight">
-            {currency(program.monthlyFee || 0)}
-          </span>
-          <span className="text-xs text-muted-foreground">/ month</span>
-        </div>
-
+        {/* Stats grid */}
         <div className="grid grid-cols-2 gap-2 text-sm">
           <div className="flex items-center gap-1.5 rounded-md bg-muted/60 px-2.5 py-1.5">
             <Users className="h-3.5 w-3.5 text-muted-foreground" />
@@ -602,6 +611,7 @@ function ProgramCard({
           </div>
         </div>
 
+        {/* Footer with active toggle + manage */}
         <div className="flex items-center justify-between gap-2 border-t pt-3">
           <div className="flex items-center gap-2">
             <Switch

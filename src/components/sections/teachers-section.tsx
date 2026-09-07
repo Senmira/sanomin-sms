@@ -32,6 +32,7 @@ import {
   Scan,
   KeyRound,
   AlertCircle,
+  Clock,
 } from 'lucide-react'
 
 import { api } from '@/lib/api'
@@ -47,6 +48,8 @@ import {
   avatarColor,
   fmtDate,
   fmtTime,
+  fmtDateTime,
+  timeAgo,
   currency,
 } from '@/lib/format'
 
@@ -456,6 +459,8 @@ export function TeachersSection() {
                 <TableHead>Specialization</TableHead>
                 <TableHead>Contact</TableHead>
                 <TableHead className="text-center">Classes</TableHead>
+                <TableHead>Joined</TableHead>
+                <TableHead>Last Active</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Fingerprint</TableHead>
                 <TableHead className="w-[60px] text-right">Actions</TableHead>
@@ -490,6 +495,12 @@ export function TeachersSection() {
                       <Skeleton className="mx-auto h-5 w-8" />
                     </TableCell>
                     <TableCell>
+                      <Skeleton className="h-4 w-20" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-24" />
+                    </TableCell>
+                    <TableCell>
                       <Skeleton className="h-5 w-16 rounded-full" />
                     </TableCell>
                     <TableCell>
@@ -502,7 +513,7 @@ export function TeachersSection() {
                 ))
               ) : rows.length === 0 ? (
                 <TableRow className="hover:bg-transparent">
-                  <TableCell colSpan={8} className="p-0">
+                  <TableCell colSpan={10} className="p-0">
                     <EmptyState
                       icon={Users}
                       title={hasFilters ? 'No matching teachers' : 'No teachers yet'}
@@ -717,6 +728,30 @@ function TeacherTableRow({
         <span className="inline-flex h-6 min-w-[28px] items-center justify-center rounded-md bg-muted px-1.5 text-xs font-semibold text-foreground">
           {classesCount}
         </span>
+      </TableCell>
+      <TableCell>
+        {teacher.hireDate ? (
+          <span className="text-xs text-muted-foreground" title={fmtDate(teacher.hireDate)}>
+            {fmtDate(teacher.hireDate)}
+          </span>
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        )}
+      </TableCell>
+      <TableCell>
+        {teacher.lastActive ? (
+          <div className="flex flex-col">
+            <span className="text-xs font-medium text-foreground" title={fmtDateTime(teacher.lastActive)}>
+              {timeAgo(teacher.lastActive)}
+            </span>
+            <span className="text-[10px] text-muted-foreground">{fmtDate(teacher.lastActive)}</span>
+          </div>
+        ) : (
+          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+            <Clock className="h-3 w-3" />
+            Never
+          </span>
+        )}
       </TableCell>
       <TableCell>
         <Badge variant={STATUS_VARIANT[teacher.status] || 'secondary'}>

@@ -537,3 +537,49 @@ The #1 admin-productivity improvement — a unified search accessible from the t
   - Dashboard chart hover tooltips with drill-down
   - Search result "open detail" (currently navigates to section; could open specific record dialog)
 - The 15-min recurring webDevReview cron (job 366041) will continue QA + feature additions autonomously.
+
+---
+Task ID: 12 (webDevReview cron round 6)
+Agent: main (orchestrator) — triggered by 15-min recurring webDevReview cron
+Task: QA assessment + Teachers Joined/Last Active columns + Programs card visual hierarchy
+
+## Current project status assessment
+- App had 10 modules + heatmap + global search after round 5. Dev server running on :3000, lint clean, all sections at 8-9/10 polish.
+- QA via agent-browser confirmed all 10 sections render error-free. VLM rated Teachers 7/10, Programs/Dashboard 8/10. Identified: (1) Teachers table missing "Join Date"/"Last Active" temporal context (VLM repeatedly suggested); (2) Programs cards visually flat with no hierarchy between header and body.
+
+## Completed modifications & verification
+
+### Feature: Teachers "Joined" + "Last Active" columns (Task ID 12-a)
+- **API**: Added `lastActive` field to `/api/teachers` — fetches the teacher's most recent attendance record (take 1, orderBy date desc) and returns `lastAtt.checkIn ?? lastAtt.date` as ISO string. Updated `TeacherWithRelations` Prisma type + the `findMany` query to include the `attendance` relation. Updated `TeacherRow` interface in `src/lib/types.ts` with `lastActive: string | null`.
+- **UI**: Added two new columns to the Teachers table:
+  - **Joined**: shows `fmtDate(hireDate)` (e.g., "20 Jan 2024") with full date in tooltip. Falls back to "—" if no hire date.
+  - **Last Active**: shows `timeAgo(lastActive)` (e.g., "6h ago") in bold + `fmtDate(lastActive)` as sub-text. Falls back to "Never" with a Clock icon if no attendance records.
+  - Updated table header (10 columns now), skeleton row (added 2 skeleton cells), and EmptyState colSpan (8→10).
+  - Imported `fmtDateTime`, `timeAgo`, `Clock` icon.
+- **Verified**: API returns `lastActive` for all teachers (e.g., Ravi Bandara → "2026-09-07T07:50:00.000Z"). DOM confirms 10 table headers: "Teacher | Type | Specialization | Contact | Classes | Joined | Last Active | Status | Fingerprint | Actions". VLM-rated 9/10: "the 'Joined' column displays dates, the 'Last Active' column shows relative time like '6h ago'".
+
+### Styling: Programs card visual hierarchy (Task ID 12-b)
+- **Redesigned ProgramCard** with clear header/body separation:
+  - **Colored header section**: gradient background using `linear-gradient(135deg, ${color}18, ${color}06)` — program-color-tinted. Contains a larger 12×12 icon tile (was 9×9) with solid program color + uppercase 2-letter code, the program code badge, and the program name.
+  - **Body section**: description (line-clamp-2), then a new **Fee + Revenue highlight box** (bordered, bg-muted/30) showing "Monthly fee" (large bold) on the left and "Revenue/mo" (enrolled × monthlyFee, emerald-colored) on the right — gives admins instant financial context per program.
+  - Stats grid (enrolled/classes) preserved.
+  - Footer (active switch + Manage button) preserved.
+  - Added `card-lift` class for subtle translateY(-2px) + shadow on hover (uses the utility added in round 2's globals.css).
+- **Verified**: VLM-rated 10/10: "Each card features a distinct colored header with a large icon tile and program name. A dedicated highlight box displays Monthly Fee and Revenue/mo. The cards are designed with a card-lift effect."
+
+### Verification
+- `bun run lint` → 0 errors, 0 warnings.
+- agent-browser sweep: all 10 sections render with zero runtime/console errors.
+- VLM ratings: Teachers 7→9/10, Programs 8→10/10.
+- Teachers API returns `lastActive` for all 7 teachers. Programs cards show fee + revenue highlights with real data (e.g., Preschool 48 enrolled × LKR 4,500 = LKR 216,000/mo revenue).
+
+## Unresolved issues / risks & next-phase recommendations
+- **No critical bugs remaining.** All 10 modules + heatmap + global search operational and verified, polish ratings at 9-10/10.
+- **Next feature candidates** (not yet implemented):
+  - Export PDF reports (currently CSV only)
+  - Student photo upload / AI avatar generation (would use image-generation skill)
+  - Dashboard chart hover tooltips with drill-down
+  - Search result "open detail" (currently navigates to section; could open specific record dialog)
+  - Attendance anomaly detection (flag students with declining attendance)
+  - Bulk fee generation (auto-create payment records for all students at month start)
+- The 15-min recurring webDevReview cron (job 366041) will continue QA + feature additions autonomously.

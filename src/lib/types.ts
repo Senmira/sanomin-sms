@@ -84,6 +84,7 @@ export interface TeacherRow {
   specialization: string | null
   status: string
   hireDate: string | null
+  lastActive: string | null
   monthlyRate: number
   photoUrl: string | null
   classes: Array<{ id: string; name: string; dayOfWeek: string | null; startTime: string | null }>
