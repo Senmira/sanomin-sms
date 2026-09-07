@@ -41,6 +41,10 @@ function serialize(t: TeacherWithRelations) {
     status: t.status,
     hireDate: t.hireDate ? t.hireDate.toISOString() : null,
     monthlyRate: t.monthlyRate,
+    basicSalary: t.basicSalary,
+    allowances: t.allowances,
+    epfNo: t.epfNo,
+    salaryNote: t.salaryNote,
     lastActive: lastAtt ? (lastAtt.checkIn ?? lastAtt.date).toISOString() : null,
     classes: t.classes.map((c) => ({
       id: c.id,
@@ -132,6 +136,10 @@ interface CreateBody {
   status?: string
   hireDate?: string | null
   monthlyRate?: number | null
+  basicSalary?: number | null
+  allowances?: number | null
+  epfNo?: string | null
+  salaryNote?: string | null
   fingerprintId?: string | null
 }
 
@@ -230,12 +238,23 @@ export async function POST(req: Request) {
         hireDate: parseDate(body.hireDate),
         monthlyRate:
           typeof body.monthlyRate === 'number' ? body.monthlyRate : 0,
+        basicSalary:
+          typeof body.basicSalary === 'number' ? Math.max(0, body.basicSalary) : 0,
+        allowances:
+          typeof body.allowances === 'number' ? Math.max(0, body.allowances) : 0,
+        epfNo: body.epfNo?.trim() || null,
+        salaryNote: body.salaryNote?.trim() || null,
       },
       include: {
         classes: {
           select: { id: true, name: true, dayOfWeek: true, startTime: true },
         },
         _count: { select: { classes: true, attendance: true } },
+        attendance: {
+          orderBy: { date: 'desc' },
+          take: 1,
+          select: { date: true, checkIn: true },
+        },
       },
     })
 

@@ -3,9 +3,13 @@ import { db } from '@/lib/db'
 
 // POST /api/payments/bulk-generate
 // Body: { month: "YYYY-MM", dueDate?: "YYYY-MM-DD", skipExisting?: boolean }
-// Auto-creates payment records for all active students who don't already have one
-// for the given month. Uses each student's primary program's monthlyFee.
-// Returns { created, skipped, total, receipts: [...] }
+//
+// Creates ONE BILL PER STUDENT for the given month. All of the student's
+// active programme enrolments become line items on that single bill — the
+// student's name appears only once no matter how many programmes they take.
+// The bill total = Σ monthlyFee of the enrolled programmes.
+//
+// Returns { created, skipped, total, message }
 export async function POST(req: Request) {
   const body = await req.json().catch(() => null)
   if (!body || !body.month || !/^\d{4}-\d{2}$/.test(body.month)) {
@@ -30,7 +34,7 @@ export async function POST(req: Request) {
     if (m) seq = parseInt(m[1], 10) + 1
   }
 
-  // Get all active students with their enrollments (program + monthlyFee)
+  // All active students with their active programme enrolments
   const students = await db.student.findMany({
     where: { status: 'Active' },
     select: {
@@ -38,79 +42,106 @@ export async function POST(req: Request) {
       studentId: true,
       fullName: true,
       enrollments: {
-        include: { program: { select: { id: true, monthlyFee: true, code: true } } },
+        include: {
+          program: {
+            select: { id: true, monthlyFee: true, code: true, name: true },
+          },
+        },
         where: { status: 'Active' },
+        orderBy: { enrolledAt: 'asc' },
       },
     },
     orderBy: { studentId: 'asc' },
   })
 
-  // Get existing payments for this month to avoid duplicates
+  // Existing bills for this month are per-STUDENT now (a bill covers all
+  // programmes), so a student with any bill for the month is skipped.
   const existing = await db.payment.findMany({
     where: { month },
-    select: { studentId: true, programId: true },
+    select: { studentId: true },
   })
-  const existingKey = new Set(
-    existing.map((p) => `${p.studentId}:${p.programId ?? 'null'}`),
-  )
+  const existingStudents = new Set(existing.map((p) => p.studentId))
 
-  const toCreate: Array<{
+  type BillDraft = {
     studentId: string
-    programId: string | null
     amount: number
     receiptNo: string
-  }> = []
+    lines: Array<{ programId: string | null; amount: number; description: string | null }>
+  }
+  const bills: BillDraft[] = []
   let skipped = 0
 
   for (const s of students) {
-    // Use the first active enrollment's program; if none, create a program-less payment with amount 0
-    const enrollment = s.enrollments[0]
-    const programId = enrollment?.program.id ?? null
-    const amount = enrollment?.program.monthlyFee ?? 0
-    const key = `${s.id}:${programId ?? 'null'}`
-
-    if (skipExisting && existingKey.has(key)) {
+    if (skipExisting && existingStudents.has(s.id)) {
       skipped++
       continue
     }
 
+    // One line item per enrolled programme; dedupe by programme id
+    const seenProgram = new Set<string>()
+    const lines: BillDraft['lines'] = []
+    for (const en of s.enrollments) {
+      if (!en.program) continue
+      if (seenProgram.has(en.program.id)) continue
+      seenProgram.add(en.program.id)
+      lines.push({
+        programId: en.program.id,
+        amount: en.program.monthlyFee,
+        description: en.program.name,
+      })
+    }
+
+    const amount = lines.reduce((sum, li) => sum + li.amount, 0)
     const receiptNo = `SAN-${new Date().getFullYear()}-${String(seq).padStart(4, '0')}`
     seq++
-    toCreate.push({ studentId: s.id, programId, amount, receiptNo })
+
+    bills.push({ studentId: s.id, amount, receiptNo, lines })
   }
 
-  if (toCreate.length === 0) {
+  if (bills.length === 0) {
     return NextResponse.json({
       created: 0,
       skipped,
       total: students.length,
       message: skipExisting
-        ? `All ${students.length} active students already have payments for ${month}.`
-        : 'No students to generate payments for.',
+        ? `All ${students.length} active students already have bills for ${month}.`
+        : 'No students to generate bills for.',
     })
   }
 
-  // Bulk insert
-  await db.payment.createMany({
-    data: toCreate.map((p) => ({
-      studentId: p.studentId,
-      programId: p.programId,
-      month,
-      amount: p.amount,
-      paidAmount: 0,
-      method: 'Cash',
-      status: p.amount > 0 ? 'Pending' : 'Paid',
-      dueDate,
-      receiptNo: p.receiptNo,
-      note: `Bulk-generated for ${month}`,
-    })),
-  })
+  // Create one bill (with line items) per student
+  await db.$transaction(
+    bills.map((b) =>
+      db.payment.create({
+        data: {
+          studentId: b.studentId,
+          programId: b.lines.length === 1 ? b.lines[0].programId : null,
+          month,
+          amount: b.amount,
+          paidAmount: 0,
+          method: 'Cash',
+          status: b.amount > 0 ? 'Pending' : 'Paid',
+          dueDate,
+          receiptNo: b.receiptNo,
+          note: `Monthly bill for ${month}`,
+          items: {
+            create: b.lines.map((li) => ({
+              programId: li.programId,
+              amount: li.amount,
+              description: li.description,
+            })),
+          },
+        },
+      }),
+    ),
+  )
 
+  const lineCount = bills.reduce((sum, b) => sum + b.lines.length, 0)
   return NextResponse.json({
-    created: toCreate.length,
+    created: bills.length,
     skipped,
     total: students.length,
     month,
-    message: `Created ${toCreate.length} payment record${toCreate.length === 1 ? '' : 's'} for ${month}${skipped > 0 ? ` (${skipped} already existed, skipped)` : ''}.`,
+    message: `Created ${bills.length} bill${bills.length === 1 ? '' : 's'} for ${month} covering ${lineCount} programme line item${lineCount === 1 ? '' : 's'}${skipped > 0 ? ` (${skipped} student${skipped === 1 ? '' : 's'} already billed, skipped)` : ''}.`,
   })
 }

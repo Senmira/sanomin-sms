@@ -1,0 +1,1613 @@
+     1→     1→'use client'
+     2→     2→
+     3→     3→import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+     4→     4→import { toast } from 'sonner'
+     5→     5→import {
+     6→     6→  ScanLine,
+     7→     7→  Fingerprint,
+     8→     8→  LogIn,
+     9→     9→  LogOut,
+    10→    10→  Clock,
+    11→    11→  CalendarDays,
+    12→    12→  Users2,
+    13→    13→  GraduationCap,
+    14→    14→  UserCheck,
+    15→    15→  TimerReset,
+    16→    16→  Hand,
+    17→    17→  Pencil,
+    18→    18→  Trash2,
+    19→    19→  Search,
+    20→    20→  X,
+    21→    21→  AlertCircle,
+    22→    22→  CheckCircle2,
+    23→    23→  Loader2,
+    24→    24→  RotateCcw,
+    25→    25→  History,
+    26→    26→  ClipboardList,
+    27→    27→  ChevronLeft,
+    28→    28→  ChevronRight,
+    29→    29→  Building2,
+    30→    30→  Briefcase,
+    31→    31→} from 'lucide-react'
+    32→    32→
+    33→    33→import { api } from '@/lib/api'
+    34→    34→import {
+    35→    35→  AttendanceRow,
+    36→    36→  ATTENDANCE_METHODS,
+    37→    37→  ATTENDANCE_STATUS,
+    38→    38→} from '@/lib/types'
+    39→    39→import { initials, avatarColor, fmtDate, fmtTime, fmtDateTime, timeAgo } from '@/lib/format'
+    40→    40→
+    41→    41→import { SectionHeader } from '@/components/shared/section-header'
+    42→    42→import { StatCard } from '@/components/shared/stat-card'
+    43→    43→import { EmptyState } from '@/components/shared/empty-state'
+    44→    44→import { ConfirmDialog } from '@/components/shared/confirm-dialog'
+    45→    45→import { Sparkline } from '@/components/shared/sparkline'
+    46→    46→
+    47→    47→import { Button } from '@/components/ui/button'
+    48→    48→import { Input } from '@/components/ui/input'
+    49→    49→import { Label } from '@/components/ui/label'
+    50→    50→import { Textarea } from '@/components/ui/textarea'
+    51→    51→import { Badge } from '@/components/ui/badge'
+    52→    52→import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+    53→    53→import { Card, CardContent } from '@/components/ui/card'
+    54→    54→import {
+    55→    55→  Select,
+    56→    56→  SelectContent,
+    57→    57→  SelectItem,
+    58→    58→  SelectTrigger,
+    59→    59→  SelectValue,
+    60→    60→} from '@/components/ui/select'
+    61→    61→import {
+    62→    62→  Dialog,
+    63→    63→  DialogContent,
+    64→    64→  DialogDescription,
+    65→    65→  DialogFooter,
+    66→    66→  DialogHeader,
+    67→    67→  DialogTitle,
+    68→    68→} from '@/components/ui/dialog'
+    69→    69→import {
+    70→    70→  DropdownMenu,
+    71→    71→  DropdownMenuContent,
+    72→    72→  DropdownMenuItem,
+    73→    73→  DropdownMenuLabel,
+    74→    74→  DropdownMenuSeparator,
+    75→    75→  DropdownMenuTrigger,
+    76→    76→} from '@/components/ui/dropdown-menu'
+    77→    77→import {
+    78→    78→  Table,
+    79→    79→  TableBody,
+    80→    80→  TableHead,
+    81→    81→  TableHeader,
+    82→    82→  TableRow,
+    83→    83→  TableCell,
+    84→    84→} from '@/components/ui/table'
+    85→    85→import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+    86→    86→import { Skeleton } from '@/components/ui/skeleton'
+    87→    87→import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+    88→    88→import { Calendar } from '@/components/ui/calendar'
+    89→    89→
+    90→    90→// ─── Helpers ───────────────────────────────────────────────────────────────
+    91→    91→const REFRESH_MS = 15000
+    92→    92→
+    93→    93→function toDateInput(iso?: string | null): string {
+    94→    94→  if (!iso) return ''
+    95→    95→  const d = new Date(iso)
+    96→    96→  if (isNaN(d.getTime())) return ''
+    97→    97→  const pad = (n: number) => String(n).padStart(2, '0')
+    98→    98→  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+    99→    99→}
+   100→   100→
+   101→   101→function toDateTimeInput(iso?: string | null): string {
+   102→   102→  if (!iso) return ''
+   103→   103→  const d = new Date(iso)
+   104→   104→  if (isNaN(d.getTime())) return ''
+   105→   105→  const pad = (n: number) => String(n).padStart(2, '0')
+   106→   106→  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+   107→   107→}
+   108→   108→
+   109→   109→function todayStr(): string {
+   110→   110→  const now = new Date()
+   111→   111→  const pad = (n: number) => String(n).padStart(2, '0')
+   112→   112→  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+   113→   113→}
+   114→   114→
+   115→   115→// ─── Visual maps ───────────────────────────────────────────────────────────
+   116→   116→const STATUS_BADGE: Record<
+   117→   117→  string,
+   118→   118→  { variant: 'default' | 'secondary' | 'destructive' | 'outline'; cls: string }
+   119→   119→> = {
+   120→   120→  Present: {
+   121→   121→    variant: 'default',
+   122→   122→    cls: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30',
+   123→   123→  },
+   124→   124→  Late: {
+   125→   125→    variant: 'default',
+   126→   126→    cls: 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30',
+   127→   127→  },
+   128→   128→  Absent: {
+   129→   129→    variant: 'default',
+   130→   130→    cls: 'bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/30',
+   131→   131→  },
+   132→   132→  Leave: {
+   133→   133→    variant: 'default',
+   134→   134→    cls: 'bg-purple-500/15 text-purple-700 dark:text-purple-300 border-purple-500/30',
+   135→   135→  },
+   136→   136→}
+   137→   137→
+   138→   138→const METHOD_BADGE: Record<string, string> = {
+   139→   139→  Barcode: 'bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/30',
+   140→   140→  Fingerprint: 'bg-purple-500/15 text-purple-700 dark:text-purple-300 border-purple-500/30',
+   141→   141→  Manual: 'bg-slate-500/15 text-slate-700 dark:text-slate-300 border-slate-500/30',
+   142→   142→}
+   143→   143→
+   144→   144→// ─── Response shapes ───────────────────────────────────────────────────────
+   145→   145→interface ListResponse {
+   146→   146→  data: AttendanceRow[]
+   147→   147→  total: number
+   148→   148→  page: number
+   149→   149→  limit: number
+   150→   150→  summary: { present: number; late: number; absent: number; total: number }
+   151→   151→}
+   152→   152→
+   153→   153→interface ScanResponse {
+   154→   154→  action: 'check-in' | 'check-out'
+   155→   155→  record: AttendanceRow
+   156→   156→  person: { name: string; ref: string; type: string }
+   157→   157→  error?: string
+   158→   158→}
+   159→   159→
+   160→   160→interface PersonPick {
+   161→   161→  id: string
+   162→   162→  ref: string // studentId or teacherId
+   163→   163→  name: string
+   164→   164→  type: 'Student' | 'Teacher'
+   165→   165→  photoUrl: string | null
+   166→   166→  sub: string // gender + ageGroup OR type
+   167→   167→}
+   168→   168→
+   169→   169→// ════════════════════════════════════════════════════════════════════════════
+   170→   170→// Scanner Panel
+   171→   171→// ════════════════════════════════════════════════════════════════════════════
+   172→   172→interface ScannerPanelProps {
+   173→   173→  onScanSuccess: () => void
+   174→   174→  onOpenManual: () => void
+   175→   175→}
+   176→   176→
+   177→   177→function ScannerPanel({ onScanSuccess, onOpenManual }: ScannerPanelProps) {
+   178→   178→  const [tab, setTab] = useState<'barcode' | 'fingerprint'>('barcode')
+   179→   179→  const [barcodeValue, setBarcodeValue] = useState('')
+   180→   180→  const [fpValue, setFpValue] = useState('')
+   181→   181→  const [scanning, setScanning] = useState(false)
+   182→   182→  const [result, setResult] = useState<ScanResponse | null>(null)
+   183→   183→  const [error, setError] = useState<string | null>(null)
+   184→   184→  const [flashTick, setFlashTick] = useState(0)
+   185→   185→  const [teachers, setTeachers] = useState<
+   186→   186→    Array<{ id: string; teacherId: string; fingerprintId: string | null; fullName: string }>
+   187→   187→  >([])
+   188→   188→  const [teachersLoading, setTeachersLoading] = useState(false)
+   189→   189→  const barcodeInputRef = useRef<HTMLInputElement>(null)
+   190→   190→  const fpInputRef = useRef<HTMLInputElement>(null)
+   191→   191→
+   192→   192→  // Lazy-load teachers when the fingerprint tab opens (for the random demo button).
+   193→   193→  useEffect(() => {
+   194→   194→    if (tab !== 'fingerprint' || teachers.length > 0) return
+   195→   195→    let alive = true
+   196→   196→    setTeachersLoading(true)
+   197→   197→    api<{ data: Array<{ id: string; teacherId: string; fingerprintId: string | null; fullName: string }> }>(
+   198→   198→      '/api/teachers?limit=100',
+   199→   199→    )
+   200→   200→      .then((res) => {
+   201→   201→        if (!alive) return
+   202→   202→        const list = (res.data || []).filter((t) => !!t.fingerprintId)
+   203→   203→        setTeachers(list)
+   204→   204→      })
+   205→   205→      .catch(() => {
+   206→   206→        /* non-fatal — demo button will just disable itself */
+   207→   207→      })
+   208→   208→      .finally(() => {
+   209→   209→        if (alive) setTeachersLoading(false)
+   210→   210→      })
+   211→   211→    return () => {
+   212→   212→      alive = false
+   213→   213→    }
+   214→   214→  }, [tab, teachers.length])
+   215→   215→
+   216→   216→  // Refocus the active input whenever the tab changes.
+   217→   217→  useEffect(() => {
+   218→   218→    if (tab === 'barcode') barcodeInputRef.current?.focus()
+   219→   219→    else fpInputRef.current?.focus()
+   220→   220→  }, [tab])
+   221→   221→
+   222→   222→  const runScan = useCallback(
+   223→   223→    async (method: 'barcode' | 'fingerprint' | 'manual', value: string) => {
+   224→   224→      if (!value.trim()) return
+   225→   225→      setScanning(true)
+   226→   226→      setError(null)
+   227→   227→      try {
+   228→   228→        const res = await api<ScanResponse>('/api/attendance/scan', {
+   229→   229→          method: 'POST',
+   230→   230→          body: JSON.stringify({ method, value: value.trim() }),
+   231→   231→        })
+   232→   232→        setResult(res)
+   233→   233→        setFlashTick((t) => t + 1)
+   234→   234→        onScanSuccess()
+   235→   235→        const verb = res.action === 'check-in' ? 'Checked in' : 'Checked out'
+   236→   236→        toast.success(`${verb}: ${res.person.name}`, {
+   237→   237→          description: `${res.person.type} · ${res.person.ref}`,
+   238→   238→        })
+   239→   239→      } catch (err) {
+   240→   240→        const msg = err instanceof Error ? err.message : 'Scan failed'
+   241→   241→        setError(msg)
+   242→   242→        toast.error(msg)
+   243→   243→      } finally {
+   244→   244→        setScanning(false)
+   245→   245→      }
+   246→   246→    },
+   247→   247→    [onScanSuccess],
+   248→   248→  )
+   249→   249→
+   250→   250→  const handleBarcodeKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+   251→   251→    if (e.key === 'Enter') {
+   252→   252→      e.preventDefault()
+   253→   253→      const v = barcodeValue
+   254→   254→      setBarcodeValue('')
+   255→   255→      runScan('barcode', v)
+   256→   256→    }
+   257→   257→  }
+   258→   258→
+   259→   259→  const handleFingerprintKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+   260→   260→    if (e.key === 'Enter') {
+   261→   261→      e.preventDefault()
+   262→   262→      const v = fpValue
+   263→   263→      setFpValue('')
+   264→   264→      runScan('fingerprint', v)
+   265→   265→    }
+   266→   266→  }
+   267→   267→
+   268→   268→  const handleRandomFingerprint = () => {
+   269→   269→    const enrolled = teachers.filter((t) => !!t.fingerprintId)
+   270→   270→    if (enrolled.length === 0) {
+   271→   271→      toast.error('No teachers with enrolled fingerprints')
+   272→   272→      return
+   273→   273→    }
+   274→   274→    const pick = enrolled[Math.floor(Math.random() * enrolled.length)]
+   275→   275→    setFpValue('')
+   276→   276→    runScan('fingerprint', pick.fingerprintId as string)
+   277→   277→  }
+   278→   278→
+   279→   279→  const reset = () => {
+   280→   280→    setResult(null)
+   281→   281→    setError(null)
+   282→   282→    setBarcodeValue('')
+   283→   283→    setFpValue('')
+   284→   284→    if (tab === 'barcode') barcodeInputRef.current?.focus()
+   285→   285→    else fpInputRef.current?.focus()
+   286→   286→  }
+   287→   287→
+   288→   288→  return (
+   289→   289→    <Card className="overflow-hidden">
+   290→   290→      <Tabs value={tab} onValueChange={(v) => setTab(v as 'barcode' | 'fingerprint')}>
+   291→   291→        <div className="flex flex-col gap-3 border-b bg-muted/30 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
+   292→   292→          <TabsList className="grid w-full max-w-md grid-cols-2">
+   293→   293→            <TabsTrigger value="barcode" className="gap-2">
+   294→   294→              <ScanLine className="h-4 w-4" />
+   295→   295→              Student (Barcode)
+   296→   296→            </TabsTrigger>
+   297→   297→            <TabsTrigger value="fingerprint" className="gap-2">
+   298→   298→              <Fingerprint className="h-4 w-4" />
+   299→   299→              Teacher (Fingerprint)
+   300→   300→            </TabsTrigger>
+   301→   301→          </TabsList>
+   302→   302→          <Button variant="ghost" size="sm" onClick={onOpenManual} className="gap-2 self-start sm:self-auto">
+   303→   303→            <Hand className="h-4 w-4" />
+   304→   304→            Manual entry
+   305→   305→          </Button>
+   306→   306→        </div>
+   307→   307→
+   308→   308→        <TabsContent value="barcode" className="mt-0 p-4 sm:p-6">
+   309→   309→          <div className="grid gap-6 lg:grid-cols-[1.1fr_1fr]">
+   310→   310→            {/* Scanner viewport */}
+   311→   311→            <div>
+   312→   312→              <div className="relative h-56 w-full overflow-hidden rounded-xl border-2 border-primary/30 bg-slate-950 sm:h-64">
+   313→   313→                {/* simulated barcode bars background */}
+   314→   314→                <div className="absolute inset-0 flex items-center justify-center opacity-40">
+   315→   315→                  <div className="flex h-32 w-56 items-center gap-[3px]">
+   316→   316→                    {Array.from({ length: 36 }).map((_, i) => (
+   317→   317→                      <div
+   318→   318→                        key={i}
+   319→   319→                        className="bg-slate-100"
+   320→   320→                        style={{
+   321→   321→                          width: `${((i * 7) % 4) + 1}px`,
+   322→   322→                          height: '100%',
+   323→   323→                          opacity: i % 2 === 0 ? 1 : 0.2,
+   324→   324→                        }}
+   325→   325→                      />
+   326→   326→                    ))}
+   327→   327→                  </div>
+   328→   328→                </div>
+   329→   329→                {/* scanline laser */}
+   330→   330→                <div className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-emerald-400/80 shadow-[0_0_20px_4px_rgba(52,211,153,0.6)] animate-scanline" />
+   331→   331→                {/* corner markers */}
+   332→   332→                <div className="pointer-events-none absolute top-3 left-3 h-6 w-6 border-t-2 border-l-2 border-emerald-400/70" />
+   333→   333→                <div className="pointer-events-none absolute top-3 right-3 h-6 w-6 border-t-2 border-r-2 border-emerald-400/70" />
+   334→   334→                <div className="pointer-events-none absolute bottom-3 left-3 h-6 w-6 border-b-2 border-l-2 border-emerald-400/70" />
+   335→   335→                <div className="pointer-events-none absolute bottom-3 right-3 h-6 w-6 border-b-2 border-r-2 border-emerald-400/70" />
+   336→   336→                {/* flash overlay */}
+   337→   337→                {flashTick > 0 && (
+   338→   338→                  <div
+   339→   339→                    key={`flash-${flashTick}`}
+   340→   340→                    className="pointer-events-none absolute inset-0 bg-emerald-300/30 animate-in fade-in-0 fade-out-0 duration-500"
+   341→   341→                  />
+   342→   342→                )}
+   343→   343→                {/* idle hint */}
+   344→   344→                <div className="absolute inset-x-0 bottom-3 text-center">
+   345→   345→                  <span className="rounded-full bg-slate-950/70 px-3 py-1 text-xs font-medium text-emerald-300">
+   346→   346→                    {scanning ? 'Scanning…' : 'Ready · scan a student barcode'}
+   347→   347→                  </span>
+   348→   348→                </div>
+   349→   349→              </div>
+   350→   350→
+   351→   351→              <div className="mt-4 flex gap-2">
+   352→   352→                <div className="relative flex-1">
+   353→   353→                  <ScanLine className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+   354→   354→                  <Input
+   355→   355→                    ref={barcodeInputRef}
+   356→   356→                    autoFocus
+   357→   357→                    placeholder="Scan or type barcode (e.g. SANP24001) — press Enter"
+   358→   358→                    value={barcodeValue}
+   359→   359→                    onChange={(e) => setBarcodeValue(e.target.value)}
+   360→   360→                    onKeyDown={handleBarcodeKey}
+   361→   361→                    className="pl-9 font-mono"
+   362→   362→                    disabled={scanning}
+   363→   363→                    aria-label="Barcode input"
+   364→   364→                  />
+   365→   365→                </div>
+   366→   366→                <Button
+   367→   367→                  onClick={() => {
+   368→   368→                    const v = barcodeValue
+   369→   369→                    setBarcodeValue('')
+   370→   370→                    runScan('barcode', v)
+   371→   371→                  }}
+   372→   372→                  disabled={scanning || !barcodeValue.trim()}
+   373→   373→                  className="gap-2"
+   374→   374→                >
+   375→   375→                  {scanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
+   376→   376→                  Check in
+   377→   377→                </Button>
+   378→   378→              </div>
+   379→   379→              <p className="mt-2 text-xs text-muted-foreground">
+   380→   380→                Tip: real USB barcode readers act as keyboards — they type the code then send Enter.
+   381→   381→                This input is the actual integration point.
+   382→   382→              </p>
+   383→   383→            </div>
+   384→   384→
+   385→   385→            {/* Result panel */}
+   386→   386→            <ScanResultPanel
+   387→   387→              result={result}
+   388→   388→              error={error}
+   389→   389→              scanning={scanning}
+   390→   390→              flashTick={flashTick}
+   391→   391→              onReset={reset}
+   392→   392→            />
+   393→   393→          </div>
+   394→   394→        </TabsContent>
+   395→   395→
+   396→   396→        <TabsContent value="fingerprint" className="mt-0 p-4 sm:p-6">
+   397→   397→          <div className="grid gap-6 lg:grid-cols-[1.1fr_1fr]">
+   398→   398→            {/* Scanner viewport */}
+   399→   399→            <div>
+   400→   400→              <div className="relative flex h-56 w-full flex-col items-center justify-center gap-4 overflow-hidden rounded-xl border-2 border-purple-500/30 bg-slate-950 sm:h-64">
+   401→   401→                <div className="relative flex h-24 w-24 items-center justify-center">
+   402→   402→                  <div className="absolute inset-0 rounded-full bg-purple-500/10" />
+   403→   403→                  <div className="absolute inset-0 rounded-full bg-purple-500/10 animate-pulse-ring" />
+   404→   404→                  <Fingerprint
+   405→   405→                    className={`h-16 w-16 text-purple-300 ${scanning ? 'animate-pulse' : ''}`}
+   406→   406→                  />
+   407→   407→                </div>
+   408→   408→                <span className="rounded-full bg-slate-950/70 px-3 py-1 text-xs font-medium text-purple-300">
+   409→   409→                  {scanning ? 'Reading fingerprint…' : 'Place finger on the reader'}
+   410→   410→                </span>
+   411→   411→                {flashTick > 0 && (
+   412→   412→                  <div
+   413→   413→                    key={`fp-flash-${flashTick}`}
+   414→   414→                    className="pointer-events-none absolute inset-0 bg-purple-300/20 animate-in fade-in-0 fade-out-0 duration-500"
+   415→   415→                  />
+   416→   416→                )}
+   417→   417→              </div>
+   418→   418→
+   419→   419→              <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+   420→   420→                <Button
+   421→   421→                  onClick={handleRandomFingerprint}
+   422→   422→                  disabled={scanning || teachersLoading || teachers.length === 0}
+   423→   423→                  className="gap-2"
+   424→   424→                >
+   425→   425→                  {scanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Fingerprint className="h-4 w-4" />}
+   426→   426→                  {teachersLoading
+   427→   427→                    ? 'Loading teachers…'
+   428→   428→                    : teachers.length === 0
+   429→   429→                      ? 'No enrolled teachers'
+   430→   430→                      : 'Scan random fingerprint (demo)'}
+   431→   431→                </Button>
+   432→   432→                <div className="relative flex-1">
+   433→   433→                  <Fingerprint className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+   434→   434→                  <Input
+   435→   435→                    ref={fpInputRef}
+   436→   436→                    placeholder="Type FP id (e.g. FP-1001) — Enter"
+   437→   437→                    value={fpValue}
+   438→   438→                    onChange={(e) => setFpValue(e.target.value)}
+   439→   439→                    onKeyDown={handleFingerprintKey}
+   440→   440→                    className="pl-9 font-mono"
+   441→   441→                    disabled={scanning}
+   442→   442→                    aria-label="Fingerprint ID input"
+   443→   443→                  />
+   444→   444→                </div>
+   445→   445→              </div>
+   446→   446→              <p className="mt-2 text-xs text-muted-foreground">
+   447→   447→                Demo mode: the random button picks an enrolled teacher's fingerprint. In production this
+   448→   448→                reads from the USB fingerprint device and submits the template id.
+   449→   449→              </p>
+   450→   450→            </div>
+   451→   451→
+   452→   452→            <ScanResultPanel
+   453→   453→              result={result}
+   454→   454→              error={error}
+   455→   455→              scanning={scanning}
+   456→   456→              flashTick={flashTick}
+   457→   457→              onReset={reset}
+   458→   458→            />
+   459→   459→          </div>
+   460→   460→        </TabsContent>
+   461→   461→      </Tabs>
+   462→   462→    </Card>
+   463→   463→  )
+   464→   464→}
+   465→   465→
+   466→   466→// ─── Scan result panel (shared between barcode + fingerprint tabs) ─────────
+   467→   467→interface ScanResultPanelProps {
+   468→   468→  result: ScanResponse | null
+   469→   469→  error: string | null
+   470→   470→  scanning: boolean
+   471→   471→  flashTick: number
+   472→   472→  onReset: () => void
+   473→   473→}
+   474→   474→
+   475→   475→function ScanResultPanel({
+   476→   476→  result,
+   477→   477→  error,
+   478→   478→  scanning,
+   479→   479→  flashTick,
+   480→   480→  onReset,
+   481→   481→}: ScanResultPanelProps) {
+   482→   482→  if (scanning) {
+   483→   483→    return (
+   484→   484→      <div className="flex h-full min-h-[14rem] flex-col items-center justify-center gap-3 rounded-xl border border-dashed bg-muted/20 p-6 text-center">
+   485→   485→        <Loader2 className="h-10 w-10 animate-spin text-primary" />
+   486→   486→        <p className="text-sm text-muted-foreground">Processing scan…</p>
+   487→   487→      </div>
+   488→   488→    )
+   489→   489→  }
+   490→   490→
+   491→   491→  if (error) {
+   492→   492→    return (
+   493→   493→      <div className="flex h-full min-h-[14rem] flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-red-500/40 bg-red-500/5 p-6 text-center">
+   494→   494→        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-red-500/15 text-red-600 dark:text-red-400">
+   495→   495→          <AlertCircle className="h-6 w-6" />
+   496→   496→        </div>
+   497→   497→        <p className="text-sm font-semibold">Scan failed</p>
+   498→   498→        <p className="max-w-sm text-xs text-muted-foreground">{error}</p>
+   499→   499→        <Button variant="outline" size="sm" onClick={onReset} className="mt-2 gap-2">
+   500→   500→          <RotateCcw className="h-4 w-4" />
+   501→   501→          Try again
+   502→   502→        </Button>
+   503→   503→      </div>
+   504→   504→    )
+   505→   505→  }
+   506→   506→
+   507→   507→  if (!result) {
+   508→   508→    return (
+   509→   509→      <div className="relative flex h-full min-h-[14rem] flex-col items-center justify-center gap-3 overflow-hidden rounded-xl border border-dashed bg-gradient-to-br from-muted/40 to-muted/10 p-6 text-center">
+   510→   510→        <div className="pointer-events-none absolute inset-0 bg-grid opacity-40" />
+   511→   511→        <div className="relative flex h-14 w-14 items-center justify-center rounded-full bg-background text-primary shadow-sm ring-1 ring-border">
+   512→   512→          <ScanLine className="h-7 w-7" />
+   513→   513→          <span className="absolute inset-0 animate-ping rounded-full bg-primary/10" />
+   514→   514→        </div>
+   515→   515→        <p className="relative text-sm font-semibold">Waiting for scan</p>
+   516→   516→        <p className="relative max-w-sm text-xs text-muted-foreground">
+   517→   517→          The result of the next check-in or check-out will appear here with a confirmation flash.
+   518→   518→        </p>
+   519→   519→        <div className="relative mt-1 flex items-center gap-1.5 rounded-full bg-background/60 px-2.5 py-1 text-[10px] font-medium text-muted-foreground ring-1 ring-border">
+   520→   520→          <span className="inline-flex h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
+   521→   521→          Scanner ready
+   522→   522→        </div>
+   523→   523→      </div>
+   524→   524→    )
+   525→   525→  }
+   526→   526→
+   527→   527→  const isCheckIn = result.action === 'check-in'
+   528→   528→  const r = result.record
+   529→   529→  const personType = result.person.type
+   530→   530→  const accent = avatarColor(result.person.name + result.person.ref)
+   531→   531→
+   532→   532→  return (
+   533→   533→    <div
+   534→   534→      key={`result-${flashTick}`}
+   535→   535→      className="animate-in fade-in slide-in-from-bottom-4 duration-500 flex h-full min-h-[14rem] flex-col gap-4 rounded-xl border bg-card p-5 shadow-sm"
+   536→   536→    >
+   537→   537→      <div className="flex items-center justify-between">
+   538→   538→        <Badge
+   539→   539→          className={
+   540→   540→            isCheckIn
+   541→   541→              ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
+   542→   542→              : 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30'
+   543→   543→          }
+   544→   544→        >
+   545→   545→          {isCheckIn ? <LogIn className="mr-1 h-3 w-3" /> : <LogOut className="mr-1 h-3 w-3" />}
+   546→   546→          {isCheckIn ? 'CHECK-IN' : 'CHECK-OUT'}
+   547→   547→        </Badge>
+   548→   548→        <Badge variant="outline" className="gap-1">
+   549→   549→          {r.method === 'Barcode' ? (
+   550→   550→            <ScanLine className="h-3 w-3" />
+   551→   551→          ) : r.method === 'Fingerprint' ? (
+   552→   552→            <Fingerprint className="h-3 w-3" />
+   553→   553→          ) : (
+   554→   554→            <Hand className="h-3 w-3" />
+   555→   555→          )}
+   556→   556→          {r.method}
+   557→   557→        </Badge>
+   558→   558→      </div>
+   559→   559→
+   560→   560→      <div className="flex items-center gap-3">
+   561→   561→        <Avatar className="h-14 w-14 ring-2 ring-background">
+   562→   562→          <AvatarFallback className={`text-lg font-bold ${accent}`}>
+   563→   563→            {initials(result.person.name)}
+   564→   564→          </AvatarFallback>
+   565→   565→        </Avatar>
+   566→   566→        <div className="min-w-0 flex-1">
+   567→   567→          <p className="truncate text-lg font-bold">{result.person.name}</p>
+   568→   568→          <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+   569→   569→            <Badge variant="outline" className="font-mono">
+   570→   570→              {result.person.ref}
+   571→   571→            </Badge>
+   572→   572→            <Badge
+   573→   573→              className={
+   574→   574→                personType === 'Student'
+   575→   575→                  ? 'bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/30'
+   576→   576→                  : 'bg-purple-500/15 text-purple-700 dark:text-purple-300 border-purple-500/30'
+   577→   577→              }
+   578→   578→            >
+   579→   579→              {personType === 'Student' ? (
+   580→   580→                <GraduationCap className="mr-1 h-3 w-3" />
+   581→   581→              ) : (
+   582→   582→                <Briefcase className="mr-1 h-3 w-3" />
+   583→   583→              )}
+   584→   584→              {personType}
+   585→   585→            </Badge>
+   586→   586→          </div>
+   587→   587→        </div>
+   588→   588→      </div>
+   589→   589→
+   590→   590→      <div className="grid grid-cols-2 gap-3 text-sm">
+   591→   591→        <div className="rounded-lg border bg-muted/30 p-3">
+   592→   592→          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+   593→   593→            <LogIn className="h-3 w-3" /> Check-in
+   594→   594→          </p>
+   595→   595→          <p className="mt-1 font-semibold">{fmtTime(r.checkIn)}</p>
+   596→   596→        </div>
+   597→   597→        <div className="rounded-lg border bg-muted/30 p-3">
+   598→   598→          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+   599→   599→            <LogOut className="h-3 w-3" /> Check-out
+   600→   600→          </p>
+   601→   601→          <p className="mt-1 font-semibold">
+   602→   602→            {r.checkOut ? fmtTime(r.checkOut) : <span className="text-emerald-600 dark:text-emerald-400">● Active</span>}
+   603→   603→          </p>
+   604→   604→        </div>
+   605→   605→      </div>
+   606→   606→
+   607→   607→      <div className="flex items-center justify-between text-xs">
+   608→   608→        <Badge className={STATUS_BADGE[r.status]?.cls || ''}>{r.status}</Badge>
+   609→   609→        <span className="text-muted-foreground">{fmtDateTime(r.date)}</span>
+   610→   610→      </div>
+   611→   611→
+   612→   612→      <Button variant="outline" size="sm" onClick={onReset} className="mt-auto gap-2 self-start">
+   613→   613→        <RotateCcw className="h-4 w-4" />
+   614→   614→        Scan next
+   615→   615→      </Button>
+   616→   616→    </div>
+   617→   617→  )
+   618→   618→}
+   619→   619→
+   620→   620→// ════════════════════════════════════════════════════════════════════════════
+   621→   621→// Manual Entry Dialog
+   622→   622→// ════════════════════════════════════════════════════════════════════════════
+   623→   623→interface ManualEntryDialogProps {
+   624→   624→  open: boolean
+   625→   625→  onOpenChange: (v: boolean) => void
+   626→   626→  onSuccess: () => void
+   627→   627→}
+   628→   628→
+   629→   629→function ManualEntryDialog({ open, onOpenChange, onSuccess }: ManualEntryDialogProps) {
+   630→   630→  const [personType, setPersonType] = useState<'Student' | 'Teacher'>('Student')
+   631→   631→  const [q, setQ] = useState('')
+   632→   632→  const [results, setResults] = useState<PersonPick[]>([])
+   633→   633→  const [loading, setLoading] = useState(false)
+   634→   634→  const [submitting, setSubmitting] = useState(false)
+   635→   635→  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+   636→   636→
+   637→   637→  // Debounced search
+   638→   638→  useEffect(() => {
+   639→   639→    if (!open) return
+   640→   640→    if (searchTimer.current) clearTimeout(searchTimer.current)
+   641→   641→    const query = q.trim()
+   642→   642→    if (!query) {
+   643→   643→      setResults([])
+   644→   644→      return
+   645→   645→    }
+   646→   646→    let alive = true
+   647→   647→    setLoading(true)
+   648→   648→    searchTimer.current = setTimeout(() => {
+   649→   649→      const endpoint =
+   650→   650→        personType === 'Student'
+   651→   651→          ? `/api/students?q=${encodeURIComponent(query)}&limit=15`
+   652→   652→          : `/api/teachers?q=${encodeURIComponent(query)}&limit=15`
+   653→   653→      api<{ data: Array<Record<string, unknown>> }>(endpoint)
+   654→   654→        .then((res) => {
+   655→   655→          if (!alive) return
+   656→   656→          const rows = (res.data || []).map((raw) => {
+   657→   657→            if (personType === 'Student') {
+   658→   658→              const s = raw as {
+   659→   659→                id: string
+   660→   660→                studentId: string
+   661→   661→                fullName: string
+   662→   662→                gender: string
+   663→   663→                ageGroup: string | null
+   664→   664→                photoUrl: string | null
+   665→   665→              }
+   666→   666→              return {
+   667→   667→                id: s.id,
+   668→   668→                ref: s.studentId,
+   669→   669→                name: s.fullName,
+   670→   670→                type: 'Student' as const,
+   671→   671→                photoUrl: s.photoUrl,
+   672→   672→                sub: [s.gender, s.ageGroup ? `${s.ageGroup} yrs` : ''].filter(Boolean).join(' · '),
+   673→   673→              }
+   674→   674→            }
+   675→   675→            const t = raw as {
+   676→   676→              id: string
+   677→   677→              teacherId: string
+   678→   678→              fullName: string
+   679→   679→              type: string
+   680→   680→              photoUrl: string | null
+   681→   681→            }
+   682→   682→            return {
+   683→   683→              id: t.id,
+   684→   684→              ref: t.teacherId,
+   685→   685→              name: t.fullName,
+   686→   686→              type: 'Teacher' as const,
+   687→   687→              photoUrl: t.photoUrl,
+   688→   688→              sub: t.type,
+   689→   689→            }
+   690→   690→          })
+   691→   691→          setResults(rows)
+   692→   692→        })
+   693→   693→        .catch(() => {
+   694→   694→          if (alive) setResults([])
+   695→   695→        })
+   696→   696→        .finally(() => {
+   697→   697→          if (alive) setLoading(false)
+   698→   698→        })
+   699→   699→    }, 250)
+   700→   700→    return () => {
+   701→   701→      alive = false
+   702→   702→      if (searchTimer.current) clearTimeout(searchTimer.current)
+   703→   703→    }
+   704→   704→  }, [q, personType, open])
+   705→   705→
+   706→   706→  const handlePick = async (p: PersonPick) => {
+   707→   707→    setSubmitting(true)
+   708→   708→    try {
+   709→   709→      const res = await api<ScanResponse>('/api/attendance/scan', {
+   710→   710→        method: 'POST',
+   711→   711→        body: JSON.stringify({
+   712→   712→          method: 'manual',
+   713→   713→          value: p.id,
+   714→   714→          personType: p.type,
+   715→   715→        }),
+   716→   716→      })
+   717→   717→      const verb = res.action === 'check-in' ? 'Checked in' : 'Checked out'
+   718→   718→      toast.success(`${verb}: ${p.name}`, {
+   719→   719→        description: `${p.type} · ${p.ref} · Manual entry`,
+   720→   720→      })
+   721→   721→      onSuccess()
+   722→   722→      onOpenChange(false)
+   723→   723→      setQ('')
+   724→   724→      setResults([])
+   725→   725→    } catch (err) {
+   726→   726→      const msg = err instanceof Error ? err.message : 'Manual entry failed'
+   727→   727→      toast.error(msg)
+   728→   728→    } finally {
+   729→   729→      setSubmitting(false)
+   730→   730→    }
+   731→   731→  }
+   732→   732→
+   733→   733→  return (
+   734→   734→    <Dialog open={open} onOpenChange={onOpenChange}>
+   735→   735→      <DialogContent className="max-w-lg">
+   736→   736→        <DialogHeader>
+   737→   737→          <DialogTitle>Manual attendance entry</DialogTitle>
+   738→   738→          <DialogDescription>
+   739→   739→            Search a student or teacher and mark them present. Use this when the scanner is unavailable.
+   740→   740→          </DialogDescription>
+   741→   741→        </DialogHeader>
+   742→   742→
+   743→   743→        <div className="space-y-3">
+   744→   744→          <Tabs
+   745→   745→            value={personType}
+   746→   746→            onValueChange={(v) => {
+   747→   747→              setPersonType(v as 'Student' | 'Teacher')
+   748→   748→              setQ('')
+   749→   749→              setResults([])
+   750→   750→            }}
+   751→   751→          >
+   752→   752→            <TabsList className="grid w-full grid-cols-2">
+   753→   753→              <TabsTrigger value="Student" className="gap-2">
+   754→   754→                <GraduationCap className="h-4 w-4" />
+   755→   755→                Student
+   756→   756→              </TabsTrigger>
+   757→   757→              <TabsTrigger value="Teacher" className="gap-2">
+   758→   758→                <Briefcase className="h-4 w-4" />
+   759→   759→                Teacher
+   760→   760→              </TabsTrigger>
+   761→   761→            </TabsList>
+   762→   762→          </Tabs>
+   763→   763→
+   764→   764→          <div className="relative">
+   765→   765→            <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+   766→   766→            <Input
+   767→   767→              placeholder={`Search ${personType.toLowerCase()} by name, ID or ${personType === 'Student' ? 'barcode' : 'fingerprint'}…`}
+   768→   768→              value={q}
+   769→   769→              onChange={(e) => setQ(e.target.value)}
+   770→   770→              className="pl-9"
+   771→   771→              autoFocus
+   772→   772→            />
+   773→   773→          </div>
+   774→   774→
+   775→   775→          <div className="max-h-72 overflow-y-auto rounded-lg border">
+   776→   776→            {loading ? (
+   777→   777→              <div className="space-y-2 p-3">
+   778→   778→                {Array.from({ length: 4 }).map((_, i) => (
+   779→   779→                  <Skeleton key={i} className="h-12 w-full" />
+   780→   780→                ))}
+   781→   781→              </div>
+   782→   782→            ) : results.length === 0 ? (
+   783→   783→              <EmptyState
+   784→   784→                title={q ? 'No matches' : 'Start typing to search'}
+   785→   785→                description={
+   786→   786→                  q
+   787→   787→                    ? `No ${personType.toLowerCase()}s match "${q}"`
+   788→   788→                    : 'Enter at least 2 characters to search'
+   789→   789→                }
+   790→   790→                className="border-0 bg-transparent py-8"
+   791→   791→              />
+   792→   792→            ) : (
+   793→   793→              <ul className="divide-y">
+   794→   794→                {results.map((p) => (
+   795→   795→                  <li key={p.id}>
+   796→   796→                    <button
+   797→   797→                      type="button"
+   798→   798→                      onClick={() => handlePick(p)}
+   799→   799→                      disabled={submitting}
+   800→   800→                      className="flex w-full items-center gap-3 px-3 py-2.5 text-left hover:bg-muted/60 disabled:opacity-50"
+   801→   801→                    >
+   802→   802→                      <Avatar className="h-9 w-9">
+   803→   803→                        <AvatarFallback className={`text-xs font-bold ${avatarColor(p.name + p.ref)}`}>
+   804→   804→                          {initials(p.name)}
+   805→   805→                        </AvatarFallback>
+   806→   806→                      </Avatar>
+   807→   807→                      <div className="min-w-0 flex-1">
+   808→   808→                        <p className="truncate text-sm font-semibold">{p.name}</p>
+   809→   809→                        <p className="truncate text-xs text-muted-foreground">
+   810→   810→                          <span className="font-mono">{p.ref}</span> · {p.sub}
+   811→   811→                        </p>
+   812→   812→                      </div>
+   813→   813→                      <LogIn className="h-4 w-4 text-muted-foreground" />
+   814→   814→                    </button>
+   815→   815→                  </li>
+   816→   816→                ))}
+   817→   817→              </ul>
+   818→   818→            )}
+   819→   819→          </div>
+   820→   820→        </div>
+   821→   821→
+   822→   822→        <DialogFooter>
+   823→   823→          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
+   824→   824→            Close
+   825→   825→          </Button>
+   826→   826→        </DialogFooter>
+   827→   827→      </DialogContent>
+   828→   828→    </Dialog>
+   829→   829→  )
+   830→   830→}
+   831→   831→
+   832→   832→// ════════════════════════════════════════════════════════════════════════════
+   833→   833→// Edit Attendance Dialog
+   834→   834→// ════════════════════════════════════════════════════════════════════════════
+   835→   835→interface EditDialogProps {
+   836→   836→  open: boolean
+   837→   837→  onOpenChange: (v: boolean) => void
+   838→   838→  record: AttendanceRow | null
+   839→   839→  onSaved: () => void
+   840→   840→}
+   841→   841→
+   842→   842→function EditAttendanceDialog({ open, onOpenChange, record, onSaved }: EditDialogProps) {
+   843→   843→  // Lazy initializer keyed off `record` so the form state resets cleanly when the
+   844→   844→  // target changes (or when the dialog re-opens). Avoids setState-in-effect.
+   845→   845→  const [form, setForm] = useState(() => ({
+   846→   846→    status: record?.status ?? 'Present',
+   847→   847→    note: record?.note ?? '',
+   848→   848→    checkIn: record?.checkIn ? toDateTimeInput(record.checkIn) : '',
+   849→   849→    checkOut: record?.checkOut ? toDateTimeInput(record.checkOut) : '',
+   850→   850→  }))
+   851→   851→  const [saving, setSaving] = useState(false)
+   852→   852→  const [formKey, setFormKey] = useState(0)
+   853→   853→
+   854→   854→  // Reset the form whenever the dialog opens with a (possibly different) record.
+   855→   855→  useEffect(() => {
+   856→   856→    if (!open) return
+   857→   857→    setForm({
+   858→   858→      status: record?.status ?? 'Present',
+   859→   859→      note: record?.note ?? '',
+   860→   860→      checkIn: record?.checkIn ? toDateTimeInput(record.checkIn) : '',
+   861→   861→      checkOut: record?.checkOut ? toDateTimeInput(record.checkOut) : '',
+   862→   862→    })
+   863→   863→    setFormKey((k) => k + 1)
+   864→   864→  }, [open, record])
+   865→   865→
+   866→   866→  const handleSave = async () => {
+   867→   867→    if (!record) return
+   868→   868→    setSaving(true)
+   869→   869→    try {
+   870→   870→      await api(`/api/attendance/${record.id}`, {
+   871→   871→        method: 'PUT',
+   872→   872→        body: JSON.stringify({
+   873→   873→          status: form.status,
+   874→   874→          note: form.note || null,
+   875→   875→          checkIn: form.checkIn ? new Date(form.checkIn).toISOString() : null,
+   876→   876→          checkOut: form.checkOut ? new Date(form.checkOut).toISOString() : null,
+   877→   877→        }),
+   878→   878→      })
+   879→   879→      toast.success('Attendance record updated')
+   880→   880→      onSaved()
+   881→   881→      onOpenChange(false)
+   882→   882→    } catch (err) {
+   883→   883→      const msg = err instanceof Error ? err.message : 'Update failed'
+   884→   884→      toast.error(msg)
+   885→   885→    } finally {
+   886→   886→      setSaving(false)
+   887→   887→    }
+   888→   888→  }
+   889→   889→
+   890→   890→  if (!record) return null
+   891→   891→
+   892→   892→  return (
+   893→   893→    <Dialog open={open} onOpenChange={onOpenChange}>
+   894→   894→      <DialogContent className="max-w-lg">
+   895→   895→        <DialogHeader>
+   896→   896→          <DialogTitle>Edit attendance record</DialogTitle>
+   897→   897→          <DialogDescription>
+   898→   898→            {record.personName} · <span className="font-mono">{record.personRef}</span> · {record.personType}
+   899→   899→          </DialogDescription>
+   900→   900→        </DialogHeader>
+   901→   901→
+   902→   902→        <div key={formKey} className="space-y-4">
+   903→   903→          <div className="grid gap-2">
+   904→   904→            <Label htmlFor="att-status">Status</Label>
+   905→   905→            <Select value={form.status} onValueChange={(v) => setForm((f) => ({ ...f, status: v }))}>
+   906→   906→              <SelectTrigger id="att-status">
+   907→   907→                <SelectValue />
+   908→   908→              </SelectTrigger>
+   909→   909→              <SelectContent>
+   910→   910→                {ATTENDANCE_STATUS.map((s) => (
+   911→   911→                  <SelectItem key={s} value={s}>
+   912→   912→                    {s}
+   913→   913→                  </SelectItem>
+   914→   914→                ))}
+   915→   915→              </SelectContent>
+   916→   916→            </Select>
+   917→   917→          </div>
+   918→   918→
+   919→   919→          <div className="grid grid-cols-2 gap-3">
+   920→   920→            <div className="grid gap-2">
+   921→   921→              <Label htmlFor="att-checkin">Check-in time</Label>
+   922→   922→              <Input
+   923→   923→                id="att-checkin"
+   924→   924→                type="datetime-local"
+   925→   925→                value={form.checkIn}
+   926→   926→                onChange={(e) => setForm((f) => ({ ...f, checkIn: e.target.value }))}
+   927→   927→              />
+   928→   928→            </div>
+   929→   929→            <div className="grid gap-2">
+   930→   930→              <Label htmlFor="att-checkout">Check-out time</Label>
+   931→   931→              <Input
+   932→   932→                id="att-checkout"
+   933→   933→                type="datetime-local"
+   934→   934→                value={form.checkOut}
+   935→   935→                onChange={(e) => setForm((f) => ({ ...f, checkOut: e.target.value }))}
+   936→   936→              />
+   937→   937→            </div>
+   938→   938→          </div>
+   939→   939→
+   940→   940→          <div className="grid gap-2">
+   941→   941→            <Label htmlFor="att-note">Note</Label>
+   942→   942→            <Textarea
+   943→   943→              id="att-note"
+   944→   944→              rows={3}
+   945→   945→              placeholder="Optional note (e.g. early pickup, late arrival reason)…"
+   946→   946→              value={form.note}
+   947→   947→              onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))}
+   948→   948→            />
+   949→   949→          </div>
+   950→   950→
+   951→   951→          <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
+   952→   952→            <p>
+   953→   953→              <span className="font-semibold text-foreground">Method:</span> {record.method} ·{' '}
+   954→   954→              <span className="font-semibold text-foreground">Date:</span> {fmtDate(record.date)}
+   955→   955→            </p>
+   956→   956→          </div>
+   957→   957→        </div>
+   958→   958→
+   959→   959→        <DialogFooter>
+   960→   960→          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+   961→   961→            Cancel
+   962→   962→          </Button>
+   963→   963→          <Button onClick={handleSave} disabled={saving} className="gap-2">
+   964→   964→            {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+   965→   965→            Save changes
+   966→   966→          </Button>
+   967→   967→        </DialogFooter>
+   968→   968→      </DialogContent>
+   969→   969→    </Dialog>
+   970→   970→  )
+   971→   971→}
+   972→   972→
+   973→   973→// ════════════════════════════════════════════════════════════════════════════
+   974→   974→// Attendance Table (shared by Today's Log and History)
+   975→   975→// ════════════════════════════════════════════════════════════════════════════
+   976→   976→interface AttendanceTableProps {
+   977→   977→  rows: AttendanceRow[]
+   978→   978→  loading: boolean
+   979→   979→  onEdit: (r: AttendanceRow) => void
+   980→   980→  onDelete: (r: AttendanceRow) => void
+   981→   981→}
+   982→   982→
+   983→   983→function AttendanceTable({ rows, loading, onEdit, onDelete }: AttendanceTableProps) {
+   984→   984→  if (loading) {
+   985→   985→    return (
+   986→   986→      <div className="space-y-2 rounded-lg border">
+   987→   987→        {Array.from({ length: 6 }).map((_, i) => (
+   988→   988→          <Skeleton key={i} className="m-2 h-12 w-[calc(100%-1rem)]" />
+   989→   989→        ))}
+   990→   990→      </div>
+   991→   991→    )
+   992→   992→  }
+   993→   993→
+   994→   994→  if (rows.length === 0) {
+   995→   995→    return (
+   996→   996→      <EmptyState
+   997→   997→        icon={ClipboardList}
+   998→   998→        title="No attendance records"
+   999→   999→        description="No check-ins or check-outs match the current filters for this day."
+  1000→  1000→      />
+  1001→  1001→    )
+  1002→  1002→  }
+  1003→  1003→
+  1004→  1004→  return (
+  1005→  1005→    <div className="max-h-[50vh] overflow-y-auto overflow-x-auto rounded-lg border scroll-thin">
+  1006→  1006→      <Table className="table-zebra">
+  1007→  1007→        <TableHeader className="sticky top-0 z-10 bg-card">
+  1008→  1008→          <TableRow>
+  1009→  1009→            <TableHead className="min-w-[180px]">Person</TableHead>
+  1010→  1010→            <TableHead className="min-w-[110px]">Type</TableHead>
+  1011→  1011→            <TableHead className="min-w-[100px]">Ref ID</TableHead>
+  1012→  1012→            <TableHead className="min-w-[110px]">Method</TableHead>
+  1013→  1013→            <TableHead className="min-w-[80px]">Check-in</TableHead>
+  1014→  1014→            <TableHead className="min-w-[110px]">Check-out</TableHead>
+  1015→  1015→            <TableHead className="min-w-[90px]">Status</TableHead>
+  1016→  1016→            <TableHead className="min-w-[90px]">Updated</TableHead>
+  1017→  1017→            <TableHead className="w-[60px] text-right">Actions</TableHead>
+  1018→  1018→          </TableRow>
+  1019→  1019→        </TableHeader>
+  1020→  1020→        <TableBody>
+  1021→  1021→          {rows.map((r) => {
+  1022→  1022→            const isStudent = r.personType === 'Student'
+  1023→  1023→            const isActive = !!r.checkIn && !r.checkOut
+  1024→  1024→            return (
+  1025→  1025→              <TableRow key={r.id} className="hover:bg-muted/40">
+  1026→  1026→                <TableCell>
+  1027→  1027→                  <div className="flex items-center gap-2.5">
+  1028→  1028→                    <Avatar className="h-8 w-8">
+  1029→  1029→                      <AvatarFallback className={`text-[10px] font-bold ${avatarColor(r.personName + r.personRef)}`}>
+  1030→  1030→                        {initials(r.personName || '?')}
+  1031→  1031→                      </AvatarFallback>
+  1032→  1032→                    </Avatar>
+  1033→  1033→                    <span className="truncate text-sm font-medium">{r.personName || '—'}</span>
+  1034→  1034→                  </div>
+  1035→  1035→                </TableCell>
+  1036→  1036→                <TableCell>
+  1037→  1037→                  <Badge
+  1038→  1038→                    className={
+  1039→  1039→                      isStudent
+  1040→  1040→                        ? 'bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/30'
+  1041→  1041→                        : 'bg-purple-500/15 text-purple-700 dark:text-purple-300 border-purple-500/30'
+  1042→  1042→                    }
+  1043→  1043→                  >
+  1044→  1044→                    {isStudent ? <GraduationCap className="mr-1 h-3 w-3" /> : <Briefcase className="mr-1 h-3 w-3" />}
+  1045→  1045→                    {r.personType}
+  1046→  1046→                  </Badge>
+  1047→  1047→                </TableCell>
+  1048→  1048→                <TableCell>
+  1049→  1049→                  <span className="font-mono text-xs">{r.personRef}</span>
+  1050→  1050→                </TableCell>
+  1051→  1051→                <TableCell>
+  1052→  1052→                  <Badge variant="outline" className={`gap-1 ${METHOD_BADGE[r.method] || ''}`}>
+  1053→  1053→                    {r.method === 'Barcode' ? (
+  1054→  1054→                      <ScanLine className="h-3 w-3" />
+  1055→  1055→                    ) : r.method === 'Fingerprint' ? (
+  1056→  1056→                      <Fingerprint className="h-3 w-3" />
+  1057→  1057→                    ) : (
+  1058→  1058→                      <Hand className="h-3 w-3" />
+  1059→  1059→                    )}
+  1060→  1060→                    {r.method}
+  1061→  1061→                  </Badge>
+  1062→  1062→                </TableCell>
+  1063→  1063→                <TableCell>
+  1064→  1064→                  {r.checkIn ? (
+  1065→  1065→                    <span className="text-sm">{fmtTime(r.checkIn)}</span>
+  1066→  1066→                  ) : (
+  1067→  1067→                    <span className="text-xs text-muted-foreground">—</span>
+  1068→  1068→                  )}
+  1069→  1069→                </TableCell>
+  1070→  1070→                <TableCell>
+  1071→  1071→                  {r.checkOut ? (
+  1072→  1072→                    <span className="text-sm">{fmtTime(r.checkOut)}</span>
+  1073→  1073→                  ) : isActive ? (
+  1074→  1074→                    <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+  1075→  1075→                      <span className="relative flex h-2 w-2">
+  1076→  1076→                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+  1077→  1077→                        <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+  1078→  1078→                      </span>
+  1079→  1079→                      Active
+  1080→  1080→                    </span>
+  1081→  1081→                  ) : (
+  1082→  1082→                    <span className="text-xs text-muted-foreground">—</span>
+  1083→  1083→                  )}
+  1084→  1084→                </TableCell>
+  1085→  1085→                <TableCell>
+  1086→  1086→                  <Badge className={STATUS_BADGE[r.status]?.cls || ''}>{r.status}</Badge>
+  1087→  1087→                </TableCell>
+  1088→  1088→                <TableCell>
+  1089→  1089→                  <span className="text-xs text-muted-foreground">
+  1090→  1090→                    {timeAgo(r.checkOut || r.checkIn || r.date)}
+  1091→  1091→                  </span>
+  1092→  1092→                </TableCell>
+  1093→  1093→                <TableCell className="text-right">
+  1094→  1094→                  <DropdownMenu>
+  1095→  1095→                    <DropdownMenuTrigger asChild>
+  1096→  1096→                      <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+  1097→  1097→                        <span className="sr-only">Open menu</span>
+  1098→  1098→                        <svg
+  1099→  1099→                          className="h-4 w-4"
+  1100→  1100→                          fill="none"
+  1101→  1101→                          stroke="currentColor"
+  1102→  1102→                          viewBox="0 0 24 24"
+  1103→  1103→                          aria-hidden
+  1104→  1104→                        >
+  1105→  1105→                          <path
+  1106→  1106→                            strokeLinecap="round"
+  1107→  1107→                            strokeLinejoin="round"
+  1108→  1108→                            strokeWidth={2}
+  1109→  1109→                            d="M12 5v.01M12 12v.01M12 19v.01"
+  1110→  1110→                          />
+  1111→  1111→                        </svg>
+  1112→  1112→                      </Button>
+  1113→  1113→                    </DropdownMenuTrigger>
+  1114→  1114→                    <DropdownMenuContent align="end">
+  1115→  1115→                      <DropdownMenuLabel>Actions</DropdownMenuLabel>
+  1116→  1116→                      <DropdownMenuItem onClick={() => onEdit(r)}>
+  1117→  1117→                        <Pencil className="mr-2 h-4 w-4" />
+  1118→  1118→                        Edit record
+  1119→  1119→                      </DropdownMenuItem>
+  1120→  1120→                      <DropdownMenuSeparator />
+  1121→  1121→                      <DropdownMenuItem
+  1122→  1122→                        onClick={() => onDelete(r)}
+  1123→  1123→                        className="text-red-600 focus:text-red-700 dark:text-red-400 dark:focus:text-red-300"
+  1124→  1124→                      >
+  1125→  1125→                        <Trash2 className="mr-2 h-4 w-4" />
+  1126→  1126→                        Delete
+  1127→  1127→                      </DropdownMenuItem>
+  1128→  1128→                    </DropdownMenuContent>
+  1129→  1129→                  </DropdownMenu>
+  1130→  1130→                </TableCell>
+  1131→  1131→              </TableRow>
+  1132→  1132→            )
+  1133→  1133→          })}
+  1134→  1134→        </TableBody>
+  1135→  1135→      </Table>
+  1136→  1136→    </div>
+  1137→  1137→  )
+  1138→  1138→}
+  1139→  1139→
+  1140→  1140→// ════════════════════════════════════════════════════════════════════════════
+  1141→  1141→// History View
+  1142→  1142→// ════════════════════════════════════════════════════════════════════════════
+  1143→  1143→function HistoryView() {
+  1144→  1144→  const [date, setDate] = useState<Date>(new Date())
+  1145→  1145→  const [personType, setPersonType] = useState('')
+  1146→  1146→  const [method, setMethod] = useState('')
+  1147→  1147→  const [rows, setRows] = useState<AttendanceRow[]>([])
+  1148→  1148→  const [summary, setSummary] = useState({ present: 0, late: 0, absent: 0, total: 0 })
+  1149→  1149→  const [loading, setLoading] = useState(true)
+  1150→  1150→  const [editTarget, setEditTarget] = useState<AttendanceRow | null>(null)
+  1151→  1151→  const [editOpen, setEditOpen] = useState(false)
+  1152→  1152→  const [deleteTarget, setDeleteTarget] = useState<AttendanceRow | null>(null)
+  1153→  1153→  const [calendarOpen, setCalendarOpen] = useState(false)
+  1154→  1154→
+  1155→  1155→  const dateStr = useMemo(() => toDateInput(date.toISOString()), [date])
+  1156→  1156→
+  1157→  1157→  const queryParams = useMemo(() => {
+  1158→  1158→    const p = new URLSearchParams()
+  1159→  1159→    p.set('date', dateStr)
+  1160→  1160→    if (personType) p.set('personType', personType)
+  1161→  1161→    if (method) p.set('method', method)
+  1162→  1162→    p.set('limit', '200')
+  1163→  1163→    return p.toString()
+  1164→  1164→  }, [dateStr, personType, method])
+  1165→  1165→
+  1166→  1166→  // Initial + filter-change fetch. setState happens inside setTimeout + .then
+  1167→  1167→  // callbacks only (lint-safe — no synchronous setState in effect body).
+  1168→  1168→  useEffect(() => {
+  1169→  1169→    let alive = true
+  1170→  1170→    const t = setTimeout(() => {
+  1171→  1171→      if (!alive) return
+  1172→  1172→      setLoading(true)
+  1173→  1173→      api<ListResponse>(`/api/attendance?${queryParams}`)
+  1174→  1174→        .then((res) => {
+  1175→  1175→          if (!alive) return
+  1176→  1176→          setRows(res.data)
+  1177→  1177→          setSummary(res.summary)
+  1178→  1178→        })
+  1179→  1179→        .catch((err) => {
+  1180→  1180→          if (!alive) return
+  1181→  1181→          const msg = err instanceof Error ? err.message : 'Failed to load history'
+  1182→  1182→          toast.error(msg)
+  1183→  1183→        })
+  1184→  1184→        .finally(() => {
+  1185→  1185→          if (alive) setLoading(false)
+  1186→  1186→        })
+  1187→  1187→    }, 0)
+  1188→  1188→    return () => {
+  1189→  1189→      alive = false
+  1190→  1190→      clearTimeout(t)
+  1191→  1191→    }
+  1192→  1192→  }, [queryParams])
+  1193→  1193→
+  1194→  1194→  const reload = useCallback(() => {
+  1195→  1195→    api<ListResponse>(`/api/attendance?${queryParams}`)
+  1196→  1196→      .then((res) => {
+  1197→  1197→        setRows(res.data)
+  1198→  1198→        setSummary(res.summary)
+  1199→  1199→      })
+  1200→  1200→      .catch(() => {
+  1201→  1201→        /* non-fatal */
+  1202→  1202→      })
+  1203→  1203→  }, [queryParams])
+  1204→  1204→
+  1205→  1205→  const handleEdit = (r: AttendanceRow) => {
+  1206→  1206→    setEditTarget(r)
+  1207→  1207→    setEditOpen(true)
+  1208→  1208→  }
+  1209→  1209→  const handleDelete = (r: AttendanceRow) => setDeleteTarget(r)
+  1210→  1210→
+  1211→  1211→  const confirmDelete = async () => {
+  1212→  1212→    if (!deleteTarget) return
+  1213→  1213→    try {
+  1214→  1214→      await api(`/api/attendance/${deleteTarget.id}`, { method: 'DELETE' })
+  1215→  1215→      toast.success('Record deleted')
+  1216→  1216→      setDeleteTarget(null)
+  1217→  1217→      reload()
+  1218→  1218→    } catch (err) {
+  1219→  1219→      const msg = err instanceof Error ? err.message : 'Delete failed'
+  1220→  1220→      toast.error(msg)
+  1221→  1221→    }
+  1222→  1222→  }
+  1223→  1223→
+  1224→  1224→  return (
+  1225→  1225→    <div className="space-y-4">
+  1226→  1226→      {/* Filter bar */}
+  1227→  1227→      <div className="flex flex-col gap-3 rounded-xl border bg-card p-3 sm:flex-row sm:items-center sm:gap-2 sm:p-4">
+  1228→  1228→        <Popover open={calendarOpen} onOpenChange={setCalendarOpen}>
+  1229→  1229→          <PopoverTrigger asChild>
+  1230→  1230→            <Button variant="outline" className="justify-start gap-2 sm:w-[200px]">
+  1231→  1231→              <CalendarDays className="h-4 w-4" />
+  1232→  1232→              {fmtDate(date.toISOString())}
+  1233→  1233→            </Button>
+  1234→  1234→          </PopoverTrigger>
+  1235→  1235→          <PopoverContent className="w-auto p-0" align="start">
+  1236→  1236→            <Calendar
+  1237→  1237→              mode="single"
+  1238→  1238→              selected={date}
+  1239→  1239→              onSelect={(d) => {
+  1240→  1240→                if (d) {
+  1241→  1241→                  setDate(d)
+  1242→  1242→                  setCalendarOpen(false)
+  1243→  1243→                }
+  1244→  1244→              }}
+  1245→  1245→              initialFocus
+  1246→  1246→            />
+  1247→  1247→          </PopoverContent>
+  1248→  1248→        </Popover>
+  1249→  1249→
+  1250→  1250→        <Select value={personType || 'ALL'} onValueChange={(v) => setPersonType(v === 'ALL' ? '' : v)}>
+  1251→  1251→          <SelectTrigger className="w-full sm:w-[150px]">
+  1252→  1252→            <SelectValue placeholder="Person type" />
+  1253→  1253→          </SelectTrigger>
+  1254→  1254→          <SelectContent>
+  1255→  1255→            <SelectItem value="ALL">All persons</SelectItem>
+  1256→  1256→            <SelectItem value="Student">Students</SelectItem>
+  1257→  1257→            <SelectItem value="Teacher">Teachers</SelectItem>
+  1258→  1258→          </SelectContent>
+  1259→  1259→        </Select>
+  1260→  1260→
+  1261→  1261→        <Select value={method || 'ALL'} onValueChange={(v) => setMethod(v === 'ALL' ? '' : v)}>
+  1262→  1262→          <SelectTrigger className="w-full sm:w-[150px]">
+  1263→  1263→            <SelectValue placeholder="Method" />
+  1264→  1264→          </SelectTrigger>
+  1265→  1265→          <SelectContent>
+  1266→  1266→            <SelectItem value="ALL">All methods</SelectItem>
+  1267→  1267→            {ATTENDANCE_METHODS.map((m) => (
+  1268→  1268→              <SelectItem key={m} value={m}>
+  1269→  1269→                {m}
+  1270→  1270→              </SelectItem>
+  1271→  1271→            ))}
+  1272→  1272→          </SelectContent>
+  1273→  1273→        </Select>
+  1274→  1274→
+  1275→  1275→        <Button
+  1276→  1276→          variant="ghost"
+  1277→  1277→          size="sm"
+  1278→  1278→          onClick={() => {
+  1279→  1279→            setPersonType('')
+  1280→  1280→            setMethod('')
+  1281→  1281→            setDate(new Date())
+  1282→  1282→          }}
+  1283→  1283→          className="gap-2 self-start sm:ml-auto sm:self-auto"
+  1284→  1284→        >
+  1285→  1285→          <X className="h-4 w-4" />
+  1286→  1286→          Reset
+  1287→  1287→        </Button>
+  1288→  1288→      </div>
+  1289→  1289→
+  1290→  1290→      {/* Summary chips */}
+  1291→  1291→      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+  1292→  1292→        <SummaryChip label="Present" value={summary.present} tone="emerald" icon={CheckCircle2} />
+  1293→  1293→        <SummaryChip label="Late" value={summary.late} tone="amber" icon={Clock} />
+  1294→  1294→        <SummaryChip label="Absent" value={summary.absent} tone="red" icon={X} />
+  1295→  1295→        <SummaryChip label="Total records" value={summary.total} tone="slate" icon={ClipboardList} />
+  1296→  1296→      </div>
+  1297→  1297→
+  1298→  1298→      <AttendanceTable rows={rows} loading={loading} onEdit={handleEdit} onDelete={handleDelete} />
+  1299→  1299→
+  1300→  1300→      <EditAttendanceDialog
+  1301→  1301→        open={editOpen}
+  1302→  1302→        onOpenChange={setEditOpen}
+  1303→  1303→        record={editTarget}
+  1304→  1304→        onSaved={reload}
+  1305→  1305→      />
+  1306→  1306→      <ConfirmDialog
+  1307→  1307→        open={!!deleteTarget}
+  1308→  1308→        onOpenChange={(v) => !v && setDeleteTarget(null)}
+  1309→  1309→        title="Delete attendance record?"
+  1310→  1310→        description={
+  1311→  1311→          deleteTarget
+  1312→  1312→            ? `This will permanently remove the ${deleteTarget.personType.toLowerCase()} record for ${deleteTarget.personName} (${deleteTarget.personRef}) on ${fmtDate(deleteTarget.date)}.`
+  1313→  1313→            : ''
+  1314→  1314→        }
+  1315→  1315→        confirmText="Delete"
+  1316→  1316→        onConfirm={confirmDelete}
+  1317→  1317→      />
+  1318→  1318→    </div>
+  1319→  1319→  )
+  1320→  1320→}
+  1321→  1321→
+  1322→  1322→// ─── Summary chip ───────────────────────────────────────────────────────────
+  1323→  1323→const TONE_MAP: Record<string, string> = {
+  1324→  1324→  emerald: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30',
+  1325→  1325→  amber: 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30',
+  1326→  1326→  red: 'bg-red-500/10 text-red-700 dark:text-red-300 border-red-500/30',
+  1327→  1327→  slate: 'bg-slate-500/10 text-slate-700 dark:text-slate-300 border-slate-500/30',
+  1328→  1328→}
+  1329→  1329→
+  1330→  1330→function SummaryChip({
+  1331→  1331→  label,
+  1332→  1332→  value,
+  1333→  1333→  tone,
+  1334→  1334→  icon: Icon,
+  1335→  1335→}: {
+  1336→  1336→  label: string
+  1337→  1337→  value: number
+  1338→  1338→  tone: string
+  1339→  1339→  icon: typeof Clock
+  1340→  1340→}) {
+  1341→  1341→  return (
+  1342→  1342→    <div className={`flex items-center gap-3 rounded-xl border p-3 ${TONE_MAP[tone] || TONE_MAP.slate}`}>
+  1343→  1343→      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-background/70">
+  1344→  1344→        <Icon className="h-4 w-4" />
+  1345→  1345→      </div>
+  1346→  1346→      <div>
+  1347→  1347→        <p className="text-2xl font-bold leading-none">{value}</p>
+  1348→  1348→        <p className="mt-0.5 text-xs font-medium opacity-90">{label}</p>
+  1349→  1349→      </div>
+  1350→  1350→    </div>
+  1351→  1351→  )
+  1352→  1352→}
+  1353→  1353→
+  1354→  1354→// ════════════════════════════════════════════════════════════════════════════
+  1355→  1355→// Main Section
+  1356→  1356→// ════════════════════════════════════════════════════════════════════════════
+  1357→  1357→export function AttendanceSection() {
+  1358→  1358→  const [activeTab, setActiveTab] = useState<'today' | 'history'>('today')
+  1359→  1359→  const [manualOpen, setManualOpen] = useState(false)
+  1360→  1360→
+  1361→  1361→  // Today's log state
+  1362→  1362→  const [rows, setRows] = useState<AttendanceRow[]>([])
+  1363→  1363→  const [summary, setSummary] = useState({ present: 0, late: 0, absent: 0, total: 0 })
+  1364→  1364→  const [loading, setLoading] = useState(true)
+  1365→  1365→  const [editTarget, setEditTarget] = useState<AttendanceRow | null>(null)
+  1366→  1366→  const [editOpen, setEditOpen] = useState(false)
+  1367→  1367→  const [deleteTarget, setDeleteTarget] = useState<AttendanceRow | null>(null)
+  1368→  1368→  const [trend, setTrend] = useState<{ students: number[]; teachers: number[]; late: number[] }>({
+  1369→  1369→    students: [], teachers: [], late: [],
+  1370→  1370→  })
+  1371→  1371→
+  1372→  1372→  const todayQuery = useMemo(() => {
+  1373→  1373→    const p = new URLSearchParams()
+  1374→  1374→    p.set('date', todayStr())
+  1375→  1375→    p.set('limit', '200')
+  1376→  1376→    return p.toString()
+  1377→  1377→  }, [])
+  1378→  1378→
+  1379→  1379→  // Fetch today's log — initial load + auto-refresh every 15s.
+  1380→  1380→  // setState happens only inside .then callbacks and the interval callback (lint-safe).
+  1381→  1381→  useEffect(() => {
+  1382→  1382→    let alive = true
+  1383→  1383→    const tick = () => {
+  1384→  1384→      api<ListResponse>(`/api/attendance?${todayQuery}`)
+  1385→  1385→        .then((res) => {
+  1386→  1386→          if (!alive) return
+  1387→  1387→          setRows(res.data)
+  1388→  1388→          setSummary(res.summary)
+  1389→  1389→        })
+  1390→  1390→        .catch(() => {
+  1391→  1391→          /* non-fatal — keep previous data */
+  1392→  1392→        })
+  1393→  1393→        .finally(() => {
+  1394→  1394→          if (alive) setLoading(false)
+  1395→  1395→        })
+  1396→  1396→    }
+  1397→  1397→    tick()
+  1398→  1398→    const id = setInterval(tick, REFRESH_MS)
+  1399→  1399→    return () => {
+  1400→  1400→      alive = false
+  1401→  1401→      clearInterval(id)
+  1402→  1402→    }
+  1403→  1403→  }, [todayQuery])
+  1404→  1404→
+  1405→  1405→  // Fetch 7-day trend once for sparklines
+  1406→  1406→  useEffect(() => {
+  1407→  1407→    let alive = true
+  1408→  1408→    api<{ trend: { students: number; teachers: number; late: number }[] }>(`/api/attendance/trend`)
+  1409→  1409→      .then((res) => {
+  1410→  1410→        if (!alive) return
+  1411→  1411→        setTrend({
+  1412→  1412→          students: res.trend.map((d) => d.students),
+  1413→  1413→          teachers: res.trend.map((d) => d.teachers),
+  1414→  1414→          late: res.trend.map((d) => d.late),
+  1415→  1415→        })
+  1416→  1416→      })
+  1417→  1417→      .catch(() => {})
+  1418→  1418→    return () => {
+  1419→  1419→      alive = false
+  1420→  1420→    }
+  1421→  1421→  }, [])
+  1422→  1422→
+  1423→  1423→  const reloadToday = useCallback(() => {
+  1424→  1424→    api<ListResponse>(`/api/attendance?${todayQuery}`)
+  1425→  1425→      .then((res) => {
+  1426→  1426→        setRows(res.data)
+  1427→  1427→        setSummary(res.summary)
+  1428→  1428→      })
+  1429→  1429→      .catch(() => {
+  1430→  1430→        /* non-fatal */
+  1431→  1431→      })
+  1432→  1432→      .finally(() => setLoading(false))
+  1433→  1433→  }, [todayQuery])
+  1434→  1434→
+  1435→  1435→  // Derived "today summary strip" stats:
+  1436→  1436→  //   Students present today, Teachers present today, Late arrivals, Still checked-in.
+  1437→  1437→  const studentsPresent = useMemo(
+  1438→  1438→    () => rows.filter((r) => r.personType === 'Student' && (r.status === 'Present' || r.status === 'Late')).length,
+  1439→  1439→    [rows],
+  1440→  1440→  )
+  1441→  1441→  const teachersPresent = useMemo(
+  1442→  1442→    () => rows.filter((r) => r.personType === 'Teacher' && (r.status === 'Present' || r.status === 'Late')).length,
+  1443→  1443→    [rows],
+  1444→  1444→  )
+  1445→  1445→  const lateArrivals = useMemo(
+  1446→  1446→    () => rows.filter((r) => r.status === 'Late').length,
+  1447→  1447→    [rows],
+  1448→  1448→  )
+  1449→  1449→  const stillIn = useMemo(
+  1450→  1450→    () => rows.filter((r) => r.checkIn && !r.checkOut).length,
+  1451→  1451→    [rows],
+  1452→  1452→  )
+  1453→  1453→
+  1454→  1454→  const handleEdit = (r: AttendanceRow) => {
+  1455→  1455→    setEditTarget(r)
+  1456→  1456→    setEditOpen(true)
+  1457→  1457→  }
+  1458→  1458→  const handleDelete = (r: AttendanceRow) => setDeleteTarget(r)
+  1459→  1459→
+  1460→  1460→  const confirmDelete = async () => {
+  1461→  1461→    if (!deleteTarget) return
+  1462→  1462→    try {
+  1463→  1463→      await api(`/api/attendance/${deleteTarget.id}`, { method: 'DELETE' })
+  1464→  1464→      toast.success('Record deleted')
+  1465→  1465→      setDeleteTarget(null)
+  1466→  1466→      reloadToday()
+  1467→  1467→    } catch (err) {
+  1468→  1468→      const msg = err instanceof Error ? err.message : 'Delete failed'
+  1469→  1469→      toast.error(msg)
+  1470→  1470→    }
+  1471→  1471→  }
+  1472→  1472→
+  1473→  1473→  return (
+  1474→  1474→    <div className="flex flex-col gap-6">
+  1475→  1475→      <SectionHeader
+  1476→  1476→        title="Attendance"
+  1477→  1477→        description="Barcode check-in for students · Fingerprint check-in for teachers"
+  1478→  1478→        icon={<Clock className="h-5 w-5" />}
+  1479→  1479→      />
+  1480→  1480→
+  1481→  1481→      {/* Live Scanner panel */}
+  1482→  1482→      <ScannerPanel onScanSuccess={reloadToday} onOpenManual={() => setManualOpen(true)} />
+  1483→  1483→
+  1484→  1484→      {/* Today summary strip */}
+  1485→  1485→      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+  1486→  1486→        <StatCard
+  1487→  1487→          label="Students present"
+  1488→  1488→          value={studentsPresent}
+  1489→  1489→          icon={GraduationCap}
+  1490→  1490→          accent="blue"
+  1491→  1491→          hint="Checked in today"
+  1492→  1492→          footer={
+  1493→  1493→            trend.students.length > 0 ? (
+  1494→  1494→              <div className="flex items-center gap-1.5">
+  1495→  1495→                <Sparkline values={trend.students} color="#1e40af" width={64} height={20} />
+  1496→  1496→                <span className="text-[10px] text-muted-foreground">7d</span>
+  1497→  1497→              </div>
+  1498→  1498→            ) : undefined
+  1499→  1499→          }
+  1500→  1500→        />
+  1501→  1501→        <StatCard
+  1502→  1502→          label="Teachers present"
+  1503→  1503→          value={teachersPresent}
+  1504→  1504→          icon={UserCheck}
+  1505→  1505→          accent="purple"
+  1506→  1506→          hint="Fingerprint check-in"
+  1507→  1507→          footer={
+  1508→  1508→            trend.teachers.length > 0 ? (
+  1509→  1509→              <div className="flex items-center gap-1.5">
+  1510→  1510→                <Sparkline values={trend.teachers} color="#7c3aed" width={64} height={20} />
+  1511→  1511→                <span className="text-[10px] text-muted-foreground">7d</span>
+  1512→  1512→              </div>
+  1513→  1513→            ) : undefined
+  1514→  1514→          }
+  1515→  1515→        />
+  1516→  1516→        <StatCard
+  1517→  1517→          label="Late arrivals"
+  1518→  1518→          value={lateArrivals}
+  1519→  1519→          icon={Clock}
+  1520→  1520→          accent="amber"
+  1521→  1521→          hint="After 08:30 grace"
+  1522→  1522→          footer={
+  1523→  1523→            trend.late.length > 0 ? (
+  1524→  1524→              <div className="flex items-center gap-1.5">
+  1525→  1525→                <Sparkline values={trend.late} color="#d97706" width={64} height={20} />
+  1526→  1526→                <span className="text-[10px] text-muted-foreground">7d</span>
+  1527→  1527→              </div>
+  1528→  1528→            ) : undefined
+  1529→  1529→          }
+  1530→  1530→        />
+  1531→  1531→        <StatCard
+  1532→  1532→          label="Still checked-in"
+  1533→  1533→          value={stillIn}
+  1534→  1534→          icon={TimerReset}
+  1535→  1535→          accent="green"
+  1536→  1536→          hint="No checkout yet"
+  1537→  1537→        />
+  1538→  1538→      </div>
+  1539→  1539→
+  1540→  1540→      {/* Tabs: Today's Log | History */}
+  1541→  1541→      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'today' | 'history')}>
+  1542→  1542→        <TabsList className="grid w-full max-w-md grid-cols-2">
+  1543→  1543→          <TabsTrigger value="today" className="gap-2">
+  1544→  1544→            <ClipboardList className="h-4 w-4" />
+  1545→  1545→            Today&apos;s Log
+  1546→  1546→          </TabsTrigger>
+  1547→  1547→          <TabsTrigger value="history" className="gap-2">
+  1548→  1548→            <History className="h-4 w-4" />
+  1549→  1549→            History
+  1550→  1550→          </TabsTrigger>
+  1551→  1551→        </TabsList>
+  1552→  1552→
+  1553→  1553→        <TabsContent value="today" className="mt-4 space-y-4">
+  1554→  1554→          <div className="flex flex-wrap items-center justify-between gap-2">
+  1555→  1555→            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+  1556→  1556→              <Clock className="h-4 w-4" />
+  1557→  1557→              Live · auto-refreshes every 15s
+  1558→  1558→              <Badge variant="outline" className="ml-2 gap-1">
+  1559→  1559→                <CheckCircle2 className="h-3 w-3 text-emerald-500" />
+  1560→  1560→                {rows.length} record{rows.length === 1 ? '' : 's'}
+  1561→  1561→              </Badge>
+  1562→  1562→            </div>
+  1563→  1563→            <Button variant="outline" size="sm" onClick={reloadToday} className="gap-2">
+  1564→  1564→              <RotateCcw className="h-4 w-4" />
+  1565→  1565→              Refresh
+  1566→  1566→            </Button>
+  1567→  1567→          </div>
+  1568→  1568→
+  1569→  1569→          <AttendanceTable
+  1570→  1570→            rows={rows}
+  1571→  1571→            loading={loading}
+  1572→  1572→            onEdit={handleEdit}
+  1573→  1573→            onDelete={handleDelete}
+  1574→  1574→          />
+  1575→  1575→        </TabsContent>
+  1576→  1576→
+  1577→  1577→        <TabsContent value="history" className="mt-4">
+  1578→  1578→          <HistoryView />
+  1579→  1579→        </TabsContent>
+  1580→  1580→      </Tabs>
+  1581→  1581→
+  1582→  1582→      {/* Manual entry dialog */}
+  1583→  1583→      <ManualEntryDialog
+  1584→  1584→        open={manualOpen}
+  1585→  1585→        onOpenChange={setManualOpen}
+  1586→  1586→        onSuccess={reloadToday}
+  1587→  1587→      />
+  1588→  1588→
+  1589→  1589→      {/* Edit dialog (today's log) */}
+  1590→  1590→      <EditAttendanceDialog
+  1591→  1591→        open={editOpen}
+  1592→  1592→        onOpenChange={setEditOpen}
+  1593→  1593→        record={editTarget}
+  1594→  1594→        onSaved={reloadToday}
+  1595→  1595→      />
+  1596→  1596→
+  1597→  1597→      {/* Delete confirm (today's log) */}
+  1598→  1598→      <ConfirmDialog
+  1599→  1599→        open={!!deleteTarget}
+  1600→  1600→        onOpenChange={(v) => !v && setDeleteTarget(null)}
+  1601→  1601→        title="Delete attendance record?"
+  1602→  1602→        description={
+  1603→  1603→          deleteTarget
+  1604→  1604→            ? `This will permanently remove the ${deleteTarget.personType.toLowerCase()} record for ${deleteTarget.personName} (${deleteTarget.personRef}) on ${fmtDate(deleteTarget.date)}.`
+  1605→  1605→            : ''
+  1606→  1606→        }
+  1607→  1607→        confirmText="Delete"
+  1608→  1608→        onConfirm={confirmDelete}
+  1609→  1609→      />
+  1610→  1610→    </div>
+  1611→  1611→  )
+  1612→  1612→}
+  1613→  1613→

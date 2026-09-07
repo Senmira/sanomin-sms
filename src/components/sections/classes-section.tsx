@@ -19,6 +19,7 @@ import {
   Loader2,
   LayoutGrid,
   List as ListIcon,
+  Landmark,
   X,
 } from 'lucide-react'
 
@@ -104,6 +105,7 @@ interface FormState {
   room: string
   capacity: string
   fee: string
+  instituteSharePct: string
   active: boolean
   notes: string
 }
@@ -118,8 +120,16 @@ const EMPTY_FORM: FormState = {
   room: '',
   capacity: '20',
   fee: '0',
+  instituteSharePct: '25',
   active: true,
   notes: '',
+}
+
+// Parse the institute share input — clamps to 0–100, defaults to 25
+function parseSharePct(raw: string): number {
+  const n = Number(raw)
+  if (raw.trim() === '' || isNaN(n)) return 25
+  return Math.min(100, Math.max(0, n))
 }
 
 // ─── Main section ───────────────────────────────────────────────────────────
@@ -217,8 +227,13 @@ export function ClassesSection() {
     let active = 0
     let externalTeacherClasses = 0
     let totalEnrolled = 0
+    let instituteIncome = 0
     for (const c of rows) {
-      if (c.active) active++
+      if (c.active) {
+        active++
+        // Expected institute income: fee × institute share (default 25%)
+        instituteIncome += ((c.fee || 0) * (c.instituteSharePct ?? 25)) / 100
+      }
       if (c.teacher?.type === 'External') externalTeacherClasses++
       totalEnrolled += c._count?.enrollments ?? 0
     }
@@ -227,6 +242,7 @@ export function ClassesSection() {
       active,
       externalTeacherClasses,
       totalEnrolled,
+      instituteIncome,
     }
   }, [rows])
 
@@ -235,6 +251,12 @@ export function ClassesSection() {
     programFilter !== 'all' ||
     teacherFilter !== 'all' ||
     activeFilter !== 'all'
+
+  // Live fee-split preview for the add/edit dialog (recomputed per keystroke)
+  const sharePct = parseSharePct(form.instituteSharePct)
+  const dialogFee = Number(form.fee) || 0
+  const instituteAmount = (dialogFee * sharePct) / 100
+  const teacherAmount = (dialogFee * (100 - sharePct)) / 100
 
   const clearFilters = useCallback(() => {
     setDayFilter('all')
@@ -262,6 +284,7 @@ export function ClassesSection() {
       room: c.room || '',
       capacity: String(c.capacity ?? 20),
       fee: String(c.fee ?? 0),
+      instituteSharePct: String(c.instituteSharePct ?? 25),
       active: c.active,
       notes: c.notes || '',
     })
@@ -291,6 +314,7 @@ export function ClassesSection() {
       room: form.room.trim() || null,
       capacity: Number(form.capacity) || 0,
       fee: Number(form.fee) || 0,
+      instituteSharePct: parseSharePct(form.instituteSharePct),
       active: form.active,
       notes: form.notes.trim() || null,
     }
@@ -441,7 +465,7 @@ export function ClassesSection() {
       />
 
       {/* Stats strip */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <StatCard
           label="Total Classes"
           value={stats.total}
@@ -469,6 +493,13 @@ export function ClassesSection() {
           icon={Users}
           accent="amber"
           hint="Students across all classes"
+        />
+        <StatCard
+          label="Institute Income"
+          value={currency(stats.instituteIncome)}
+          icon={Landmark}
+          accent="green"
+          hint="Active classes · 25% default share"
         />
       </div>
 
@@ -562,7 +593,7 @@ export function ClassesSection() {
 
       {/* Add/Edit dialog */}
       <Dialog open={addEditOpen} onOpenChange={(v) => !v && closeDialog()}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-h-[90vh] overflow-y-auto scroll-thin sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{editing ? 'Edit Class' : 'Add Class'}</DialogTitle>
             <DialogDescription>
@@ -719,6 +750,53 @@ export function ClassesSection() {
                     setForm((f) => ({ ...f, fee: e.target.value }))
                   }
                 />
+              </div>
+            </div>
+
+            {/* Institute share — teacher pays institute */}
+            <div className="rounded-lg border bg-muted/20 p-3">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="grid gap-1.5">
+                  <Label htmlFor="class-share">
+                    Teacher pays institute (%)
+                  </Label>
+                  <Input
+                    id="class-share"
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={form.instituteSharePct}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        instituteSharePct: e.target.value,
+                      }))
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Share of the class fee that goes to the institute
+                  </p>
+                </div>
+                <div className="grid content-center gap-2 rounded-md border bg-background p-3 text-sm">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-1.5 text-muted-foreground">
+                      <Landmark className="h-3.5 w-3.5 shrink-0" />
+                      Institute gets
+                    </span>
+                    <span className="font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
+                      {currency(instituteAmount)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-1.5 text-muted-foreground">
+                      <GraduationCap className="h-3.5 w-3.5 shrink-0" />
+                      Teacher gets
+                    </span>
+                    <span className="font-semibold tabular-nums text-primary">
+                      {currency(teacherAmount)}
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -1049,6 +1127,9 @@ function ClassListTable({ rows, onEdit, onDelete }: ClassListTableProps) {
               const enrolled = c._count?.enrollments ?? 0
               const pct =
                 c.capacity > 0 ? Math.min(100, (enrolled / c.capacity) * 100) : 0
+              const share = c.instituteSharePct ?? 25
+              const instituteCut = ((c.fee || 0) * share) / 100
+              const teacherCut = (c.fee || 0) - instituteCut
               return (
                 <TableRow key={c.id}>
                   <TableCell>
@@ -1130,8 +1211,16 @@ function ClassListTable({ rows, onEdit, onDelete }: ClassListTableProps) {
                       <Progress value={pct} className="h-1.5" />
                     </div>
                   </TableCell>
-                  <TableCell className="text-right font-medium tabular-nums">
-                    {currency(c.fee)}
+                  <TableCell className="text-right">
+                    <div className="font-medium tabular-nums">
+                      {currency(c.fee)}
+                    </div>
+                    <div
+                      className="text-[11px] tabular-nums text-muted-foreground"
+                      title={`Institute share ${share}%`}
+                    >
+                      Inst {currency(instituteCut)} · Tch {currency(teacherCut)}
+                    </div>
                   </TableCell>
                   <TableCell>
                     {c.active ? (

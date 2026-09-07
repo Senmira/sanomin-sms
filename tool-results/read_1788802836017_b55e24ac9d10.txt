@@ -1,0 +1,602 @@
+   510→   510→                  {PAYMENT_STATUSES.map((s) => (
+   511→   511→                    <SelectItem key={s} value={s}>
+   512→   512→                      {s}
+   513→   513→                    </SelectItem>
+   514→   514→                  ))}
+   515→   515→                </SelectContent>
+   516→   516→              </Select>
+   517→   517→            </div>
+   518→   518→            <div className="flex flex-col gap-1.5">
+   519→   519→              <Label className="text-xs text-muted-foreground">Program</Label>
+   520→   520→              <Select value={programFilter} onValueChange={setProgramFilter}>
+   521→   521→                <SelectTrigger className="w-[160px]">
+   522→   522→                  <SelectValue placeholder="All programs" />
+   523→   523→                </SelectTrigger>
+   524→   524→                <SelectContent>
+   525→   525→                  <SelectItem value="all">All programs</SelectItem>
+   526→   526→                  {programs.map((p) => (
+   527→   527→                    <SelectItem key={p.id} value={p.code}>
+   528→   528→                      {p.name}
+   529→   529→                    </SelectItem>
+   530→   530→                  ))}
+   531→   531→                </SelectContent>
+   532→   532→              </Select>
+   533→   533→            </div>
+   534→   534→            <div className="flex flex-col gap-1.5">
+   535→   535→              <Label className="text-xs text-muted-foreground">Method</Label>
+   536→   536→              <Select value={methodFilter} onValueChange={setMethodFilter}>
+   537→   537→                <SelectTrigger className="w-[130px]">
+   538→   538→                  <SelectValue placeholder="All methods" />
+   539→   539→                </SelectTrigger>
+   540→   540→                <SelectContent>
+   541→   541→                  <SelectItem value="all">All methods</SelectItem>
+   542→   542→                  {PAYMENT_METHODS.map((m) => (
+   543→   543→                    <SelectItem key={m} value={m}>
+   544→   544→                      {m}
+   545→   545→                    </SelectItem>
+   546→   546→                  ))}
+   547→   547→                </SelectContent>
+   548→   548→              </Select>
+   549→   549→            </div>
+   550→   550→          </div>
+   551→   551→          <div className="flex items-end gap-2">
+   552→   552→            <div className="relative flex-1 lg:w-64">
+   553→   553→              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+   554→   554→              <Input
+   555→   555→                placeholder="Search student / receipt no…"
+   556→   556→                value={search}
+   557→   557→                onChange={(e) => setSearch(e.target.value)}
+   558→   558→                className="pl-9"
+   559→   559→              />
+   560→   560→            </div>
+   561→   561→            {hasFilters && (
+   562→   562→              <Button variant="ghost" size="sm" onClick={clearFilters} className="gap-1.5">
+   563→   563→                <X className="h-4 w-4" /> Clear
+   564→   564→              </Button>
+   565→   565→            )}
+   566→   566→          </div>
+   567→   567→        </div>
+   568→   568→      </Card>
+   569→   569→
+   570→   570→      {/* Tabs + Table */}
+   571→   571→      <Card className="p-0">
+   572→   572→        <div className="flex flex-col gap-3 border-b p-4 sm:flex-row sm:items-center sm:justify-between">
+   573→   573→          <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)}>
+   574→   574→            <TabsList>
+   575→   575→              <TabsTrigger value="all">All Payments</TabsTrigger>
+   576→   576→              <TabsTrigger value="outstanding">Outstanding</TabsTrigger>
+   577→   577→              <TabsTrigger value="paid">Paid</TabsTrigger>
+   578→   578→            </TabsList>
+   579→   579→          </Tabs>
+   580→   580→          <p className="text-xs text-muted-foreground">
+   581→   581→            Showing <span className="font-semibold text-foreground">{rows.length}</span> of {total}{' '}
+   582→   582→            payments
+   583→   583→          </p>
+   584→   584→        </div>
+   585→   585→
+   586→   586→        {error ? (
+   587→   587→          <div className="p-6">
+   588→   588→            <EmptyState
+   589→   589→              icon={AlertCircle}
+   590→   590→              title="Failed to load payments"
+   591→   591→              description={error}
+   592→   592→              action={
+   593→   593→                <Button size="sm" onClick={fetchPayments}>
+   594→   594→                  Retry
+   595→   595→                </Button>
+   596→   596→              }
+   597→   597→            />
+   598→   598→          </div>
+   599→   599→        ) : loading ? (
+   600→   600→          <div className="space-y-2 p-4">
+   601→   601→            {Array.from({ length: 6 }).map((_, i) => (
+   602→   602→              <Skeleton key={i} className="h-14 w-full" />
+   603→   603→            ))}
+   604→   604→          </div>
+   605→   605→        ) : rows.length === 0 ? (
+   606→   606→          <div className="p-6">
+   607→   607→            <EmptyState
+   608→   608→              icon={Wallet}
+   609→   609→              title="No payments found"
+   610→   610→              description={
+   611→   611→                hasFilters
+   612→   612→                  ? `No payments match the current filters for ${monthLabel(month)}.`
+   613→   613→                  : `No payment records for ${monthLabel(month)} yet. Record the first payment to get started.`
+   614→   614→              }
+   615→   615→              action={
+   616→   616→                <Button size="sm" onClick={() => setCreateOpen(true)} className="gap-2">
+   617→   617→                  <Plus className="h-4 w-4" /> Record Payment
+   618→   618→                </Button>
+   619→   619→              }
+   620→   620→            />
+   621→   621→          </div>
+   622→   622→        ) : (
+   623→   623→          <div className="scroll-thin max-h-[60vh] overflow-y-auto">
+   624→   624→            <Table className="table-zebra">
+   625→   625→              <TableHeader className="sticky top-0 z-10 bg-muted/80 backdrop-blur">
+   626→   626→                <TableRow>
+   627→   627→                  <TableHead className="w-[120px]">Receipt No</TableHead>
+   628→   628→                  <TableHead>Student</TableHead>
+   629→   629→                  <TableHead>Program</TableHead>
+   630→   630→                  <TableHead className="w-[90px]">Month</TableHead>
+   631→   631→                  <TableHead className="text-right">Billed</TableHead>
+   632→   632→                  <TableHead className="text-right">Paid</TableHead>
+   633→   633→                  <TableHead className="text-right">Balance</TableHead>
+   634→   634→                  <TableHead className="w-[100px]">Method</TableHead>
+   635→   635→                  <TableHead className="w-[110px]">Status</TableHead>
+   636→   636→                  <TableHead className="w-[60px] text-right">Actions</TableHead>
+   637→   637→                </TableRow>
+   638→   638→              </TableHeader>
+   639→   639→              <TableBody>
+   640→   640→                {rows.map((p) => {
+   641→   641→                  const balance = Math.max(0, p.amount - p.paidAmount)
+   642→   642→                  return (
+   643→   643→                    <TableRow key={p.id} className="hover:bg-muted/40">
+   644→   644→                      <TableCell>
+   645→   645→                        <span className="rounded-md bg-muted px-2 py-0.5 font-mono text-[11px] font-semibold tracking-tight">
+   646→   646→                          {p.receiptNo ?? '—'}
+   647→   647→                        </span>
+   648→   648→                      </TableCell>
+   649→   649→                      <TableCell>
+   650→   650→                        <div className="flex items-center gap-2.5">
+   651→   651→                          <Avatar className="h-8 w-8">
+   652→   652→                            <AvatarFallback className={avatarColor(p.student.fullName)}>
+   653→   653→                              {initials(p.student.fullName)}
+   654→   654→                            </AvatarFallback>
+   655→   655→                          </Avatar>
+   656→   656→                          <div className="min-w-0">
+   657→   657→                            <p className="truncate text-sm font-medium">{p.student.fullName}</p>
+   658→   658→                            <p className="font-mono text-[10px] text-muted-foreground">
+   659→   659→                              {p.student.studentId}
+   660→   660→                            </p>
+   661→   661→                          </div>
+   662→   662→                        </div>
+   663→   663→                      </TableCell>
+   664→   664→                      <TableCell>
+   665→   665→                        {p.program ? (
+   666→   666→                          <Badge
+   667→   667→                            variant="outline"
+   668→   668→                            className="gap-1.5 border-transparent font-medium"
+   669→   669→                            style={{
+   670→   670→                              backgroundColor: `${p.program.color}1A`,
+   671→   671→                              color: p.program.color,
+   672→   672→                            }}
+   673→   673→                          >
+   674→   674→                            <span
+   675→   675→                              className="h-2 w-2 rounded-full"
+   676→   676→                              style={{ backgroundColor: p.program.color }}
+   677→   677→                            />
+   678→   678→                            {p.program.code}
+   679→   679→                          </Badge>
+   680→   680→                        ) : (
+   681→   681→                          <span className="text-xs text-muted-foreground">—</span>
+   682→   682→                        )}
+   683→   683→                      </TableCell>
+   684→   684→                      <TableCell>
+   685→   685→                        <span className="text-xs tabular-nums text-muted-foreground">
+   686→   686→                          {p.month}
+   687→   687→                        </span>
+   688→   688→                      </TableCell>
+   689→   689→                      <TableCell className="text-right text-sm tabular-nums">
+   690→   690→                        {currency(p.amount)}
+   691→   691→                      </TableCell>
+   692→   692→                      <TableCell className="text-right text-sm tabular-nums">
+   693→   693→                        {currency(p.paidAmount)}
+   694→   694→                      </TableCell>
+   695→   695→                      <TableCell
+   696→   696→                        className={
+   697→   697→                          balance > 0
+   698→   698→                            ? 'text-right text-sm font-semibold tabular-nums text-red-600 dark:text-red-400'
+   699→   699→                            : 'text-right text-sm tabular-nums text-emerald-600 dark:text-emerald-400'
+   700→   700→                        }
+   701→   701→                      >
+   702→   702→                        {currency(balance)}
+   703→   703→                      </TableCell>
+   704→   704→                      <TableCell>
+   705→   705→                        <Badge
+   706→   706→                          variant="outline"
+   707→   707→                          className={`font-medium ${methodBadgeClasses(p.method)}`}
+   708→   708→                        >
+   709→   709→                          {p.method}
+   710→   710→                        </Badge>
+   711→   711→                      </TableCell>
+   712→   712→                      <TableCell>
+   713→   713→                        <Badge
+   714→   714→                          variant="outline"
+   715→   715→                          className={`font-medium ${statusBadgeClasses(p.status)}`}
+   716→   716→                        >
+   717→   717→                          {p.status}
+   718→   718→                        </Badge>
+   719→   719→                      </TableCell>
+   720→   720→                      <TableCell className="text-right">
+   721→   721→                        <DropdownMenu>
+   722→   722→                          <DropdownMenuTrigger asChild>
+   723→   723→                            <Button variant="ghost" size="icon" className="h-8 w-8">
+   724→   724→                              <MoreVertical className="h-4 w-4" />
+   725→   725→                              <span className="sr-only">Open actions</span>
+   726→   726→                            </Button>
+   727→   727→                          </DropdownMenuTrigger>
+   728→   728→                          <DropdownMenuContent align="end" className="w-44">
+   729→   729→                            <DropdownMenuItem
+   730→   730→                              onClick={() => {
+   731→   731→                                setEditTarget(p)
+   732→   732→                              }}
+   733→   733→                            >
+   734→   734→                              <Pencil className="mr-2 h-4 w-4" /> Record / Edit
+   735→   735→                            </DropdownMenuItem>
+   736→   736→                            <DropdownMenuItem onClick={() => setReceiptTarget(p)}>
+   737→   737→                              <ReceiptIcon className="mr-2 h-4 w-4" /> Print Receipt
+   738→   738→                            </DropdownMenuItem>
+   739→   739→                            <DropdownMenuSeparator />
+   740→   740→                            <DropdownMenuItem
+   741→   741→                              onClick={() => setDeleteTarget(p)}
+   742→   742→                              className="text-red-600 focus:text-red-700 dark:text-red-400"
+   743→   743→                            >
+   744→   744→                              <Trash2 className="mr-2 h-4 w-4" /> Delete
+   745→   745→                            </DropdownMenuItem>
+   746→   746→                          </DropdownMenuContent>
+   747→   747→                        </DropdownMenu>
+   748→   748→                      </TableCell>
+   749→   749→                    </TableRow>
+   750→   750→                  )
+   751→   751→                })}
+   752→   752→              </TableBody>
+   753→   753→            </Table>
+   754→   754→          </div>
+   755→   755→        )}
+   756→   756→      </Card>
+   757→   757→
+   758→   758→      {/* Create / Edit dialogs */}
+   759→   759→      {createOpen && (
+   760→   760→        <PaymentDialog
+   761→   761→          mode="create"
+   762→   762→          month={month}
+   763→   763→          programs={programs}
+   764→   764→          onClose={() => setCreateOpen(false)}
+   765→   765→          onSaved={() => {
+   766→   766→            setCreateOpen(false)
+   767→   767→            fetchPayments()
+   768→   768→          }}
+   769→   769→        />
+   770→   770→      )}
+   771→   771→      {editTarget && (
+   772→   772→        <PaymentDialog
+   773→   773→          mode="edit"
+   774→   774→          month={month}
+   775→   775→          programs={programs}
+   776→   776→          payment={editTarget}
+   777→   777→          onClose={() => setEditTarget(null)}
+   778→   778→          onSaved={() => {
+   779→   779→            setEditTarget(null)
+   780→   780→            fetchPayments()
+   781→   781→          }}
+   782→   782→        />
+   783→   783→      )}
+   784→   784→
+   785→   785→      {/* Receipt print dialog */}
+   786→   786→      {receiptTarget && (
+   787→   787→        <ReceiptDialog
+   788→   788→          payment={receiptTarget}
+   789→   789→          onClose={() => setReceiptTarget(null)}
+   790→   790→        />
+   791→   791→      )}
+   792→   792→
+   793→   793→      {/* Delete confirm */}
+   794→   794→      <ConfirmDialog
+   795→   795→        open={!!deleteTarget}
+   796→   796→        onOpenChange={(v) => !v && setDeleteTarget(null)}
+   797→   797→        title="Delete payment record?"
+   798→   798→        description={
+   799→   799→          deleteTarget
+   800→   800→            ? `Receipt ${deleteTarget.receiptNo ?? '—'} for ${deleteTarget.student.fullName} (${monthLabel(
+   801→   801→                deleteTarget.month,
+   802→   802→              )}) will be permanently removed. This cannot be undone.`
+   803→   803→            : ''
+   804→   804→        }
+   805→   805→        confirmText="Delete"
+   806→   806→        cancelText="Cancel"
+   807→   807→        onConfirm={async () => {
+   808→   808→          if (!deleteTarget) return
+   809→   809→          await api(`/api/payments/${deleteTarget.id}`, { method: 'DELETE' })
+   810→   810→          toast.success('Payment deleted')
+   811→   811→          fetchPayments()
+   812→   812→        }}
+   813→   813→      />
+   814→   814→
+   815→   815→      {/* Bulk generate dialog */}
+   816→   816→      <BulkGenerateDialog
+   817→   817→        open={bulkOpen}
+   818→   818→        onOpenChange={setBulkOpen}
+   819→   819→        defaultMonth={month}
+   820→   820→        generating={generating}
+   821→   821→        onConfirm={handleBulkGenerate}
+   822→   822→      />
+   823→   823→    </div>
+   824→   824→  )
+   825→   825→}
+   826→   826→
+   827→   827→// ─── Payment create/edit dialog ────────────────────────────────────────────
+   828→   828→interface PaymentDialogProps {
+   829→   829→  mode: 'create' | 'edit'
+   830→   830→  month: string
+   831→   831→  programs: ProgramRow[]
+   832→   832→  payment?: PaymentRow | null
+   833→   833→  onClose: () => void
+   834→   834→  onSaved: () => void
+   835→   835→}
+   836→   836→
+   837→   837→function PaymentDialog({
+   838→   838→  mode,
+   839→   839→  month,
+   840→   840→  programs,
+   841→   841→  payment,
+   842→   842→  onClose,
+   843→   843→  onSaved,
+   844→   844→}: PaymentDialogProps) {
+   845→   845→  const [students, setStudents] = useState<StudentRow[]>([])
+   846→   846→  const [studentQuery, setStudentQuery] = useState('')
+   847→   847→  const [selectedStudent, setSelectedStudent] = useState<StudentRow | null>(null)
+   848→   848→  const [studentOpen, setStudentOpen] = useState(false)
+   849→   849→  const [saving, setSaving] = useState(false)
+   850→   850→  const [form, setForm] = useState<FormState>(() =>
+   851→   851→    payment
+   852→   852→      ? {
+   853→   853→          studentId: payment.studentId,
+   854→   854→          programId: payment.programId ?? '',
+   855→   855→          month: payment.month,
+   856→   856→          amount: String(payment.amount),
+   857→   857→          paidAmount: String(payment.paidAmount),
+   858→   858→          method: payment.method,
+   859→   859→          dueDate: payment.dueDate ? toIsoDate(new Date(payment.dueDate)) : '',
+   860→   860→          paidDate: payment.paidDate ? toIsoDate(new Date(payment.paidDate)) : '',
+   861→   861→          note: payment.note ?? '',
+   862→   862→        }
+   863→   863→      : emptyForm(month),
+   864→   864→  )
+   865→   865→
+   866→   866→  const isEdit = mode === 'edit' && !!payment
+   867→   867→
+   868→   868→  // ─── Resolve selected student for edit mode ───────────────────────────
+   869→   869→  useEffect(() => {
+   870→   870→    if (!isEdit || !payment) return
+   871→   871→    let alive = true
+   872→   872→    api<{ data: StudentRow[] }>(
+   873→   873→      `/api/students?q=${encodeURIComponent(payment.student.studentId)}&limit=5`,
+   874→   874→    )
+   875→   875→      .then((r) => {
+   876→   876→        if (!alive) return
+   877→   877→        const match = (r.data || []).find((s) => s.id === payment.studentId)
+   878→   878→        if (match) setSelectedStudent(match)
+   879→   879→      })
+   880→   880→      .catch(() => {
+   881→   881→        /* ignore */
+   882→   882→      })
+   883→   883→    return () => {
+   884→   884→      alive = false
+   885→   885→    }
+   886→   886→  }, [isEdit, payment])
+   887→   887→
+   888→   888→  // ─── Debounced student search ────────────────────────────────────────
+   889→   889→  useEffect(() => {
+   890→   890→    if (studentQuery.trim().length < 2) {
+   891→   891→      setStudents([])
+   892→   892→      return
+   893→   893→    }
+   894→   894→    let alive = true
+   895→   895→    const h = setTimeout(() => {
+   896→   896→      api<{ data: StudentRow[] }>(
+   897→   897→        `/api/students?q=${encodeURIComponent(studentQuery)}&limit=10`,
+   898→   898→      )
+   899→   899→        .then((r) => alive && setStudents(r.data || []))
+   900→   900→        .catch(() => alive && setStudents([]))
+   901→   901→    }, 250)
+   902→   902→    return () => {
+   903→   903→      alive = false
+   904→   904→      clearTimeout(h)
+   905→   905→    }
+   906→   906→  }, [studentQuery])
+   907→   907→
+   908→   908→  // ─── When student changes, auto-fill amount from program.monthlyFee ─
+   909→   909→  const handleSelectStudent = useCallback(
+   910→   910→    (s: StudentRow) => {
+   911→   911→      setSelectedStudent(s)
+   912→   912→      setStudentOpen(false)
+   913→   913→      setStudentQuery('')
+   914→   914→      setForm((f) => {
+   915→   915→        // Prefer student's primary enrollment program; else leave as-is
+   916→   916→        const en = s.enrollments?.[0]?.program
+   917→   917→        const progMatch =
+   918→   918→          en && programs.find((p) => p.id === en.id) ? en : null
+   919→   919→        const programId = progMatch?.id ?? f.programId
+   920→   920→        const fee =
+   921→   921→          progMatch && programs.find((p) => p.id === progMatch.id)?.monthlyFee
+   922→   922→            ? programs.find((p) => p.id === progMatch.id)!.monthlyFee
+   923→   923→            : f.amount
+   924→   924→        return {
+   925→   925→          ...f,
+   926→   926→          studentId: s.id,
+   927→   927→          programId,
+   928→   928→          amount: fee ? String(fee) : f.amount,
+   929→   929→        }
+   930→   930→      })
+   931→   931→    },
+   932→   932→    [programs],
+   933→   933→  )
+   934→   934→
+   935→   935→  // ─── When program changes (in dialog), auto-fill amount ──────────────
+   936→   936→  const handleSelectProgram = useCallback(
+   937→   937→    (programId: string) => {
+   938→   938→      const prog = programs.find((p) => p.id === programId)
+   939→   939→      setForm((f) => ({
+   940→   940→        ...f,
+   941→   941→        programId,
+   942→   942→        amount: prog ? String(prog.monthlyFee) : f.amount,
+   943→   943→      }))
+   944→   944→    },
+   945→   945→    [programs],
+   946→   946→  )
+   947→   947→
+   948→   948→  // ─── Submit ───────────────────────────────────────────────────────────
+   949→   949→  const handleSubmit = async () => {
+   950→   950→    if (!form.studentId) {
+   951→   951→      toast.error('Please select a student')
+   952→   952→      return
+   953→   953→    }
+   954→   954→    if (!/^\d{4}-\d{2}$/.test(form.month)) {
+   955→   955→      toast.error('Month must be in YYYY-MM format')
+   956→   956→      return
+   957→   957→    }
+   958→   958→    const amount = parseFloat(form.amount) || 0
+   959→   959→    const paidAmount = parseFloat(form.paidAmount) || 0
+   960→   960→    if (amount <= 0) {
+   961→   961→      toast.error('Amount must be greater than 0')
+   962→   962→      return
+   963→   963→    }
+   964→   964→    setSaving(true)
+   965→   965→    try {
+   966→   966→      const payload = {
+   967→   967→        studentId: form.studentId,
+   968→   968→        programId: form.programId || null,
+   969→   969→        month: form.month,
+   970→   970→        amount,
+   971→   971→        paidAmount,
+   972→   972→        method: form.method,
+   973→   973→        dueDate: form.dueDate || null,
+   974→   974→        paidDate: paidAmount > 0 ? form.paidDate || null : null,
+   975→   975→        note: form.note.trim() || null,
+   976→   976→      }
+   977→   977→      if (isEdit && payment) {
+   978→   978→        await api(`/api/payments/${payment.id}`, {
+   979→   979→          method: 'PUT',
+   980→   980→          body: JSON.stringify(payload),
+   981→   981→        })
+   982→   982→        toast.success('Payment updated')
+   983→   983→      } else {
+   984→   984→        await api('/api/payments', {
+   985→   985→          method: 'POST',
+   986→   986→          body: JSON.stringify(payload),
+   987→   987→        })
+   988→   988→        toast.success('Payment recorded')
+   989→   989→      }
+   990→   990→      onSaved()
+   991→   991→    } catch (e) {
+   992→   992→      toast.error(e instanceof Error ? e.message : 'Failed to save payment')
+   993→   993→    } finally {
+   994→   994→      setSaving(false)
+   995→   995→    }
+   996→   996→  }
+   997→   997→
+   998→   998→  const balance = Math.max(0, (parseFloat(form.amount) || 0) - (parseFloat(form.paidAmount) || 0))
+   999→   999→
+  1000→  1000→  return (
+  1001→  1001→    <Dialog open onOpenChange={(v) => !v && onClose()}>
+  1002→  1002→      <DialogContent className="max-w-2xl">
+  1003→  1003→        <DialogHeader>
+  1004→  1004→          <DialogTitle className="flex items-center gap-2">
+  1005→  1005→            <Wallet className="h-5 w-5 text-primary" />
+  1006→  1006→            {isEdit ? 'Edit Payment' : 'Record Payment'}
+  1007→  1007→          </DialogTitle>
+  1008→  1008→          <DialogDescription>
+  1009→  1009→            {isEdit
+  1010→  1010→              ? `Update receipt ${payment?.receiptNo ?? '—'} for ${payment?.student.fullName ?? ''}.`
+  1011→  1011→              : 'Create a new fee payment record. Receipt number is auto-generated.'}
+  1012→  1012→          </DialogDescription>
+  1013→  1013→        </DialogHeader>
+  1014→  1014→
+  1015→  1015→        <div className="grid gap-4 py-2">
+  1016→  1016→          {/* Student picker */}
+  1017→  1017→          <div className="flex flex-col gap-1.5">
+  1018→  1018→            <Label>Student *</Label>
+  1019→  1019→            {selectedStudent ? (
+  1020→  1020→              <div className="flex items-center justify-between gap-2 rounded-lg border p-2.5">
+  1021→  1021→                <div className="flex items-center gap-2.5">
+  1022→  1022→                  <Avatar className="h-9 w-9">
+  1023→  1023→                    <AvatarFallback className={avatarColor(selectedStudent.fullName)}>
+  1024→  1024→                      {initials(selectedStudent.fullName)}
+  1025→  1025→                    </AvatarFallback>
+  1026→  1026→                  </Avatar>
+  1027→  1027→                  <div>
+  1028→  1028→                    <p className="text-sm font-medium">{selectedStudent.fullName}</p>
+  1029→  1029→                    <p className="font-mono text-[11px] text-muted-foreground">
+  1030→  1030→                      {selectedStudent.studentId}
+  1031→  1031→                    </p>
+  1032→  1032→                  </div>
+  1033→  1033→                </div>
+  1034→  1034→                <Button
+  1035→  1035→                  variant="ghost"
+  1036→  1036→                  size="sm"
+  1037→  1037→                  onClick={() => {
+  1038→  1038→                    if (!isEdit) {
+  1039→  1039→                      setSelectedStudent(null)
+  1040→  1040→                      setForm((f) => ({ ...f, studentId: '', programId: '' }))
+  1041→  1041→                    }
+  1042→  1042→                  }}
+  1043→  1043→                  disabled={isEdit}
+  1044→  1044→                >
+  1045→  1045→                  {isEdit ? 'Locked' : 'Change'}
+  1046→  1046→                </Button>
+  1047→  1047→              </div>
+  1048→  1048→            ) : (
+  1049→  1049→              <div className="flex flex-col gap-2">
+  1050→  1050→                <div className="relative">
+  1051→  1051→                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+  1052→  1052→                  <Input
+  1053→  1053→                    placeholder="Type at least 2 chars to search students…"
+  1054→  1054→                    value={studentQuery}
+  1055→  1055→                    onChange={(e) => setStudentQuery(e.target.value)}
+  1056→  1056→                    onFocus={() => setStudentOpen(true)}
+  1057→  1057→                    className="pl-9"
+  1058→  1058→                  />
+  1059→  1059→                </div>
+  1060→  1060→                {studentOpen && students.length > 0 && (
+  1061→  1061→                  <div className="scroll-thin max-h-56 overflow-y-auto rounded-lg border bg-popover">
+  1062→  1062→                    {students.map((s) => (
+  1063→  1063→                      <button
+  1064→  1064→                        key={s.id}
+  1065→  1065→                        type="button"
+  1066→  1066→                        onClick={() => handleSelectStudent(s)}
+  1067→  1067→                        className="flex w-full items-center gap-2.5 border-b border-border/50 p-2.5 text-left transition-colors last:border-0 hover:bg-muted/50"
+  1068→  1068→                      >
+  1069→  1069→                        <Avatar className="h-8 w-8">
+  1070→  1070→                          <AvatarFallback className={avatarColor(s.fullName)}>
+  1071→  1071→                            {initials(s.fullName)}
+  1072→  1072→                          </AvatarFallback>
+  1073→  1073→                        </Avatar>
+  1074→  1074→                        <div className="min-w-0 flex-1">
+  1075→  1075→                          <p className="truncate text-sm font-medium">{s.fullName}</p>
+  1076→  1076→                          <p className="font-mono text-[10px] text-muted-foreground">
+  1077→  1077→                            {s.studentId} · {s.ageGroup ?? '—'}
+  1078→  1078→                          </p>
+  1079→  1079→                        </div>
+  1080→  1080→                        {s.enrollments?.[0]?.program && (
+  1081→  1081→                          <Badge
+  1082→  1082→                            variant="outline"
+  1083→  1083→                            className="shrink-0 text-[10px]"
+  1084→  1084→                            style={{
+  1085→  1085→                              backgroundColor: `${s.enrollments[0].program.color}1A`,
+  1086→  1086→                              color: s.enrollments[0].program.color,
+  1087→  1087→                            }}
+  1088→  1088→                          >
+  1089→  1089→                            {s.enrollments[0].program.code}
+  1090→  1090→                          </Badge>
+  1091→  1091→                        )}
+  1092→  1092→                      </button>
+  1093→  1093→                    ))}
+  1094→  1094→                  </div>
+  1095→  1095→                )}
+  1096→  1096→              </div>
+  1097→  1097→            )}
+  1098→  1098→          </div>
+  1099→  1099→
+  1100→  1100→          {/* Program + month */}
+  1101→  1101→          <div className="grid gap-4 sm:grid-cols-2">
+  1102→  1102→            <div className="flex flex-col gap-1.5">
+  1103→  1103→              <Label>Program</Label>
+  1104→  1104→              <Select value={form.programId} onValueChange={handleSelectProgram}>
+  1105→  1105→                <SelectTrigger>
+  1106→  1106→                  <SelectValue placeholder="Select program" />
+  1107→  1107→                </SelectTrigger>
+  1108→  1108→                <SelectContent>
+  1109→  1109→                  {programs.map((p) => (
+
+[showing lines 510-1109 of 1550; use offset=1110 with limit to continue reading]

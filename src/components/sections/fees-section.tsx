@@ -47,6 +47,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import {
@@ -136,6 +137,49 @@ function methodBadgeClasses(method: string): string {
   }
 }
 
+// ─── Bill line-item helpers ────────────────────────────────────────────────
+type BillProgram = { id: string; code: string; name: string; color: string }
+
+// Distinct programmes on a bill, from its line items (falls back to the
+// legacy single-programme column when items are missing).
+function billPrograms(p: PaymentRow): BillProgram[] {
+  const out: BillProgram[] = []
+  for (const it of p.items ?? []) {
+    const prog = it.program
+    if (prog && !out.some((x) => x.id === prog.id)) out.push(prog)
+  }
+  if (out.length === 0 && p.program) out.push(p.program)
+  return out
+}
+
+interface BillLine {
+  key: string
+  description: string
+  amount: number
+  color: string | null
+}
+
+// One row per bill line item for receipts (falls back to the legacy
+// single-programme amount when items are missing).
+function billLines(p: PaymentRow): BillLine[] {
+  if (p.items && p.items.length > 0) {
+    return p.items.map((it, i) => ({
+      key: it.programId ?? `item-${i}`,
+      description: it.description ?? it.program?.name ?? 'Fee item',
+      amount: it.amount,
+      color: it.program?.color ?? null,
+    }))
+  }
+  return [
+    {
+      key: p.programId ?? 'amount',
+      description: p.program?.name ?? 'Fee',
+      amount: p.amount,
+      color: p.program?.color ?? null,
+    },
+  ]
+}
+
 // ─── Response shapes ──────────────────────────────────────────────────────
 interface PaymentListResponse {
   data: PaymentRow[]
@@ -146,9 +190,8 @@ interface PaymentListResponse {
 // ─── Form state ────────────────────────────────────────────────────────────
 interface FormState {
   studentId: string
-  programId: string
+  programIds: string[]
   month: string
-  amount: string
   paidAmount: string
   method: string
   dueDate: string
@@ -157,14 +200,12 @@ interface FormState {
 }
 
 function emptyForm(month: string): FormState {
-  const due = new Date()
   const [y, m] = month.split('-').map((n) => parseInt(n, 10))
   const d = new Date(y, m - 1, 10)
   return {
     studentId: '',
-    programId: '',
+    programIds: [],
     month,
-    amount: '0',
     paidAmount: '0',
     method: 'Cash',
     dueDate: toIsoDate(d),
@@ -333,6 +374,7 @@ export function FeesSection() {
       'Student ID',
       'Student Name',
       'Program',
+      'Programmes',
       'Month',
       'Amount',
       'Paid',
@@ -349,12 +391,14 @@ export function FeesSection() {
     }
     const lines = [headers.join(',')]
     for (const r of rows) {
+      const progs = billPrograms(r)
       lines.push(
         [
           escape(r.receiptNo),
           escape(r.student.studentId),
           escape(r.student.fullName),
-          escape(r.program?.code ?? ''),
+          escape(progs.map((x) => x.code).join(' + ')),
+          escape(progs.length),
           escape(r.month),
           escape(r.amount),
           escape(r.paidAmount),
@@ -626,7 +670,7 @@ export function FeesSection() {
                 <TableRow>
                   <TableHead className="w-[120px]">Receipt No</TableHead>
                   <TableHead>Student</TableHead>
-                  <TableHead>Program</TableHead>
+                  <TableHead>Programmes</TableHead>
                   <TableHead className="w-[90px]">Month</TableHead>
                   <TableHead className="text-right">Billed</TableHead>
                   <TableHead className="text-right">Paid</TableHead>
@@ -639,6 +683,9 @@ export function FeesSection() {
               <TableBody>
                 {rows.map((p) => {
                   const balance = Math.max(0, p.amount - p.paidAmount)
+                  const progs = billPrograms(p)
+                  const shownProgs = progs.slice(0, 3)
+                  const extraProgs = progs.length - shownProgs.length
                   return (
                     <TableRow key={p.id} className="hover:bg-muted/40">
                       <TableCell>
@@ -662,23 +709,36 @@ export function FeesSection() {
                         </div>
                       </TableCell>
                       <TableCell>
-                        {p.program ? (
-                          <Badge
-                            variant="outline"
-                            className="gap-1.5 border-transparent font-medium"
-                            style={{
-                              backgroundColor: `${p.program.color}1A`,
-                              color: p.program.color,
-                            }}
-                          >
-                            <span
-                              className="h-2 w-2 rounded-full"
-                              style={{ backgroundColor: p.program.color }}
-                            />
-                            {p.program.code}
-                          </Badge>
-                        ) : (
+                        {progs.length === 0 ? (
                           <span className="text-xs text-muted-foreground">—</span>
+                        ) : (
+                          <div className="flex flex-wrap items-center gap-1">
+                            {shownProgs.map((prog) => (
+                              <Badge
+                                key={prog.id}
+                                variant="outline"
+                                className="gap-1.5 border-transparent font-medium"
+                                style={{
+                                  backgroundColor: `${prog.color}1A`,
+                                  color: prog.color,
+                                }}
+                              >
+                                <span
+                                  className="h-2 w-2 rounded-full"
+                                  style={{ backgroundColor: prog.color }}
+                                />
+                                {prog.code}
+                              </Badge>
+                            ))}
+                            {extraProgs > 0 && (
+                              <Badge
+                                variant="outline"
+                                className="border-transparent bg-muted text-muted-foreground"
+                              >
+                                +{extraProgs}
+                              </Badge>
+                            )}
+                          </div>
                         )}
                       </TableCell>
                       <TableCell>
@@ -851,9 +911,15 @@ function PaymentDialog({
     payment
       ? {
           studentId: payment.studentId,
-          programId: payment.programId ?? '',
+          programIds: Array.from(
+            new Set(
+              [
+                ...(payment.items ?? []).map((it) => it.programId),
+                payment.programId,
+              ].filter((id): id is string => !!id),
+            ),
+          ),
           month: payment.month,
-          amount: String(payment.amount),
           paidAmount: String(payment.paidAmount),
           method: payment.method,
           dueDate: payment.dueDate ? toIsoDate(new Date(payment.dueDate)) : '',
@@ -864,6 +930,69 @@ function PaymentDialog({
   )
 
   const isEdit = mode === 'edit' && !!payment
+
+  // ─── Billable programmes (active list + legacy programmes on the bill) ─
+  const allPrograms = useMemo<ProgramRow[]>(() => {
+    const map = new Map<string, ProgramRow>()
+    for (const p of programs) map.set(p.id, p)
+    if (isEdit && payment) {
+      for (const it of payment.items ?? []) {
+        const prog = it.program
+        if (prog && !map.has(prog.id)) {
+          map.set(prog.id, {
+            id: prog.id,
+            code: prog.code,
+            name: prog.name,
+            description: null,
+            color: prog.color,
+            monthlyFee: prog.monthlyFee ?? it.amount,
+            active: true,
+          })
+        }
+      }
+      if (payment.program && !map.has(payment.program.id)) {
+        map.set(payment.program.id, {
+          id: payment.program.id,
+          code: payment.program.code,
+          name: payment.program.name,
+          description: null,
+          color: payment.program.color,
+          monthlyFee: 0,
+          active: true,
+        })
+      }
+    }
+    return Array.from(map.values())
+  }, [programs, isEdit, payment])
+
+  const selectedPrograms = useMemo(
+    () => allPrograms.filter((p) => form.programIds.includes(p.id)),
+    [allPrograms, form.programIds],
+  )
+
+  // Bill total = Σ selected programme monthly fees (server recomputes the same)
+  const totalAmount = useMemo(
+    () => selectedPrograms.reduce((sum, p) => sum + (p.monthlyFee || 0), 0),
+    [selectedPrograms],
+  )
+
+  // ─── Programme checkbox toggles / quick actions ──────────────────
+  const toggleProgram = useCallback((id: string) => {
+    setForm((f) => ({
+      ...f,
+      programIds: f.programIds.includes(id)
+        ? f.programIds.filter((x) => x !== id)
+        : [...f.programIds, id],
+    }))
+  }, [])
+
+  const selectAllPrograms = useCallback(() => {
+    setForm((f) => ({ ...f, programIds: allPrograms.map((p) => p.id) }))
+  }, [allPrograms])
+
+  const clearPrograms = useCallback(() => {
+    setForm((f) => ({ ...f, programIds: [] }))
+  }, [])
 
   // ─── Resolve selected student for edit mode ───────────────────────────
   useEffect(() => {
@@ -905,42 +1034,24 @@ function PaymentDialog({
     }
   }, [studentQuery])
 
-  // ─── When student changes, auto-fill amount from program.monthlyFee ─
+  // ─── When student changes, auto-check their enrolled programmes ───────
   const handleSelectStudent = useCallback(
     (s: StudentRow) => {
       setSelectedStudent(s)
       setStudentOpen(false)
       setStudentQuery('')
       setForm((f) => {
-        // Prefer student's primary enrollment program; else leave as-is
-        const en = s.enrollments?.[0]?.program
-        const progMatch =
-          en && programs.find((p) => p.id === en.id) ? en : null
-        const programId = progMatch?.id ?? f.programId
-        const fee =
-          progMatch && programs.find((p) => p.id === progMatch.id)?.monthlyFee
-            ? programs.find((p) => p.id === progMatch.id)!.monthlyFee
-            : f.amount
+        const enrolled = (s.enrollments ?? [])
+          .map((e) => e.program?.id)
+          .filter((id): id is string => !!id)
+          .filter((id) => programs.some((p) => p.id === id))
         return {
           ...f,
           studentId: s.id,
-          programId,
-          amount: fee ? String(fee) : f.amount,
+          programIds:
+            enrolled.length > 0 ? Array.from(new Set(enrolled)) : f.programIds,
         }
       })
-    },
-    [programs],
-  )
-
-  // ─── When program changes (in dialog), auto-fill amount ──────────────
-  const handleSelectProgram = useCallback(
-    (programId: string) => {
-      const prog = programs.find((p) => p.id === programId)
-      setForm((f) => ({
-        ...f,
-        programId,
-        amount: prog ? String(prog.monthlyFee) : f.amount,
-      }))
     },
     [programs],
   )
@@ -955,19 +1066,18 @@ function PaymentDialog({
       toast.error('Month must be in YYYY-MM format')
       return
     }
-    const amount = parseFloat(form.amount) || 0
-    const paidAmount = parseFloat(form.paidAmount) || 0
-    if (amount <= 0) {
-      toast.error('Amount must be greater than 0')
+    const programIds = Array.from(new Set(form.programIds))
+    if (programIds.length === 0) {
+      toast.error('Select at least one programme for this bill')
       return
     }
+    const paidAmount = parseFloat(form.paidAmount) || 0
     setSaving(true)
     try {
       const payload = {
         studentId: form.studentId,
-        programId: form.programId || null,
         month: form.month,
-        amount,
+        programIds,
         paidAmount,
         method: form.method,
         dueDate: form.dueDate || null,
@@ -995,7 +1105,7 @@ function PaymentDialog({
     }
   }
 
-  const balance = Math.max(0, (parseFloat(form.amount) || 0) - (parseFloat(form.paidAmount) || 0))
+  const balance = Math.max(0, totalAmount - (parseFloat(form.paidAmount) || 0))
 
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
@@ -1007,8 +1117,8 @@ function PaymentDialog({
           </DialogTitle>
           <DialogDescription>
             {isEdit
-              ? `Update receipt ${payment?.receiptNo ?? '—'} for ${payment?.student.fullName ?? ''}.`
-              : 'Create a new fee payment record. Receipt number is auto-generated.'}
+              ? `Update receipt ${payment?.receiptNo ?? '—'} for ${payment?.student.fullName ?? ''}. Changing the selected programmes recalculates the bill total.`
+              : 'One bill per student — tick one or more programmes and the total is computed automatically. Receipt number is auto-generated.'}
           </DialogDescription>
         </DialogHeader>
 
@@ -1037,7 +1147,7 @@ function PaymentDialog({
                   onClick={() => {
                     if (!isEdit) {
                       setSelectedStudent(null)
-                      setForm((f) => ({ ...f, studentId: '', programId: '' }))
+                      setForm((f) => ({ ...f, studentId: '', programIds: [] }))
                     }
                   }}
                   disabled={isEdit}
@@ -1097,57 +1207,14 @@ function PaymentDialog({
             )}
           </div>
 
-          {/* Program + month */}
+          {/* Month + Method */}
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className="flex flex-col gap-1.5">
-              <Label>Program</Label>
-              <Select value={form.programId} onValueChange={handleSelectProgram}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select program" />
-                </SelectTrigger>
-                <SelectContent>
-                  {programs.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>
-                      <span className="flex items-center gap-2">
-                        <span
-                          className="h-2 w-2 rounded-full"
-                          style={{ backgroundColor: p.color }}
-                        />
-                        {p.name} — {currency(p.monthlyFee)}
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
             <div className="flex flex-col gap-1.5">
               <Label>Month (YYYY-MM) *</Label>
               <Input
                 type="month"
                 value={form.month}
                 onChange={(e) => setForm((f) => ({ ...f, month: e.target.value }))}
-              />
-            </div>
-          </div>
-
-          {/* Amounts + method */}
-          <div className="grid gap-4 sm:grid-cols-3">
-            <div className="flex flex-col gap-1.5">
-              <Label>Amount billed (LKR) *</Label>
-              <Input
-                type="number"
-                min={0}
-                value={form.amount}
-                onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label>Paid amount (LKR)</Label>
-              <Input
-                type="number"
-                min={0}
-                value={form.paidAmount}
-                onChange={(e) => setForm((f) => ({ ...f, paidAmount: e.target.value }))}
               />
             </div>
             <div className="flex flex-col gap-1.5">
@@ -1170,22 +1237,135 @@ function PaymentDialog({
             </div>
           </div>
 
-          {/* Balance hint */}
-          {balance > 0 ? (
-            <div className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-              Outstanding balance: <span className="font-semibold">{currency(balance)}</span>{' '}
-              {parseFloat(form.paidAmount) > 0
-                ? '· status will be set to Partial'
-                : '· status will be set to Pending'}
+          {/* Programmes multi-select (one bill, several programmes) */}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <Label>Programmes *</Label>
+              <div className="flex items-center gap-1">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  onClick={selectAllPrograms}
+                >
+                  Select all
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs text-muted-foreground"
+                  onClick={clearPrograms}
+                >
+                  Clear
+                </Button>
+              </div>
             </div>
-          ) : parseFloat(form.amount) > 0 ? (
-            <div className="rounded-lg bg-emerald-500/10 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-300">
-              Fully paid · status will be set to <span className="font-semibold">Paid</span>
+            <div className="scroll-thin max-h-44 overflow-y-auto rounded-lg border p-1.5">
+              {allPrograms.length === 0 ? (
+                <p className="p-2 text-xs text-muted-foreground">
+                  No active programmes available.
+                </p>
+              ) : (
+                allPrograms.map((p) => {
+                  const checked = form.programIds.includes(p.id)
+                  return (
+                    <div
+                      key={p.id}
+                      className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 transition-colors hover:bg-muted/50"
+                    >
+                      <div className="flex min-w-0 items-center gap-2.5">
+                        <Checkbox
+                          id={`bill-prog-${p.id}`}
+                          checked={checked}
+                          onCheckedChange={() => toggleProgram(p.id)}
+                        />
+                        <span
+                          className="h-2.5 w-2.5 shrink-0 rounded-full"
+                          style={{ backgroundColor: p.color }}
+                        />
+                        <Label
+                          htmlFor={`bill-prog-${p.id}`}
+                          className="min-w-0 cursor-pointer font-normal"
+                        >
+                          <span className="block truncate text-sm font-medium leading-tight">
+                            {p.name}
+                          </span>
+                          <span className="block font-mono text-[10px] leading-tight text-muted-foreground">
+                            {p.code}
+                          </span>
+                        </Label>
+                      </div>
+                      <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                        {currency(p.monthlyFee)}/mo
+                      </span>
+                    </div>
+                  )
+                })
+              )}
             </div>
-          ) : null}
+          </div>
 
-          {/* Dates */}
-          <div className="grid gap-4 sm:grid-cols-2">
+          {/* Bill summary */}
+          <div className="rounded-lg border bg-muted/30 p-3">
+            <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Bill summary
+            </p>
+            {selectedPrograms.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                No programmes selected yet — tick one or more above.
+              </p>
+            ) : (
+              <div className="space-y-1.5">
+                {selectedPrograms.map((p) => (
+                  <div key={p.id} className="flex items-center justify-between gap-2 text-sm">
+                    <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+                      <span
+                        className="h-2 w-2 shrink-0 rounded-full"
+                        style={{ backgroundColor: p.color }}
+                      />
+                      <span className="truncate">{p.name}</span>
+                    </span>
+                    <span className="shrink-0 font-medium tabular-nums">
+                      {currency(p.monthlyFee)}
+                    </span>
+                  </div>
+                ))}
+                <div className="flex items-center justify-between gap-2 border-t pt-2">
+                  <span className="text-sm font-semibold">Total billed</span>
+                  <span className="text-base font-bold tabular-nums text-primary">
+                    {currency(totalAmount)}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Paid amount + dates */}
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <Label>Paid amount (LKR)</Label>
+                {totalAmount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setForm((f) => ({ ...f, paidAmount: String(totalAmount) }))
+                    }
+                    className="text-[11px] font-medium text-primary hover:underline"
+                  >
+                    Pay full
+                  </button>
+                )}
+              </div>
+              <Input
+                type="number"
+                min={0}
+                value={form.paidAmount}
+                onChange={(e) => setForm((f) => ({ ...f, paidAmount: e.target.value }))}
+              />
+            </div>
             <div className="flex flex-col gap-1.5">
               <Label>Due date</Label>
               <Input
@@ -1204,6 +1384,20 @@ function PaymentDialog({
               />
             </div>
           </div>
+
+          {/* Balance hint */}
+          {balance > 0 ? (
+            <div className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+              Outstanding balance: <span className="font-semibold">{currency(balance)}</span>{' '}
+              {parseFloat(form.paidAmount) > 0
+                ? '· status will be set to Partial'
+                : '· status will be set to Pending'}
+            </div>
+          ) : totalAmount > 0 ? (
+            <div className="rounded-lg bg-emerald-500/10 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-300">
+              Fully paid · status will be set to <span className="font-semibold">Paid</span>
+            </div>
+          ) : null}
 
           {/* Note */}
           <div className="flex flex-col gap-1.5">
@@ -1317,20 +1511,24 @@ function ReceiptDialog({ payment, onClose }: ReceiptDialogProps) {
 
             {/* Line items */}
             <div className="space-y-1.5 border-y py-3 text-sm">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Program</span>
-                <span className="font-medium">
-                  {payment.program?.name ?? '—'}{' '}
-                  {payment.program && (
-                    <span
-                      className="ml-1 inline-block h-2 w-2 rounded-full align-middle"
-                      style={{ backgroundColor: payment.program.color }}
-                    />
-                  )}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Amount billed</span>
+              {billLines(payment).map((item, i) => (
+                <div key={`${item.key}-${i}`} className="flex justify-between gap-2">
+                  <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+                    {item.color && (
+                      <span
+                        className="h-2 w-2 shrink-0 rounded-full"
+                        style={{ backgroundColor: item.color }}
+                      />
+                    )}
+                    <span className="truncate">{item.description}</span>
+                  </span>
+                  <span className="shrink-0 font-medium tabular-nums">
+                    {currency(item.amount)}
+                  </span>
+                </div>
+              ))}
+              <div className="flex justify-between border-t pt-1.5">
+                <span className="text-muted-foreground">Total billed</span>
                 <span className="font-semibold tabular-nums">{currency(payment.amount)}</span>
               </div>
               <div className="flex justify-between">
@@ -1478,8 +1676,9 @@ function BulkGenerateDialog({
             Generate Monthly Fees
           </DialogTitle>
           <DialogDescription>
-            Auto-create payment records for all active students for the selected month.
-            Students without payments will get a record based on their primary program&rsquo;s monthly fee.
+            Creates <span className="font-medium">one bill per student</span> for the selected
+            month. Every programme the student is enrolled in becomes a line item on that single
+            bill — the student&rsquo;s name appears once, no matter how many programmes they take.
           </DialogDescription>
         </DialogHeader>
 
@@ -1493,7 +1692,8 @@ function BulkGenerateDialog({
               onChange={(e) => setTargetMonth(e.target.value)}
             />
             <p className="text-xs text-muted-foreground">
-              Payment records will be created with status &ldquo;Pending&rdquo;.
+              Bills will be created with status &ldquo;Pending&rdquo; and one line item per
+              enrolled programme.
             </p>
           </div>
 
@@ -1513,9 +1713,9 @@ function BulkGenerateDialog({
           <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
             <div className="text-amber-700 dark:text-amber-300">
-              <p className="font-medium">Existing records will be skipped</p>
+              <p className="font-medium">Students already billed are skipped</p>
               <p className="mt-0.5 text-amber-600/80 dark:text-amber-400/80">
-                If a student already has a payment for this month, no duplicate will be created.
+                If a student already has a bill for this month, no duplicate will be created.
               </p>
             </div>
           </div>

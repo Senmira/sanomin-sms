@@ -86,9 +86,30 @@ export interface TeacherRow {
   hireDate: string | null
   lastActive: string | null
   monthlyRate: number
+  basicSalary: number
+  allowances: number
+  epfNo: string | null
+  salaryNote: string | null
   photoUrl: string | null
   classes: Array<{ id: string; name: string; dayOfWeek: string | null; startTime: string | null }>
   _count?: { classes: number; attendance: number }
+}
+
+// Sri Lankan statutory contribution rates (EPF Act No. 15 of 1958 / ETF Act
+// No. 46 of 1980). Employee EPF 8% deducted from salary; employer pays
+// EPF 12% + ETF 3% on top.
+export const EPF_EMPLOYEE_RATE = 0.08
+export const EPF_EMPLOYER_RATE = 0.12
+export const ETF_EMPLOYER_RATE = 0.03
+
+export function salaryBreakdown(basicSalary: number, allowances: number) {
+  const gross = (basicSalary || 0) + (allowances || 0)
+  const epfEmployee = (basicSalary || 0) * EPF_EMPLOYEE_RATE
+  const netSalary = gross - epfEmployee
+  const epfEmployer = (basicSalary || 0) * EPF_EMPLOYER_RATE
+  const etfEmployer = (basicSalary || 0) * ETF_EMPLOYER_RATE
+  const employerCost = gross + epfEmployer + etfEmployer
+  return { gross, epfEmployee, netSalary, epfEmployer, etfEmployer, employerCost }
 }
 
 export interface ProgramRow {
@@ -111,6 +132,7 @@ export interface ClassRow {
   room: string | null
   capacity: number
   fee: number
+  instituteSharePct: number
   active: boolean
   notes: string | null
   program: { id: string; code: string; name: string; color: string } | null
@@ -132,6 +154,20 @@ export interface AttendanceRow {
   personName?: string
 }
 
+export interface PaymentItemRow {
+  id: string
+  programId: string | null
+  description: string | null
+  amount: number
+  program: {
+    id: string
+    code: string
+    name: string
+    color: string
+    monthlyFee: number
+  } | null
+}
+
 export interface PaymentRow {
   id: string
   studentId: string
@@ -150,6 +186,7 @@ export interface PaymentRow {
   updatedAt: string
   student: { id: string; studentId: string; fullName: string }
   program: { id: string; code: string; name: string; color: string } | null
+  items: PaymentItemRow[]
 }
 
 export interface PaymentSummary {

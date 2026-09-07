@@ -29,6 +29,7 @@ model Program {
   enrollments Enrollment[]
   classes     Class[]
   payments    Payment[]
+  paymentItems PaymentItem[]
 }
 
 // ─── Students ─────────────────────────────────────────────────────────────
@@ -92,6 +93,11 @@ model Teacher {
   status         String   @default("Active")  // Active | Inactive | On Leave
   hireDate       DateTime?
   monthlyRate    Float    @default(0)          // for external tuition teachers
+  // ── Salary & statutory contributions (Sri Lanka) ──
+  basicSalary    Float    @default(0)          // monthly basic salary
+  allowances     Float    @default(0)          // monthly allowances (transport, etc.)
+  epfNo          String?                      // EPF beneficiary number
+  salaryNote     String?                      // salary remarks / bank details
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -111,6 +117,7 @@ model Class {
   room        String?
   capacity    Int      @default(20)
   fee         Float    @default(0)
+  instituteSharePct Float @default(25)   // % of class fee that goes to the institute
   active      Boolean  @default(true)
   notes       String?
   createdAt   DateTime @default(now())
@@ -182,6 +189,22 @@ model Payment {
   updatedAt   DateTime @updatedAt
 
   student     Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  program     Program? @relation(fields: [programId], references: [id], onDelete: SetNull)
+  items       PaymentItem[]
+}
+
+// ─── PaymentItem (one bill line per programme) ─────────────────────────────
+// A single Payment bill can contain SEVERAL programmes for the same student —
+// the student name appears once and each programme is a line item.
+model PaymentItem {
+  id          String   @id @default(cuid())
+  paymentId   String
+  programId   String?
+  description String?                       // optional label override
+  amount      Float    @default(0)          // amount charged for this line
+  createdAt   DateTime @default(now())
+
+  payment     Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
   program     Program? @relation(fields: [programId], references: [id], onDelete: SetNull)
 }
 

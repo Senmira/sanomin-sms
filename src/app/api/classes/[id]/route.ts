@@ -1,4 +1,4 @@
-import { NextResponse } from 'next.server'
+import { NextResponse } from 'next/server'
 import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 
@@ -20,6 +20,7 @@ function serialize(c: ClassWithRelations) {
     room: c.room,
     capacity: c.capacity,
     fee: c.fee,
+    instituteSharePct: c.instituteSharePct,
     active: c.active,
     notes: c.notes,
     program: c.program
@@ -74,6 +75,7 @@ interface UpdateBody {
   room?: string | null
   capacity?: number | null
   fee?: number | null
+  instituteSharePct?: number | null
   active?: boolean | null
   notes?: string | null
 }
@@ -167,6 +169,13 @@ export async function PUT(
   if (body.fee !== undefined) {
     data.fee =
       typeof body.fee === 'number' && !isNaN(body.fee) ? Math.max(0, body.fee) : 0
+  }
+
+  if (body.instituteSharePct !== undefined) {
+    data.instituteSharePct =
+      typeof body.instituteSharePct === 'number' && !isNaN(body.instituteSharePct)
+        ? Math.min(100, Math.max(0, body.instituteSharePct))
+        : 25
   }
 
   if (body.active !== undefined) data.active = Boolean(body.active)

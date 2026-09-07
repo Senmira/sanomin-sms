@@ -31,6 +31,7 @@ import {
   ScanLine,
   Scan,
   KeyRound,
+  Landmark,
   AlertCircle,
   Clock,
 } from 'lucide-react'
@@ -42,6 +43,7 @@ import {
   TEACHER_TYPES,
   TEACHER_STATUS,
   DAYS,
+  salaryBreakdown,
 } from '@/lib/types'
 import {
   initials,
@@ -337,6 +339,20 @@ export function TeachersSection() {
   const showingFrom = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1
   const showingTo = Math.min(total, page * PAGE_SIZE)
 
+  // Σ net take-home over all loaded teachers. Rate-only external teachers
+  // (no basic salary / allowances) fall back to their monthly tuition rate,
+  // since statutory EPF/ETF does not apply to them.
+  const monthlyPayroll = useMemo(
+    () =>
+      rows.reduce((sum, t) => {
+        if (t.type === 'External' && !t.basicSalary && !t.allowances) {
+          return sum + (t.monthlyRate || 0)
+        }
+        return sum + salaryBreakdown(t.basicSalary, t.allowances).netSalary
+      }, 0),
+    [rows],
+  )
+
   return (
     <div className="flex flex-col gap-6">
       <SectionHeader
@@ -363,7 +379,7 @@ export function TeachersSection() {
       />
 
       {/* Stats strip */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
         <StatCard
           label="Total teachers"
           value={stats.totalTeachers}
@@ -391,6 +407,14 @@ export function TeachersSection() {
           icon={Fingerprint}
           accent="amber"
           hint="Currently inactive"
+        />
+        <StatCard
+          label="Monthly payroll"
+          value={currency(monthlyPayroll)}
+          icon={Wallet}
+          accent="green"
+          hint="Net take-home · incl. EPF"
+          className="col-span-2 lg:col-span-1"
         />
       </div>
 
@@ -657,6 +681,11 @@ function TeacherTableRow({
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
+  const rateOnlyExternal =
+    teacher.type === 'External' && !teacher.basicSalary && !teacher.allowances
+  const sb = salaryBreakdown(teacher.basicSalary, teacher.allowances)
+  const netPay = rateOnlyExternal ? teacher.monthlyRate : sb.netSalary
+  const grossPay = rateOnlyExternal ? teacher.monthlyRate : sb.gross
 
   return (
     <TableRow className="cursor-pointer" onClick={onView}>
@@ -673,6 +702,23 @@ function TeacherTableRow({
             </div>
             <div className="font-mono text-xs text-muted-foreground">
               {teacher.teacherId}
+            </div>
+            <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <Wallet className="h-3 w-3 shrink-0" />
+              <span
+                className="truncate tabular-nums"
+                title={`Gross ${currency(grossPay)} / month`}
+              >
+                Net {currency(netPay)}/mo
+              </span>
+              {teacher.epfNo && (
+                <Badge
+                  variant="outline"
+                  className="h-4 shrink-0 px-1 text-[9px] leading-none"
+                >
+                  EPF #{teacher.epfNo}
+                </Badge>
+              )}
             </div>
           </div>
         </div>
@@ -824,6 +870,10 @@ interface FormState {
   status: string
   hireDate: string
   monthlyRate: string
+  basicSalary: string
+  allowances: string
+  epfNo: string
+  salaryNote: string
   fingerprintId: string
   photoUrl: string
 }
@@ -842,6 +892,10 @@ function emptyForm(): FormState {
     status: 'Active',
     hireDate: toDateInput(new Date().toISOString()),
     monthlyRate: '0',
+    basicSalary: '0',
+    allowances: '0',
+    epfNo: '',
+    salaryNote: '',
     fingerprintId: '',
     photoUrl: '',
   }
@@ -861,6 +915,10 @@ function formFromTeacher(t: TeacherRow): FormState {
     status: t.status,
     hireDate: toDateInput(t.hireDate),
     monthlyRate: String(t.monthlyRate ?? 0),
+    basicSalary: String(t.basicSalary ?? 0),
+    allowances: String(t.allowances ?? 0),
+    epfNo: t.epfNo || '',
+    salaryNote: t.salaryNote || '',
     fingerprintId: t.fingerprintId || '',
     photoUrl: t.photoUrl || '',
   }
@@ -891,6 +949,12 @@ function AddEditTeacherDialog({
   const isEdit = teacher !== null
   const isExternal = form.type === 'External'
 
+  // Live salary breakdown — recomputed on every keystroke
+  const sb = salaryBreakdown(
+    Number(form.basicSalary || 0),
+    Number(form.allowances || 0),
+  )
+
   const updateField = <K extends keyof FormState>(key: K, value: FormState[K]) => {
     setForm((f) => ({ ...f, [key]: value }))
   }
@@ -908,6 +972,18 @@ function AddEditTeacherDialog({
       return
     }
 
+    const basicSalaryNum = Number(form.basicSalary || 0)
+    if (isNaN(basicSalaryNum) || basicSalaryNum < 0) {
+      setErr('Basic salary must be a non-negative number')
+      return
+    }
+
+    const allowancesNum = Number(form.allowances || 0)
+    if (isNaN(allowancesNum) || allowancesNum < 0) {
+      setErr('Allowances must be a non-negative number')
+      return
+    }
+
     const payload = {
       fullName: form.fullName.trim(),
       type: form.type,
@@ -921,6 +997,10 @@ function AddEditTeacherDialog({
       status: form.status,
       hireDate: form.hireDate || null,
       monthlyRate: monthlyRateNum,
+      basicSalary: basicSalaryNum,
+      allowances: allowancesNum,
+      epfNo: form.epfNo.trim() || null,
+      salaryNote: form.salaryNote.trim() || null,
       fingerprintId: form.fingerprintId || null,
       photoUrl: form.photoUrl || null,
     }
@@ -1139,6 +1219,108 @@ function AddEditTeacherDialog({
               </p>
             </Field>
           </div>
+
+          {/* Salary & EPF */}
+          <div className="rounded-lg border bg-muted/20 p-4">
+            <div className="mb-3 flex items-center gap-2.5">
+              <div className="flex size-8 shrink-0 items-center justify-center rounded-md bg-background text-muted-foreground ring-1 ring-border">
+                <Landmark className="h-4 w-4" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-medium leading-tight">
+                  {isExternal ? 'Salary / Rate & EPF' : 'Salary & EPF'}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  EPF/ETF are computed on basic salary only — allowances are
+                  fully take-home
+                </p>
+              </div>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Basic salary (LKR)">
+                <Input
+                  type="number"
+                  min={0}
+                  step={500}
+                  value={form.basicSalary}
+                  onChange={(e) => updateField('basicSalary', e.target.value)}
+                  placeholder="0"
+                />
+              </Field>
+              <Field label="Allowances (LKR)">
+                <Input
+                  type="number"
+                  min={0}
+                  step={500}
+                  value={form.allowances}
+                  onChange={(e) => updateField('allowances', e.target.value)}
+                  placeholder="0"
+                />
+              </Field>
+              <Field label="EPF No">
+                <Input
+                  value={form.epfNo}
+                  onChange={(e) => updateField('epfNo', e.target.value)}
+                  placeholder="e.g. EPF/CS/2/1458"
+                  className="font-mono"
+                />
+              </Field>
+              <Field label="Salary note" className="sm:col-span-2">
+                <Textarea
+                  value={form.salaryNote}
+                  onChange={(e) => updateField('salaryNote', e.target.value)}
+                  placeholder="Optional — e.g. includes Rs. 5,000 transport allowance"
+                  className="min-h-16"
+                  rows={2}
+                />
+              </Field>
+            </div>
+
+            {/* Live breakdown */}
+            <div className="mt-3 rounded-md border bg-background p-3">
+              <div className="grid gap-1.5 text-sm">
+                <BreakdownRow
+                  label="Gross salary (basic + allowances)"
+                  value={currency(sb.gross)}
+                />
+                <BreakdownRow
+                  label="EPF employee (−8% of basic)"
+                  value={`−${currency(sb.epfEmployee)}`}
+                />
+                <div className="flex items-center justify-between gap-4 border-t border-dashed pt-1.5">
+                  <span className="font-medium text-muted-foreground">
+                    Net take-home
+                  </span>
+                  <span className="font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
+                    {currency(sb.netSalary)}
+                  </span>
+                </div>
+                <BreakdownRow
+                  label="EPF employer (12% of basic)"
+                  value={currency(sb.epfEmployer)}
+                  muted
+                />
+                <BreakdownRow
+                  label="ETF employer (3% of basic)"
+                  value={currency(sb.etfEmployer)}
+                  muted
+                />
+                <div className="flex items-center justify-between gap-4 border-t pt-1.5">
+                  <span className="font-medium text-muted-foreground">
+                    Total institute cost
+                  </span>
+                  <span className="font-semibold tabular-nums text-primary">
+                    {currency(sb.employerCost)}
+                  </span>
+                </div>
+              </div>
+              <p className="mt-2 text-[11px] leading-snug text-muted-foreground">
+                EPF 8% employee · 12% + 3% employer (calculated on basic salary
+                — Sri Lanka statutory rates)
+              </p>
+            </div>
+          </div>
         </div>
 
         <DialogFooter>
@@ -1171,6 +1353,32 @@ function Field({
       <Label className="mb-1.5 block">{label}</Label>
       {children}
       {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
+    </div>
+  )
+}
+
+// One label/value line inside the salary breakdown panel
+function BreakdownRow({
+  label,
+  value,
+  muted,
+}: {
+  label: string
+  value: string
+  muted?: boolean
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <span className={muted ? 'text-muted-foreground' : 'text-foreground/80'}>
+        {label}
+      </span>
+      <span
+        className={`font-medium tabular-nums ${
+          muted ? 'text-muted-foreground' : 'text-foreground'
+        }`}
+      >
+        {value}
+      </span>
     </div>
   )
 }
@@ -1491,7 +1699,12 @@ function ProfileDialog({
     .map((s) => s.trim())
     .filter(Boolean)
 
-  const classesList = detail?.classes ?? teacher.classes ?? []
+  // Cast: the list endpoint's classes lack program/room/endTime; the detail
+  // endpoint (preferred) returns full ClassDetail rows.
+  const classesList = (detail?.classes ?? teacher.classes ??
+    []) as ClassDetail[]
+
+  const sb = salaryBreakdown(teacher.basicSalary, teacher.allowances)
 
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
@@ -1549,6 +1762,15 @@ function ProfileDialog({
                 >
                   <Briefcase className="h-3 w-3" />
                   External tuition
+                </Badge>
+              )}
+              {teacher.epfNo && (
+                <Badge
+                  variant="outline"
+                  className="border-emerald-500/30 bg-emerald-500/10 font-mono text-emerald-700 dark:text-emerald-300"
+                >
+                  <Landmark className="h-3 w-3" />
+                  EPF #{teacher.epfNo}
                 </Badge>
               )}
               {specs.map((s) => (
@@ -1636,11 +1858,39 @@ function ProfileDialog({
                 label="Hire date"
                 value={fmtDate(teacher.hireDate)}
               />
-              <DetailItem
-                icon={<Wallet className="h-4 w-4" />}
-                label="Monthly rate"
-                value={currency(teacher.monthlyRate)}
-              />
+              {teacher.type === 'External' && (
+                <DetailItem
+                  icon={<Wallet className="h-4 w-4" />}
+                  label="Monthly rate (tuition)"
+                  value={currency(teacher.monthlyRate)}
+                />
+              )}
+              {(teacher.type === 'Internal' ||
+                teacher.basicSalary > 0 ||
+                teacher.allowances > 0) && (
+                <>
+                  <DetailItem
+                    icon={<Wallet className="h-4 w-4" />}
+                    label="Net salary (incl. EPF)"
+                    value={currency(sb.netSalary)}
+                    sub={`Gross ${currency(sb.gross)} = basic ${currency(teacher.basicSalary)} + allowances ${currency(teacher.allowances)}`}
+                  />
+                  <DetailItem
+                    icon={<Landmark className="h-4 w-4" />}
+                    label="Employer EPF + ETF"
+                    value={currency(sb.employerCost)}
+                    sub="EPF 12% + ETF 3% on basic salary"
+                  />
+                </>
+              )}
+              {teacher.salaryNote && (
+                <DetailItem
+                  icon={<Landmark className="h-4 w-4" />}
+                  label="Salary note"
+                  value={teacher.salaryNote}
+                  fullSpan
+                />
+              )}
               <DetailItem
                 icon={<MapPin className="h-4 w-4" />}
                 label="Address"
@@ -1750,12 +2000,14 @@ function DetailItem({
   icon,
   label,
   value,
+  sub,
   mono,
   fullSpan,
 }: {
   icon: React.ReactNode
   label: string
   value: string
+  sub?: string
   mono?: boolean
   fullSpan?: boolean
 }) {
@@ -1777,6 +2029,9 @@ function DetailItem({
         >
           {value}
         </p>
+        {sub && (
+          <p className="truncate text-[11px] text-muted-foreground">{sub}</p>
+        )}
       </div>
     </div>
   )

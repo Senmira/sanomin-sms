@@ -21,6 +21,7 @@ function serialize(c: ClassWithRelations) {
     room: c.room,
     capacity: c.capacity,
     fee: c.fee,
+    instituteSharePct: c.instituteSharePct,
     active: c.active,
     notes: c.notes,
     program: c.program
@@ -118,6 +119,7 @@ interface CreateBody {
   room?: string | null
   capacity?: number | null
   fee?: number | null
+  instituteSharePct?: number | null
   active?: boolean | null
   notes?: string | null
 }
@@ -176,6 +178,10 @@ export async function POST(req: Request) {
         : 20,
     fee:
       typeof body.fee === 'number' && !isNaN(body.fee) ? Math.max(0, body.fee) : 0,
+    instituteSharePct:
+      typeof body.instituteSharePct === 'number' && !isNaN(body.instituteSharePct)
+        ? Math.min(100, Math.max(0, body.instituteSharePct))
+        : 25,
     active: body.active ?? true,
     notes: body.notes?.trim() || null,
   }

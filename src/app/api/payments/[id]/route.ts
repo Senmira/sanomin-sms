@@ -2,11 +2,17 @@ import { NextResponse } from 'next/server'
 import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 
-// ─── Serializer: Payment → PaymentRow JSON ────────────────────────────────
+// ─── Serializer: Payment (with line items) → PaymentRow JSON ───────────────
 type PaymentWithRelations = Prisma.PaymentGetPayload<{
   include: {
-    student: { select: { id: true, studentId: true, fullName: true } }
-    program: { select: { id: true, code: true, name: true, color: true } }
+    student: { select: { id: true; studentId: true; fullName: true } }
+    program: { select: { id: true; code: true; name: true; color: true } }
+    items: {
+      orderBy: { createdAt: 'asc' }
+      include: {
+        program: { select: { id: true; code: true; name: true; color: true; monthlyFee: true } }
+      }
+    }
   }
 }>
 
@@ -40,7 +46,35 @@ function serialize(p: PaymentWithRelations) {
           color: p.program.color,
         }
       : null,
+    items: p.items.map((it) => ({
+      id: it.id,
+      programId: it.programId,
+      description: it.description,
+      amount: it.amount,
+      program: it.program
+        ? {
+            id: it.program.id,
+            code: it.program.code,
+            name: it.program.name,
+            color: it.program.color,
+            monthlyFee: it.program.monthlyFee,
+          }
+        : null,
+    })),
   }
+}
+
+const PAYMENT_INCLUDE = {
+  student: { select: { id: true, studentId: true, fullName: true } },
+  program: { select: { id: true, code: true, name: true, color: true } },
+  items: {
+    orderBy: { createdAt: 'asc' as const },
+    include: {
+      program: {
+        select: { id: true, code: true, name: true, color: true, monthlyFee: true },
+      },
+    },
+  },
 }
 
 const ALLOWED_STATUSES = new Set(['Pending', 'Partial', 'Paid', 'Overdue'])
@@ -61,10 +95,7 @@ export async function GET(_req: Request, { params }: RouteCtx) {
   const { id } = await params
   const payment = await db.payment.findUnique({
     where: { id },
-    include: {
-      student: { select: { id: true, studentId: true, fullName: true } },
-      program: { select: { id: true, code: true, name: true, color: true } },
-    },
+    include: PAYMENT_INCLUDE,
   })
   if (!payment) {
     return NextResponse.json({ error: 'Payment not found' }, { status: 404 })
@@ -76,6 +107,7 @@ export async function GET(_req: Request, { params }: RouteCtx) {
 interface UpdateBody {
   studentId?: string
   programId?: string | null
+  programIds?: string[]
   classId?: string | null
   month?: string
   amount?: number
@@ -86,6 +118,7 @@ interface UpdateBody {
   dueDate?: string | null
   note?: string | null
   receiptNo?: string | null
+  items?: Array<{ programId?: string | null; amount?: number; description?: string | null }>
 }
 
 export async function PUT(req: Request, { params }: RouteCtx) {
@@ -139,11 +172,65 @@ export async function PUT(req: Request, { params }: RouteCtx) {
     }
   }
 
+  // ── Resolve new line items when provided (replace-all semantics) ─────────
+  let replaceItems: Array<{ programId: string | null; amount: number; description: string | null }> | null = null
+  let itemsTotal = 0
+  if (Array.isArray(body.items) || Array.isArray(body.programIds)) {
+    const lines: Array<{ programId: string | null; amount: number; description: string | null }> = []
+    if (Array.isArray(body.items) && body.items.length > 0) {
+      for (const it of body.items) {
+        const pid = it.programId?.trim() || null
+        if (pid) {
+          const prog = await db.program.findUnique({ where: { id: pid } })
+          if (!prog) return NextResponse.json({ error: 'Program not found' }, { status: 400 })
+          lines.push({
+            programId: pid,
+            amount:
+              typeof it.amount === 'number' && !isNaN(it.amount) && it.amount >= 0
+                ? it.amount
+                : prog.monthlyFee,
+            description: it.description?.trim() || prog.name,
+          })
+        } else {
+          lines.push({
+            programId: null,
+            amount: typeof it.amount === 'number' && !isNaN(it.amount) && it.amount >= 0 ? it.amount : 0,
+            description: it.description?.trim() || 'Custom charge',
+          })
+        }
+      }
+    } else if (Array.isArray(body.programIds) && body.programIds.length > 0) {
+      const programs = await db.program.findMany({
+        where: { id: { in: body.programIds } },
+        select: { id: true, name: true, monthlyFee: true },
+      })
+      if (programs.length !== new Set(body.programIds).size) {
+        return NextResponse.json({ error: 'One or more programs not found' }, { status: 400 })
+      }
+      const byId = new Map(programs.map((p) => [p.id, p]))
+      for (const pid of body.programIds) {
+        const prog = byId.get(pid)!
+        lines.push({ programId: prog.id, amount: prog.monthlyFee, description: prog.name })
+      }
+    }
+    // Deduplicate programmes — the same programme twice on one bill is a mistake
+    const seen = new Set<string>()
+    replaceItems = lines.filter((li) => {
+      if (!li.programId) return true
+      if (seen.has(li.programId)) return false
+      seen.add(li.programId)
+      return true
+    })
+    itemsTotal = replaceItems.reduce((s, li) => s + li.amount, 0)
+  }
+
   // Merge incoming changes over existing
   const amount =
     typeof body.amount === 'number' && !isNaN(body.amount)
       ? Math.max(0, body.amount)
-      : existing.amount
+      : replaceItems
+        ? itemsTotal
+        : existing.amount
   const paidAmount =
     typeof body.paidAmount === 'number' && !isNaN(body.paidAmount)
       ? Math.max(0, body.paidAmount)
@@ -175,14 +262,27 @@ export async function PUT(req: Request, { params }: RouteCtx) {
     if (paidDate === undefined) paidDate = null
   }
 
-  const data: Prisma.PaymentUpdateInput = {}
-  if (body.studentId) data.student = { connect: { id: body.studentId } }
-  if (body.programId !== undefined) {
-    data.program = body.programId ? { connect: { id: body.programId } } : { disconnect: true }
+  const data: Prisma.PaymentUncheckedUpdateInput = {}
+  if (body.studentId) data.studentId = body.studentId
+  if (body.programId !== undefined && !replaceItems) {
+    data.programId = body.programId || null
+  }
+  if (replaceItems) {
+    // keep the legacy programId column in sync for single-programme bills
+    data.programId = replaceItems.length === 1 ? replaceItems[0].programId : null
+    data.items = {
+      deleteMany: {},
+      create: replaceItems.map((li) => ({
+        programId: li.programId,
+        amount: li.amount,
+        description: li.description,
+      })),
+    }
   }
   if (body.classId !== undefined) data.classId = body.classId
   if (body.month) data.month = body.month
-  if (typeof body.amount === 'number' && !isNaN(body.amount)) data.amount = amount
+  if ((typeof body.amount === 'number' && !isNaN(body.amount)) || replaceItems)
+    data.amount = amount
   if (typeof body.paidAmount === 'number' && !isNaN(body.paidAmount)) data.paidAmount = paidAmount
   if (body.method) data.method = body.method
   if (status) data.status = status
@@ -195,10 +295,7 @@ export async function PUT(req: Request, { params }: RouteCtx) {
     const updated = await db.payment.update({
       where: { id },
       data,
-      include: {
-        student: { select: { id: true, studentId: true, fullName: true } },
-        program: { select: { id: true, code: true, name: true, color: true } },
-      },
+      include: PAYMENT_INCLUDE,
     })
     return NextResponse.json(serialize(updated))
   } catch (err) {

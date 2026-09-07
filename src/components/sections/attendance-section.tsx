@@ -35,6 +35,9 @@ import {
   AttendanceRow,
   ATTENDANCE_METHODS,
   ATTENDANCE_STATUS,
+  StudentRow,
+  TeacherRow,
+  ClassRow,
 } from '@/lib/types'
 import { initials, avatarColor, fmtDate, fmtTime, fmtDateTime, timeAgo } from '@/lib/format'
 
@@ -82,6 +85,7 @@ import {
   TableRow,
   TableCell,
 } from '@/components/ui/table'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -166,15 +170,86 @@ interface PersonPick {
   sub: string // gender + ageGroup OR type
 }
 
+// ─── Bulk attendance sheet helpers ───────────────────────────────────────
+const SHEET_STATUSES = ['Present', 'Absent', 'Late', 'Leave'] as const
+const UNSET_STATUS = '__UNSET__' // Radix Select sentinel for "not marked yet"
+
+// ISO datetime → "HH:MM" in local time ('' when null/invalid)
+function isoToHHMM(iso?: string | null): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return ''
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+interface SheetRow {
+  personType: 'Student' | 'Teacher'
+  personId: string
+  ref: string
+  name: string
+  sub: string
+  status: string // '' = unmarked
+  checkIn: string // 'HH:MM' or ''
+  checkOut: string // 'HH:MM' or ''
+  note: string
+  selected: boolean
+}
+
+interface BulkResult {
+  ok: boolean
+  created: number
+  updated: number
+  failed: number
+  errors: string[]
+  message: string
+}
+
+// Fetch ALL active students — server caps limit at 100, so paginate.
+async function fetchAllActiveStudents(programCode: string): Promise<StudentRow[]> {
+  const out: StudentRow[] = []
+  for (let page = 1; page <= 10; page++) {
+    const q = new URLSearchParams({ status: 'Active', limit: '100', page: String(page) })
+    if (programCode) q.set('program', programCode)
+    const res = await api<{ data: StudentRow[]; total: number }>(`/api/students?${q.toString()}`)
+    const batch = res.data || []
+    out.push(...batch)
+    if (batch.length < 100) break
+    if (res.total && out.length >= res.total) break
+  }
+  return out
+}
+
+// Fetch active teachers (limit 100 = server cap).
+async function fetchActiveTeachers(): Promise<TeacherRow[]> {
+  const res = await api<{ data: TeacherRow[] }>('/api/teachers?status=Active&limit=100')
+  return res.data || []
+}
+
+// Fetch every attendance record for one date — server caps limit at 200, paginate.
+async function fetchAttendanceForDate(date: string): Promise<AttendanceRow[]> {
+  const out: AttendanceRow[] = []
+  for (let page = 1; page <= 5; page++) {
+    const res = await api<ListResponse>(
+      `/api/attendance?date=${encodeURIComponent(date)}&limit=200&page=${page}`,
+    )
+    const batch = res.data || []
+    out.push(...batch)
+    if (batch.length < 200) break
+  }
+  return out
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // Scanner Panel
 // ════════════════════════════════════════════════════════════════════════════
 interface ScannerPanelProps {
   onScanSuccess: () => void
   onOpenManual: () => void
+  onOpenSheet: () => void
 }
 
-function ScannerPanel({ onScanSuccess, onOpenManual }: ScannerPanelProps) {
+function ScannerPanel({ onScanSuccess, onOpenManual, onOpenSheet }: ScannerPanelProps) {
   const [tab, setTab] = useState<'barcode' | 'fingerprint'>('barcode')
   const [barcodeValue, setBarcodeValue] = useState('')
   const [fpValue, setFpValue] = useState('')
@@ -299,10 +374,16 @@ function ScannerPanel({ onScanSuccess, onOpenManual }: ScannerPanelProps) {
               Teacher (Fingerprint)
             </TabsTrigger>
           </TabsList>
-          <Button variant="ghost" size="sm" onClick={onOpenManual} className="gap-2 self-start sm:self-auto">
-            <Hand className="h-4 w-4" />
-            Manual entry
-          </Button>
+          <div className="flex items-center gap-2 self-start sm:self-auto">
+            <Button variant="outline" size="sm" onClick={onOpenSheet} className="gap-2">
+              <Users2 className="h-4 w-4" />
+              Attendance sheet
+            </Button>
+            <Button variant="ghost" size="sm" onClick={onOpenManual} className="gap-2">
+              <Hand className="h-4 w-4" />
+              Manual entry
+            </Button>
+          </div>
         </div>
 
         <TabsContent value="barcode" className="mt-0 p-4 sm:p-6">
@@ -822,6 +903,591 @@ function ManualEntryDialog({ open, onOpenChange, onSuccess }: ManualEntryDialogP
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
             Close
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Attendance Sheet Dialog — bulk manual marking with per-row check-in/out
+// ════════════════════════════════════════════════════════════════════════════
+interface AttendanceSheetDialogProps {
+  open: boolean
+  onOpenChange: (v: boolean) => void
+  onSuccess: () => void
+}
+
+const STATUS_TEXT: Record<string, string> = {
+  Present: 'text-emerald-700 dark:text-emerald-300',
+  Late: 'text-amber-700 dark:text-amber-300',
+  Absent: 'text-red-700 dark:text-red-300',
+  Leave: 'text-purple-700 dark:text-purple-300',
+}
+
+function AttendanceSheetDialog({ open, onOpenChange, onSuccess }: AttendanceSheetDialogProps) {
+  const [date, setDate] = useState<string>(todayStr())
+  const [personType, setPersonType] = useState<'Student' | 'Teacher'>('Student')
+  const [classId, setClassId] = useState<string>('ALL')
+  const [classes, setClasses] = useState<ClassRow[]>([])
+  const [reloadNonce, setReloadNonce] = useState(0)
+
+  const [rows, setRows] = useState<SheetRow[]>([])
+  const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  const [defCheckIn, setDefCheckIn] = useState('08:30')
+  const [defCheckOut, setDefCheckOut] = useState('16:00')
+
+  const [saving, setSaving] = useState(false)
+  const [saveErrors, setSaveErrors] = useState<string[] | null>(null)
+
+  // Roster effect reads the latest class list without re-triggering on its load.
+  const classesRef = useRef<ClassRow[]>([])
+  classesRef.current = classes
+
+  // Class list for the student class/program filter (loaded once per session).
+  useEffect(() => {
+    if (!open || classes.length > 0) return
+    let alive = true
+    api<{ data: ClassRow[] }>('/api/classes?active=true&limit=200')
+      .then((res) => {
+        if (alive) setClasses(res.data || [])
+      })
+      .catch(() => {
+        /* non-fatal — filter just shows "All students" */
+      })
+    return () => {
+      alive = false
+    }
+  }, [open, classes.length])
+
+  // Load the roster + existing attendance whenever the dialog opens or the
+  // controls change. setState happens inside setTimeout + .then callbacks only
+  // (lint-safe — no synchronous setState in the effect body).
+  useEffect(() => {
+    if (!open) return
+    let alive = true
+    const t = setTimeout(() => {
+      if (!alive) return
+      setLoading(true)
+      setLoadError(null)
+      setSaveErrors(null)
+      const type = personType
+      const cls = classesRef.current.find((c) => c.id === classId)
+      const programCode = type === 'Student' && cls?.program?.code ? cls.program.code : ''
+      Promise.all([
+        type === 'Student' ? fetchAllActiveStudents(programCode) : fetchActiveTeachers(),
+        fetchAttendanceForDate(date),
+      ])
+        .then(([people, attendance]) => {
+          if (!alive) return
+          const byKey = new Map<string, AttendanceRow>()
+          for (const a of attendance) byKey.set(`${a.personType}:${a.personId}`, a)
+          const sheet: SheetRow[] = people.map((p) => {
+            const isStudent = type === 'Student'
+            const rec = byKey.get(`${type}:${p.id}`)
+            const validStatus =
+              rec && SHEET_STATUSES.includes(rec.status as (typeof SHEET_STATUSES)[number])
+                ? rec.status
+                : ''
+            return {
+              personType: type,
+              personId: p.id,
+              ref: isStudent ? (p as StudentRow).studentId : (p as TeacherRow).teacherId,
+              name: p.fullName,
+              sub: isStudent
+                ? [(p as StudentRow).gender, (p as StudentRow).ageGroup ? `${(p as StudentRow).ageGroup} yrs` : '']
+                    .filter(Boolean)
+                    .join(' · ')
+                : (p as TeacherRow).type || '',
+              status: validStatus,
+              checkIn: isoToHHMM(rec?.checkIn),
+              checkOut: isoToHHMM(rec?.checkOut),
+              note: rec?.note || '',
+              selected: true,
+            }
+          })
+          setRows(sheet)
+        })
+        .catch((err) => {
+          if (!alive) return
+          setRows([])
+          setLoadError(err instanceof Error ? err.message : 'Failed to load roster')
+        })
+        .finally(() => {
+          if (alive) setLoading(false)
+        })
+    }, 0)
+    return () => {
+      alive = false
+      clearTimeout(t)
+    }
+  }, [open, date, personType, classId, reloadNonce])
+
+  // ── Row mutation helpers ──
+  const updateRow = (personId: string, patch: Partial<SheetRow>) =>
+    setRows((rs) => rs.map((r) => (r.personId === personId ? { ...r, ...patch } : r)))
+
+  // Status change semantics: Absent/Leave drop their times; Present/Late pick
+  // up the defaults when no time is set yet.
+  const withStatus = (r: SheetRow, status: string): SheetRow => {
+    if (status === 'Absent' || status === 'Leave') {
+      return { ...r, status, checkIn: '', checkOut: '' }
+    }
+    return {
+      ...r,
+      status,
+      checkIn: r.checkIn || defCheckIn,
+      checkOut: r.checkOut || defCheckOut,
+    }
+  }
+
+  const handleStatusChange = (personId: string, status: string) =>
+    setRows((rs) => rs.map((r) => (r.personId === personId ? withStatus(r, status) : r)))
+
+  const markSelectedPresent = () =>
+    setRows((rs) => rs.map((r) => (r.selected ? withStatus(r, 'Present') : r)))
+
+  const clearSelectedTimes = () =>
+    setRows((rs) => rs.map((r) => (r.selected ? { ...r, checkIn: '', checkOut: '' } : r)))
+
+  const applyDefaultTimes = () => {
+    if (!defCheckIn && !defCheckOut) {
+      toast.error('Set a default check-in or check-out time first')
+      return
+    }
+    setRows((rs) =>
+      rs.map((r) =>
+        r.selected && r.status !== 'Absent' && r.status !== 'Leave'
+          ? { ...r, checkIn: defCheckIn || r.checkIn, checkOut: defCheckOut || r.checkOut }
+          : r,
+      ),
+    )
+    toast.success('Default times applied to selected rows')
+  }
+
+  const toggleAll = (checked: boolean | 'indeterminate') =>
+    setRows((rs) => rs.map((r) => ({ ...r, selected: checked === true })))
+
+  // ── Derived counts + payload ──
+  const counts = useMemo(() => {
+    let selected = 0
+    let present = 0
+    let late = 0
+    let absent = 0
+    let leave = 0
+    for (const r of rows) {
+      if (r.selected) selected++
+      if (r.status === 'Present') present++
+      else if (r.status === 'Late') late++
+      else if (r.status === 'Absent') absent++
+      else if (r.status === 'Leave') leave++
+    }
+    return { selected, present, late, absent, leave }
+  }, [rows])
+
+  const allSelected = rows.length > 0 && rows.every((r) => r.selected)
+  const someSelected = rows.some((r) => r.selected) && !allSelected
+
+  const entriesToSend = useMemo(
+    () =>
+      rows
+        .filter((r) => r.status || r.checkIn || r.checkOut)
+        .map((r) => ({
+          personType: r.personType,
+          personId: r.personId,
+          status: r.status || 'Present',
+          checkIn: r.checkIn || null,
+          checkOut: r.checkOut || null,
+          note: r.note.trim() || null,
+        })),
+    [rows],
+  )
+
+  const handleSave = async () => {
+    if (entriesToSend.length === 0) {
+      toast.error('Nothing to save — mark at least one person or set a time')
+      return
+    }
+    setSaving(true)
+    setSaveErrors(null)
+    try {
+      // API accepts max 500 entries per request → chunk when needed.
+      const chunks: Array<typeof entriesToSend> = []
+      for (let i = 0; i < entriesToSend.length; i += 500) {
+        chunks.push(entriesToSend.slice(i, i + 500))
+      }
+      let created = 0
+      let updated = 0
+      let failed = 0
+      const errs: string[] = []
+      let message = ''
+      for (const chunk of chunks) {
+        const res = await api<BulkResult>('/api/attendance/bulk', {
+          method: 'POST',
+          body: JSON.stringify({ date, entries: chunk }),
+        })
+        created += res.created || 0
+        updated += res.updated || 0
+        failed += res.failed || 0
+        if (res.errors?.length) errs.push(...res.errors)
+        message = res.message
+      }
+      const saved = created + updated
+      onSuccess()
+      if (failed > 0) {
+        setSaveErrors(errs.slice(0, 20))
+        toast.warning(`Saved ${saved} record${saved === 1 ? '' : 's'}, ${failed} failed`, {
+          description: 'See the failed rows listed in the dialog.',
+        })
+      } else {
+        toast.success(message || `Saved ${saved} attendance record${saved === 1 ? '' : 's'}`)
+        onOpenChange(false)
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Bulk save failed'
+      toast.error(msg)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[92vh] overflow-y-auto scroll-thin sm:max-w-4xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Users2 className="h-5 w-5 text-primary" />
+            Attendance sheet — mark multiple
+          </DialogTitle>
+          <DialogDescription>
+            The whole roster at once, no searching — set status, check-in and check-out per row.
+            Existing records for the day are prefilled and updated on save.
+          </DialogDescription>
+        </DialogHeader>
+
+        {/* Top controls: date · person type · class filter */}
+        <div className="flex flex-col gap-3 rounded-xl border bg-muted/20 p-3">
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="grid gap-1.5">
+              <Label htmlFor="sheet-date" className="text-xs">
+                Date
+              </Label>
+              <Input
+                id="sheet-date"
+                type="date"
+                value={date}
+                onChange={(e) => setDate(e.target.value || todayStr())}
+                className="h-8 w-[150px]"
+              />
+            </div>
+
+            <div className="grid gap-1.5">
+              <Label className="text-xs">People</Label>
+              <Tabs
+                value={personType}
+                onValueChange={(v) => setPersonType(v as 'Student' | 'Teacher')}
+              >
+                <TabsList className="grid h-8 w-[210px] grid-cols-2">
+                  <TabsTrigger value="Student" className="gap-1.5 text-xs">
+                    <GraduationCap className="h-3.5 w-3.5" />
+                    Students
+                  </TabsTrigger>
+                  <TabsTrigger value="Teacher" className="gap-1.5 text-xs">
+                    <Briefcase className="h-3.5 w-3.5" />
+                    Teachers
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
+            </div>
+
+            {personType === 'Student' && (
+              <div className="grid gap-1.5">
+                <Label className="text-xs">Class / Program</Label>
+                <Select value={classId} onValueChange={setClassId}>
+                  <SelectTrigger className="h-8 w-[220px]">
+                    <SelectValue placeholder="All students" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ALL">All students</SelectItem>
+                    {classes.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        {c.name}
+                        {c.program ? ` · ${c.program.name}` : ''}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+          </div>
+
+          {/* Default times row */}
+          <div className="flex flex-wrap items-end gap-3 border-t pt-3">
+            <div className="grid gap-1.5">
+              <Label htmlFor="sheet-def-in" className="text-xs">
+                Default check-in
+              </Label>
+              <Input
+                id="sheet-def-in"
+                type="time"
+                value={defCheckIn}
+                onChange={(e) => setDefCheckIn(e.target.value)}
+                className="h-8 w-[120px]"
+              />
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="sheet-def-out" className="text-xs">
+                Default check-out
+              </Label>
+              <Input
+                id="sheet-def-out"
+                type="time"
+                value={defCheckOut}
+                onChange={(e) => setDefCheckOut(e.target.value)}
+                className="h-8 w-[120px]"
+              />
+            </div>
+            <Button variant="outline" size="sm" onClick={applyDefaultTimes} className="h-8 gap-2">
+              <TimerReset className="h-4 w-4" />
+              Apply to all rows
+            </Button>
+            <p className="self-center text-xs text-muted-foreground">
+              Stamps checked rows that are still missing times
+            </p>
+          </div>
+        </div>
+
+        {/* Bulk actions + live counts */}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={markSelectedPresent}
+            disabled={loading || rows.length === 0}
+            className="gap-2 border-emerald-500/40 text-emerald-700 hover:bg-emerald-500/10 dark:text-emerald-300"
+          >
+            <CheckCircle2 className="h-4 w-4" />
+            Mark all Present
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={clearSelectedTimes}
+            disabled={loading || rows.length === 0}
+            className="gap-2"
+          >
+            <X className="h-4 w-4" />
+            Clear times
+          </Button>
+
+          <div className="ml-auto flex flex-wrap items-center gap-1.5 text-xs">
+            <Badge variant="outline" className="gap-1">
+              <Users2 className="h-3 w-3" />
+              {counts.selected}/{rows.length} selected
+            </Badge>
+            {counts.present > 0 && (
+              <Badge className="border-emerald-500/30 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
+                {counts.present} Present
+              </Badge>
+            )}
+            {counts.late > 0 && (
+              <Badge className="border-amber-500/30 bg-amber-500/15 text-amber-700 dark:text-amber-300">
+                {counts.late} Late
+              </Badge>
+            )}
+            {counts.absent > 0 && (
+              <Badge className="border-red-500/30 bg-red-500/15 text-red-700 dark:text-red-300">
+                {counts.absent} Absent
+              </Badge>
+            )}
+            {counts.leave > 0 && (
+              <Badge className="border-purple-500/30 bg-purple-500/15 text-purple-700 dark:text-purple-300">
+                {counts.leave} Leave
+              </Badge>
+            )}
+          </div>
+        </div>
+
+        {/* Roster table — everyone at once, no searching */}
+        <div className="max-h-[65vh] overflow-y-auto overflow-x-auto rounded-lg border scroll-thin">
+          {loading ? (
+            <div className="space-y-2 p-3">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <Skeleton key={i} className="h-10 w-full" />
+              ))}
+            </div>
+          ) : loadError ? (
+            <div className="flex flex-col items-center gap-3 p-6 text-center">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-red-500/15 text-red-600 dark:text-red-400">
+                <AlertCircle className="h-5 w-5" />
+              </div>
+              <p className="text-sm font-semibold">Couldn&apos;t load the roster</p>
+              <p className="max-w-sm text-xs text-muted-foreground">{loadError}</p>
+              <Button variant="outline" size="sm" onClick={() => setReloadNonce((n) => n + 1)} className="gap-2">
+                <RotateCcw className="h-4 w-4" />
+                Try again
+              </Button>
+            </div>
+          ) : rows.length === 0 ? (
+            <EmptyState
+              icon={Users2}
+              title="No people found"
+              description={
+                personType === 'Student'
+                  ? 'No active students match the current class/program filter.'
+                  : 'No active teachers found.'
+              }
+              className="border-0 bg-transparent py-8"
+            />
+          ) : (
+            <Table className="table-zebra">
+              <TableHeader className="sticky top-0 z-10 bg-card">
+                <TableRow>
+                  <TableHead className="w-[44px]">
+                    <Checkbox
+                      checked={allSelected ? true : someSelected ? 'indeterminate' : false}
+                      onCheckedChange={toggleAll}
+                      aria-label="Select all rows"
+                    />
+                  </TableHead>
+                  <TableHead className="min-w-[210px]">Person</TableHead>
+                  <TableHead className="w-[124px]">Status</TableHead>
+                  <TableHead className="w-[112px]">Check-in</TableHead>
+                  <TableHead className="w-[112px]">Check-out</TableHead>
+                  <TableHead className="min-w-[150px]">Note</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rows.map((r) => {
+                  const timeDisabled = r.status === 'Absent' || r.status === 'Leave'
+                  return (
+                    <TableRow key={r.personId} className={timeDisabled ? 'opacity-70' : undefined}>
+                      <TableCell>
+                        <Checkbox
+                          checked={r.selected}
+                          onCheckedChange={(v) => updateRow(r.personId, { selected: v === true })}
+                          aria-label={`Select ${r.name}`}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2.5">
+                          <Avatar className="h-8 w-8">
+                            <AvatarFallback
+                              className={`text-[10px] font-bold ${avatarColor(r.name + r.ref)}`}
+                            >
+                              {initials(r.name)}
+                            </AvatarFallback>
+                          </Avatar>
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium leading-tight">{r.name}</p>
+                            <p className="truncate text-xs text-muted-foreground">
+                              <span className="font-mono">{r.ref}</span>
+                              {r.sub ? ` · ${r.sub}` : ''}
+                            </p>
+                          </div>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Select
+                          value={r.status || UNSET_STATUS}
+                          onValueChange={(v) =>
+                            handleStatusChange(r.personId, v === UNSET_STATUS ? '' : v)
+                          }
+                        >
+                          <SelectTrigger
+                            className={`h-8 w-[112px] text-xs ${STATUS_TEXT[r.status] || 'text-muted-foreground'}`}
+                          >
+                            <SelectValue placeholder="—" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value={UNSET_STATUS} className="text-muted-foreground">
+                              — Unmarked
+                            </SelectItem>
+                            {SHEET_STATUSES.map((s) => (
+                              <SelectItem key={s} value={s}>
+                                {s}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </TableCell>
+                      <TableCell>
+                        <Input
+                          type="time"
+                          value={r.checkIn}
+                          disabled={timeDisabled}
+                          onChange={(e) => updateRow(r.personId, { checkIn: e.target.value })}
+                          className="h-8 text-xs"
+                          aria-label={`Check-in time for ${r.name}`}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Input
+                          type="time"
+                          value={r.checkOut}
+                          disabled={timeDisabled}
+                          onChange={(e) => updateRow(r.personId, { checkOut: e.target.value })}
+                          className="h-8 text-xs"
+                          aria-label={`Check-out time for ${r.name}`}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Input
+                          value={r.note}
+                          onChange={(e) => updateRow(r.personId, { note: e.target.value })}
+                          placeholder="Optional…"
+                          className="h-8 text-xs"
+                          aria-label={`Note for ${r.name}`}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          )}
+        </div>
+
+        {/* Row-level errors from the last save */}
+        {saveErrors && saveErrors.length > 0 && (
+          <div className="rounded-lg border border-red-500/40 bg-red-500/5 p-3">
+            <p className="flex items-center gap-1.5 text-sm font-semibold text-red-700 dark:text-red-300">
+              <AlertCircle className="h-4 w-4" />
+              {saveErrors.length} row{saveErrors.length === 1 ? '' : 's'} failed to save
+            </p>
+            <ul className="mt-1.5 max-h-24 space-y-0.5 overflow-y-auto text-xs text-red-600 dark:text-red-400 scroll-thin">
+              {saveErrors.map((e, i) => (
+                <li key={i}>• {e}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <DialogFooter className="items-center gap-2 sm:items-center">
+          <p className="mr-auto text-xs text-muted-foreground">
+            Saving {entriesToSend.length} record{entriesToSend.length === 1 ? '' : 's'} as{' '}
+            <Badge variant="outline" className="ml-0.5 font-mono text-[10px]">
+              Manual
+            </Badge>
+            {entriesToSend.length > 500 && (
+              <span className="ml-1 text-amber-600 dark:text-amber-400">
+                · sent in batches of 500
+              </span>
+            )}
+          </p>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleSave}
+            disabled={saving || entriesToSend.length === 0}
+            className="gap-2"
+          >
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+            Save attendance
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1357,6 +2023,7 @@ function SummaryChip({
 export function AttendanceSection() {
   const [activeTab, setActiveTab] = useState<'today' | 'history'>('today')
   const [manualOpen, setManualOpen] = useState(false)
+  const [sheetOpen, setSheetOpen] = useState(false)
 
   // Today's log state
   const [rows, setRows] = useState<AttendanceRow[]>([])
@@ -1479,7 +2146,11 @@ export function AttendanceSection() {
       />
 
       {/* Live Scanner panel */}
-      <ScannerPanel onScanSuccess={reloadToday} onOpenManual={() => setManualOpen(true)} />
+      <ScannerPanel
+        onScanSuccess={reloadToday}
+        onOpenManual={() => setManualOpen(true)}
+        onOpenSheet={() => setSheetOpen(true)}
+      />
 
       {/* Today summary strip */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -1583,6 +2254,13 @@ export function AttendanceSection() {
       <ManualEntryDialog
         open={manualOpen}
         onOpenChange={setManualOpen}
+        onSuccess={reloadToday}
+      />
+
+      {/* Attendance sheet (bulk) dialog */}
+      <AttendanceSheetDialog
+        open={sheetOpen}
+        onOpenChange={setSheetOpen}
         onSuccess={reloadToday}
       />
 

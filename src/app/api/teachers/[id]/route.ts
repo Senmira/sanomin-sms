@@ -38,6 +38,10 @@ function serialize(t: TeacherWithRelations) {
     status: t.status,
     hireDate: t.hireDate ? t.hireDate.toISOString() : null,
     monthlyRate: t.monthlyRate,
+    basicSalary: t.basicSalary,
+    allowances: t.allowances,
+    epfNo: t.epfNo,
+    salaryNote: t.salaryNote,
     classes: t.classes.map((c) => ({
       id: c.id,
       name: c.name,
@@ -102,6 +106,10 @@ interface UpdateBody {
   status?: string
   hireDate?: string | null
   monthlyRate?: number | null
+  basicSalary?: number | null
+  allowances?: number | null
+  epfNo?: string | null
+  salaryNote?: string | null
   fingerprintId?: string | null
 }
 
@@ -177,6 +185,12 @@ export async function PUT(
     if (body.hireDate !== undefined) data.hireDate = parseDate(body.hireDate)
     if (body.monthlyRate !== undefined)
       data.monthlyRate = typeof body.monthlyRate === 'number' ? body.monthlyRate : 0
+    if (body.basicSalary !== undefined)
+      data.basicSalary = typeof body.basicSalary === 'number' ? Math.max(0, body.basicSalary) : 0
+    if (body.allowances !== undefined)
+      data.allowances = typeof body.allowances === 'number' ? Math.max(0, body.allowances) : 0
+    if (body.epfNo !== undefined) data.epfNo = body.epfNo?.trim() || null
+    if (body.salaryNote !== undefined) data.salaryNote = body.salaryNote?.trim() || null
     if (body.fingerprintId !== undefined)
       data.fingerprintId = body.fingerprintId?.trim() || null
 

@@ -1,0 +1,1178 @@
+     1→'use client'
+     2→
+     3→import { useCallback, useEffect, useMemo, useState } from 'react'
+     4→import { toast } from 'sonner'
+     5→import {
+     6→  CalendarDays,
+     7→  Plus,
+     8→  Pencil,
+     9→  Trash2,
+    10→  Users,
+    11→  GraduationCap,
+    12→  Clock,
+    13→  MapPin,
+    14→  Filter,
+    15→  MoreVertical,
+    16→  BookOpen,
+    17→  Layers,
+    18→  CheckCircle2,
+    19→  Loader2,
+    20→  LayoutGrid,
+    21→  List as ListIcon,
+    22→  X,
+    23→} from 'lucide-react'
+    24→
+    25→import { api } from '@/lib/api'
+    26→import {
+    27→  ClassRow,
+    28→  TeacherRow,
+    29→  ProgramRow,
+    30→  DAYS,
+    31→} from '@/lib/types'
+    32→import { currency, fmtTime } from '@/lib/format'
+    33→
+    34→import { SectionHeader } from '@/components/shared/section-header'
+    35→import { StatCard } from '@/components/shared/stat-card'
+    36→import { EmptyState } from '@/components/shared/empty-state'
+    37→import { ConfirmDialog } from '@/components/shared/confirm-dialog'
+    38→
+    39→import { Button } from '@/components/ui/button'
+    40→import { Input } from '@/components/ui/input'
+    41→import { Label } from '@/components/ui/label'
+    42→import { Textarea } from '@/components/ui/textarea'
+    43→import { Badge } from '@/components/ui/badge'
+    44→import { Switch } from '@/components/ui/switch'
+    45→import { Card } from '@/components/ui/card'
+    46→import { Skeleton } from '@/components/ui/skeleton'
+    47→import { Progress } from '@/components/ui/progress'
+    48→import {
+    49→  Dialog,
+    50→  DialogContent,
+    51→  DialogDescription,
+    52→  DialogFooter,
+    53→  DialogHeader,
+    54→  DialogTitle,
+    55→} from '@/components/ui/dialog'
+    56→import {
+    57→  DropdownMenu,
+    58→  DropdownMenuContent,
+    59→  DropdownMenuItem,
+    60→  DropdownMenuSeparator,
+    61→  DropdownMenuTrigger,
+    62→} from '@/components/ui/dropdown-menu'
+    63→import {
+    64→  Select,
+    65→  SelectContent,
+    66→  SelectItem,
+    67→  SelectTrigger,
+    68→  SelectValue,
+    69→} from '@/components/ui/select'
+    70→import {
+    71→  Table,
+    72→  TableBody,
+    73→  TableCell,
+    74→  TableHead,
+    75→  TableHeader,
+    76→  TableRow,
+    77→} from '@/components/ui/table'
+    78→import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+    79→
+    80→// ─── List response shapes ──────────────────────────────────────────────────
+    81→interface ClassListResponse {
+    82→  data: ClassRow[]
+    83→  total: number
+    84→}
+    85→interface ProgramListResponse {
+    86→  data: ProgramRow[]
+    87→}
+    88→interface TeacherListResponse {
+    89→  data: TeacherRow[]
+    90→  total: number
+    91→}
+    92→
+    93→// Time slots for timetable grid (hourly) — full day range
+    94→const ALL_TIME_SLOTS = Array.from({ length: 11 }, (_, i) => 8 + i) // 8..18
+    95→
+    96→// ─── Form state ─────────────────────────────────────────────────────────────
+    97→interface FormState {
+    98→  name: string
+    99→  programId: string
+   100→  teacherId: string
+   101→  dayOfWeek: string
+   102→  startTime: string
+   103→  endTime: string
+   104→  room: string
+   105→  capacity: string
+   106→  fee: string
+   107→  active: boolean
+   108→  notes: string
+   109→}
+   110→
+   111→const EMPTY_FORM: FormState = {
+   112→  name: '',
+   113→  programId: '',
+   114→  teacherId: '',
+   115→  dayOfWeek: 'Mon',
+   116→  startTime: '09:00',
+   117→  endTime: '10:00',
+   118→  room: '',
+   119→  capacity: '20',
+   120→  fee: '0',
+   121→  active: true,
+   122→  notes: '',
+   123→}
+   124→
+   125→// ─── Main section ───────────────────────────────────────────────────────────
+   126→export function ClassesSection() {
+   127→  const [rows, setRows] = useState<ClassRow[]>([])
+   128→  const [programs, setPrograms] = useState<ProgramRow[]>([])
+   129→  const [teachers, setTeachers] = useState<TeacherRow[]>([])
+   130→  const [loading, setLoading] = useState(true)
+   131→  const [error, setError] = useState<string | null>(null)
+   132→
+   133→  // Filters
+   134→  const [dayFilter, setDayFilter] = useState<string>('all')
+   135→  const [programFilter, setProgramFilter] = useState<string>('all')
+   136→  const [teacherFilter, setTeacherFilter] = useState<string>('all')
+   137→  const [activeFilter, setActiveFilter] = useState<'all' | 'true' | 'false'>('all')
+   138→
+   139→  // View toggle
+   140→  const [view, setView] = useState<'timetable' | 'list'>('timetable')
+   141→
+   142→  // Dialog state
+   143→  const [addEditOpen, setAddEditOpen] = useState(false)
+   144→  const [editing, setEditing] = useState<ClassRow | null>(null)
+   145→  const [form, setForm] = useState<FormState>(EMPTY_FORM)
+   146→  const [saving, setSaving] = useState(false)
+   147→  const [deleteTarget, setDeleteTarget] = useState<ClassRow | null>(null)
+   148→
+   149→  // ─── Initial load: programs + teachers (caches for selects) ──────────────
+   150→  useEffect(() => {
+   151→    let alive = true
+   152→    Promise.all([
+   153→      api<ProgramListResponse>('/api/programs'),
+   154→      api<TeacherListResponse>('/api/teachers?limit=100'),
+   155→    ])
+   156→      .then(([p, t]) => {
+   157→        if (!alive) return
+   158→        setPrograms(p.data)
+   159→        setTeachers(t.data)
+   160→      })
+   161→      .catch(() => {
+   162→        // Non-fatal — selects will just be empty
+   163→      })
+   164→    return () => {
+   165→      alive = false
+   166→    }
+   167→  }, [])
+   168→
+   169→  // ─── Build query string ──────────────────────────────────────────────────
+   170→  const queryParams = useMemo(() => {
+   171→    const p = new URLSearchParams()
+   172→    p.set('limit', '200')
+   173→    if (dayFilter !== 'all') p.set('day', dayFilter)
+   174→    if (programFilter !== 'all') p.set('program', programFilter)
+   175→    if (teacherFilter !== 'all') p.set('teacherId', teacherFilter)
+   176→    if (activeFilter !== 'all') p.set('active', activeFilter)
+   177→    return p.toString()
+   178→  }, [dayFilter, programFilter, teacherFilter, activeFilter])
+   179→
+   180→  // ─── Fetch classes (with filters) ────────────────────────────────────────
+   181→  useEffect(() => {
+   182→    let alive = true
+   183→    setLoading(true)
+   184→    api<ClassListResponse>(`/api/classes?${queryParams}`)
+   185→      .then((res) => {
+   186→        if (!alive) return
+   187→        setRows(res.data)
+   188→        setError(null)
+   189→        setLoading(false)
+   190→      })
+   191→      .catch((err: unknown) => {
+   192→        if (!alive) return
+   193→        const msg = err instanceof Error ? err.message : 'Failed to load classes'
+   194→        setError(msg)
+   195→        setLoading(false)
+   196→        toast.error(msg)
+   197→      })
+   198→    return () => {
+   199→      alive = false
+   200→    }
+   201→  }, [queryParams])
+   202→
+   203→  const reload = useCallback(() => {
+   204→    api<ClassListResponse>(`/api/classes?${queryParams}`)
+   205→      .then((res) => {
+   206→        setRows(res.data)
+   207→        setError(null)
+   208→      })
+   209→      .catch((err: unknown) => {
+   210→        const msg = err instanceof Error ? err.message : 'Failed to load classes'
+   211→        toast.error(msg)
+   212→      })
+   213→  }, [queryParams])
+   214→
+   215→  // ─── Stats ───────────────────────────────────────────────────────────────
+   216→  const stats = useMemo(() => {
+   217→    let active = 0
+   218→    let externalTeacherClasses = 0
+   219→    let totalEnrolled = 0
+   220→    for (const c of rows) {
+   221→      if (c.active) active++
+   222→      if (c.teacher?.type === 'External') externalTeacherClasses++
+   223→      totalEnrolled += c._count?.enrollments ?? 0
+   224→    }
+   225→    return {
+   226→      total: rows.length,
+   227→      active,
+   228→      externalTeacherClasses,
+   229→      totalEnrolled,
+   230→    }
+   231→  }, [rows])
+   232→
+   233→  const hasFilters =
+   234→    dayFilter !== 'all' ||
+   235→    programFilter !== 'all' ||
+   236→    teacherFilter !== 'all' ||
+   237→    activeFilter !== 'all'
+   238→
+   239→  const clearFilters = useCallback(() => {
+   240→    setDayFilter('all')
+   241→    setProgramFilter('all')
+   242→    setTeacherFilter('all')
+   243→    setActiveFilter('all')
+   244→  }, [])
+   245→
+   246→  // ─── Dialog handlers ─────────────────────────────────────────────────────
+   247→  const openAdd = useCallback(() => {
+   248→    setEditing(null)
+   249→    setForm(EMPTY_FORM)
+   250→    setAddEditOpen(true)
+   251→  }, [])
+   252→
+   253→  const openEdit = useCallback((c: ClassRow) => {
+   254→    setEditing(c)
+   255→    setForm({
+   256→      name: c.name,
+   257→      programId: c.program?.id || '',
+   258→      teacherId: c.teacher?.id || '',
+   259→      dayOfWeek: c.dayOfWeek || 'Mon',
+   260→      startTime: c.startTime || '09:00',
+   261→      endTime: c.endTime || '10:00',
+   262→      room: c.room || '',
+   263→      capacity: String(c.capacity ?? 20),
+   264→      fee: String(c.fee ?? 0),
+   265→      active: c.active,
+   266→      notes: c.notes || '',
+   267→    })
+   268→    setAddEditOpen(true)
+   269→  }, [])
+   270→
+   271→  const closeDialog = useCallback(() => {
+   272→    setAddEditOpen(false)
+   273→    setEditing(null)
+   274→    setForm(EMPTY_FORM)
+   275→  }, [])
+   276→
+   277→  // ─── Save (create/update) ────────────────────────────────────────────────
+   278→  const handleSave = useCallback(async () => {
+   279→    if (!form.name.trim()) {
+   280→      toast.error('Class name is required')
+   281→      return
+   282→    }
+   283→    setSaving(true)
+   284→    const payload = {
+   285→      name: form.name.trim(),
+   286→      programId: form.programId || null,
+   287→      teacherId: form.teacherId || null,
+   288→      dayOfWeek: form.dayOfWeek,
+   289→      startTime: form.startTime,
+   290→      endTime: form.endTime,
+   291→      room: form.room.trim() || null,
+   292→      capacity: Number(form.capacity) || 0,
+   293→      fee: Number(form.fee) || 0,
+   294→      active: form.active,
+   295→      notes: form.notes.trim() || null,
+   296→    }
+   297→    try {
+   298→      if (editing) {
+   299→        const updated = await api<ClassRow>(`/api/classes/${editing.id}`, {
+   300→          method: 'PUT',
+   301→          body: JSON.stringify(payload),
+   302→        })
+   303→        setRows((prev) => prev.map((c) => (c.id === updated.id ? updated : c)))
+   304→        toast.success(`${updated.name} updated`)
+   305→      } else {
+   306→        const created = await api<ClassRow>('/api/classes', {
+   307→          method: 'POST',
+   308→          body: JSON.stringify(payload),
+   309→        })
+   310→        setRows((prev) => [...prev, created])
+   311→        toast.success(`${created.name} created`)
+   312→      }
+   313→      closeDialog()
+   314→    } catch (err) {
+   315→      const msg = err instanceof Error ? err.message : 'Save failed'
+   316→      toast.error(msg)
+   317→    } finally {
+   318→      setSaving(false)
+   319→    }
+   320→  }, [form, editing, closeDialog])
+   321→
+   322→  // ─── Delete ──────────────────────────────────────────────────────────────
+   323→  const handleDelete = useCallback(async () => {
+   324→    if (!deleteTarget) return
+   325→    try {
+   326→      await api(`/api/classes/${deleteTarget.id}`, { method: 'DELETE' })
+   327→      setRows((prev) => prev.filter((c) => c.id !== deleteTarget.id))
+   328→      toast.success(`${deleteTarget.name} deleted`)
+   329→      setDeleteTarget(null)
+   330→    } catch (err) {
+   331→      const msg = err instanceof Error ? err.message : 'Delete failed'
+   332→      toast.error(msg)
+   333→    }
+   334→  }, [deleteTarget])
+   335→
+   336→  // ─── Filter bar ──────────────────────────────────────────────────────────
+   337→  const FilterBar = (
+   338→    <Card className="flex flex-wrap items-end gap-3 p-3">
+   339→      <div className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground">
+   340→        <Filter className="h-4 w-4" />
+   341→        Filters
+   342→      </div>
+   343→
+   344→      <div className="grid gap-1">
+   345→        <Label htmlFor="filter-day" className="text-xs">
+   346→          Day
+   347→        </Label>
+   348→        <Select value={dayFilter} onValueChange={setDayFilter}>
+   349→          <SelectTrigger id="filter-day" className="w-32">
+   350→            <SelectValue />
+   351→          </SelectTrigger>
+   352→          <SelectContent>
+   353→            <SelectItem value="all">All days</SelectItem>
+   354→            {DAYS.map((d) => (
+   355→              <SelectItem key={d} value={d}>
+   356→                {d}
+   357→              </SelectItem>
+   358→            ))}
+   359→          </SelectContent>
+   360→        </Select>
+   361→      </div>
+   362→
+   363→      <div className="grid gap-1">
+   364→        <Label htmlFor="filter-program" className="text-xs">
+   365→          Program
+   366→        </Label>
+   367→        <Select value={programFilter} onValueChange={setProgramFilter}>
+   368→          <SelectTrigger id="filter-program" className="w-40">
+   369→            <SelectValue />
+   370→          </SelectTrigger>
+   371→          <SelectContent>
+   372→            <SelectItem value="all">All programs</SelectItem>
+   373→            {programs.map((p) => (
+   374→              <SelectItem key={p.id} value={p.code}>
+   375→                {p.name}
+   376→              </SelectItem>
+   377→            ))}
+   378→          </SelectContent>
+   379→        </Select>
+   380→      </div>
+   381→
+   382→      <div className="grid gap-1">
+   383→        <Label htmlFor="filter-teacher" className="text-xs">
+   384→          Teacher
+   385→        </Label>
+   386→        <Select value={teacherFilter} onValueChange={setTeacherFilter}>
+   387→          <SelectTrigger id="filter-teacher" className="w-48">
+   388→            <SelectValue />
+   389→          </SelectTrigger>
+   390→          <SelectContent>
+   391→            <SelectItem value="all">All teachers</SelectItem>
+   392→            {teachers.map((t) => (
+   393→              <SelectItem key={t.id} value={t.id}>
+   394→                {t.fullName} · {t.type}
+   395→              </SelectItem>
+   396→            ))}
+   397→          </SelectContent>
+   398→        </Select>
+   399→      </div>
+   400→
+   401→      <div className="grid gap-1">
+   402→        <Label htmlFor="filter-active" className="text-xs">
+   403→          Status
+   404→        </Label>
+   405→        <Select
+   406→          value={activeFilter}
+   407→          onValueChange={(v) => setActiveFilter(v as 'all' | 'true' | 'false')}
+   408→        >
+   409→          <SelectTrigger id="filter-active" className="w-32">
+   410→            <SelectValue />
+   411→          </SelectTrigger>
+   412→          <SelectContent>
+   413→            <SelectItem value="all">All</SelectItem>
+   414→            <SelectItem value="true">Active</SelectItem>
+   415→            <SelectItem value="false">Inactive</SelectItem>
+   416→          </SelectContent>
+   417→        </Select>
+   418→      </div>
+   419→
+   420→      {hasFilters && (
+   421→        <Button variant="ghost" size="sm" onClick={clearFilters} className="gap-1.5">
+   422→          <X className="h-3.5 w-3.5" />
+   423→          Clear
+   424→        </Button>
+   425→      )}
+   426→    </Card>
+   427→  )
+   428→
+   429→  return (
+   430→    <div className="flex flex-col gap-6">
+   431→      <SectionHeader
+   432→        title="Classes"
+   433→        description="Tuition class schedule for external & internal teachers"
+   434→        icon={<CalendarDays className="h-5 w-5" />}
+   435→        actions={
+   436→          <Button onClick={openAdd} size="sm" className="gap-1.5">
+   437→            <Plus className="h-4 w-4" />
+   438→            Add Class
+   439→          </Button>
+   440→        }
+   441→      />
+   442→
+   443→      {/* Stats strip */}
+   444→      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+   445→        <StatCard
+   446→          label="Total Classes"
+   447→          value={stats.total}
+   448→          icon={Layers}
+   449→          accent="blue"
+   450→          hint="All scheduled classes"
+   451→        />
+   452→        <StatCard
+   453→          label="Active Classes"
+   454→          value={stats.active}
+   455→          icon={CheckCircle2}
+   456→          accent="green"
+   457→          hint={`${stats.total - stats.active} inactive`}
+   458→        />
+   459→        <StatCard
+   460→          label="External-Teacher Classes"
+   461→          value={stats.externalTeacherClasses}
+   462→          icon={GraduationCap}
+   463→          accent="purple"
+   464→          hint="Tuition classes run by external teachers"
+   465→        />
+   466→        <StatCard
+   467→          label="Total Enrolled"
+   468→          value={stats.totalEnrolled}
+   469→          icon={Users}
+   470→          accent="amber"
+   471→          hint="Students across all classes"
+   472→        />
+   473→      </div>
+   474→
+   475→      {/* Filter bar */}
+   476→      {FilterBar}
+   477→
+   478→      {/* View toggle */}
+   479→      <Tabs value={view} onValueChange={(v) => setView(v as 'timetable' | 'list')}>
+   480→        <div className="flex w-full items-center justify-between">
+   481→          <TabsList>
+   482→            <TabsTrigger value="timetable" className="gap-1.5">
+   483→              <LayoutGrid className="h-4 w-4" />
+   484→              Timetable
+   485→            </TabsTrigger>
+   486→            <TabsTrigger value="list" className="gap-1.5">
+   487→              <ListIcon className="h-4 w-4" />
+   488→              List
+   489→            </TabsTrigger>
+   490→          </TabsList>
+   491→          <span className="text-xs text-muted-foreground">
+   492→            {rows.length} class{rows.length === 1 ? '' : 'es'}
+   493→          </span>
+   494→        </div>
+   495→
+   496→        <TabsContent value="timetable" className="mt-4">
+   497→          {loading ? (
+   498→            <Skeleton className="h-[60vh] w-full rounded-xl" />
+   499→          ) : error ? (
+   500→            <EmptyState
+   501→              title="Failed to load classes"
+   502→              description={error}
+   503→              icon={Layers}
+   504→              action={
+   505→                <Button onClick={reload} size="sm" variant="outline">
+   506→                  Retry
+   507→                </Button>
+   508→              }
+   509→            />
+   510→          ) : rows.length === 0 ? (
+   511→            <EmptyState
+   512→              title="No classes scheduled"
+   513→              description="Add your first tuition class to start building the weekly timetable."
+   514→              icon={BookOpen}
+   515→              action={
+   516→                <Button onClick={openAdd} size="sm" className="gap-1.5">
+   517→                  <Plus className="h-4 w-4" />
+   518→                  Add Class
+   519→                </Button>
+   520→              }
+   521→            />
+   522→          ) : (
+   523→            <TimetableView rows={rows} />
+   524→          )}
+   525→        </TabsContent>
+   526→
+   527→        <TabsContent value="list" className="mt-4">
+   528→          {loading ? (
+   529→            <Skeleton className="h-[60vh] w-full rounded-xl" />
+   530→          ) : error ? (
+   531→            <EmptyState
+   532→              title="Failed to load classes"
+   533→              description={error}
+   534→              icon={Layers}
+   535→              action={
+   536→                <Button onClick={reload} size="sm" variant="outline">
+   537→                  Retry
+   538→                </Button>
+   539→              }
+   540→            />
+   541→          ) : rows.length === 0 ? (
+   542→            <EmptyState
+   543→              title="No classes found"
+   544→              description="Try adjusting filters or add a new class."
+   545→              icon={BookOpen}
+   546→              action={
+   547→                <Button onClick={openAdd} size="sm" className="gap-1.5">
+   548→                  <Plus className="h-4 w-4" />
+   549→                  Add Class
+   550→                </Button>
+   551→              }
+   552→            />
+   553→          ) : (
+   554→            <ClassListTable
+   555→              rows={rows}
+   556→              onEdit={openEdit}
+   557→              onDelete={(c) => setDeleteTarget(c)}
+   558→            />
+   559→          )}
+   560→        </TabsContent>
+   561→      </Tabs>
+   562→
+   563→      {/* Add/Edit dialog */}
+   564→      <Dialog open={addEditOpen} onOpenChange={(v) => !v && closeDialog()}>
+   565→        <DialogContent className="max-w-2xl">
+   566→          <DialogHeader>
+   567→            <DialogTitle>{editing ? 'Edit Class' : 'Add Class'}</DialogTitle>
+   568→            <DialogDescription>
+   569→              {editing
+   570→                ? 'Update class schedule and details.'
+   571→                : 'Schedule a new tuition class for an external or internal teacher.'}
+   572→            </DialogDescription>
+   573→          </DialogHeader>
+   574→
+   575→          <div className="grid gap-4 py-2">
+   576→            <div className="grid gap-1.5">
+   577→              <Label htmlFor="class-name">Class Name</Label>
+   578→              <Input
+   579→                id="class-name"
+   580→                value={form.name}
+   581→                onChange={(e) =>
+   582→                  setForm((f) => ({ ...f, name: e.target.value }))
+   583→                }
+   584→                placeholder="e.g. IT Foundations — Grade 1"
+   585→              />
+   586→            </div>
+   587→
+   588→            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+   589→              <div className="grid gap-1.5">
+   590→                <Label htmlFor="class-program">Program</Label>
+   591→                <Select
+   592→                  value={form.programId || 'none'}
+   593→                  onValueChange={(v) =>
+   594→                    setForm((f) => ({ ...f, programId: v === 'none' ? '' : v }))
+   595→                  }
+   596→                >
+   597→                  <SelectTrigger id="class-program">
+   598→                    <SelectValue placeholder="Select program" />
+   599→                  </SelectTrigger>
+   600→                  <SelectContent>
+   601→                    <SelectItem value="none">— No program —</SelectItem>
+   602→                    {programs.map((p) => (
+   603→                      <SelectItem key={p.id} value={p.id}>
+   604→                        <span
+   605→                          className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full align-middle"
+   606→                          style={{ backgroundColor: p.color }}
+   607→                        />
+   608→                        {p.name} ({p.code})
+   609→                      </SelectItem>
+   610→                    ))}
+   611→                  </SelectContent>
+   612→                </Select>
+   613→              </div>
+   614→
+   615→              <div className="grid gap-1.5">
+   616→                <Label htmlFor="class-teacher">Teacher</Label>
+   617→                <Select
+   618→                  value={form.teacherId || 'none'}
+   619→                  onValueChange={(v) =>
+   620→                    setForm((f) => ({ ...f, teacherId: v === 'none' ? '' : v }))
+   621→                  }
+   622→                >
+   623→                  <SelectTrigger id="class-teacher">
+   624→                    <SelectValue placeholder="Select teacher" />
+   625→                  </SelectTrigger>
+   626→                  <SelectContent>
+   627→                    <SelectItem value="none">— Unassigned —</SelectItem>
+   628→                    {teachers.map((t) => (
+   629→                      <SelectItem key={t.id} value={t.id}>
+   630→                        {t.fullName}
+   631→                        <Badge
+   632→                          variant={t.type === 'External' ? 'secondary' : 'outline'}
+   633→                          className="ml-1.5"
+   634→                        >
+   635→                          {t.type}
+   636→                        </Badge>
+   637→                      </SelectItem>
+   638→                    ))}
+   639→                  </SelectContent>
+   640→                </Select>
+   641→              </div>
+   642→            </div>
+   643→
+   644→            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+   645→              <div className="grid gap-1.5">
+   646→                <Label htmlFor="class-day">Day</Label>
+   647→                <Select
+   648→                  value={form.dayOfWeek}
+   649→                  onValueChange={(v) => setForm((f) => ({ ...f, dayOfWeek: v }))}
+   650→                >
+   651→                  <SelectTrigger id="class-day">
+   652→                    <SelectValue />
+   653→                  </SelectTrigger>
+   654→                  <SelectContent>
+   655→                    {DAYS.map((d) => (
+   656→                      <SelectItem key={d} value={d}>
+   657→                        {d}
+   658→                      </SelectItem>
+   659→                    ))}
+   660→                  </SelectContent>
+   661→                </Select>
+   662→              </div>
+   663→              <div className="grid gap-1.5">
+   664→                <Label htmlFor="class-start">Start Time</Label>
+   665→                <Input
+   666→                  id="class-start"
+   667→                  type="time"
+   668→                  value={form.startTime}
+   669→                  onChange={(e) =>
+   670→                    setForm((f) => ({ ...f, startTime: e.target.value }))
+   671→                  }
+   672→                />
+   673→              </div>
+   674→              <div className="grid gap-1.5">
+   675→                <Label htmlFor="class-end">End Time</Label>
+   676→                <Input
+   677→                  id="class-end"
+   678→                  type="time"
+   679→                  value={form.endTime}
+   680→                  onChange={(e) =>
+   681→                    setForm((f) => ({ ...f, endTime: e.target.value }))
+   682→                  }
+   683→                />
+   684→              </div>
+   685→              <div className="grid gap-1.5">
+   686→                <Label htmlFor="class-room">Room</Label>
+   687→                <Input
+   688→                  id="class-room"
+   689→                  value={form.room}
+   690→                  onChange={(e) =>
+   691→                    setForm((f) => ({ ...f, room: e.target.value }))
+   692→                  }
+   693→                  placeholder="Room 1"
+   694→                />
+   695→              </div>
+   696→            </div>
+   697→
+   698→            <div className="grid grid-cols-2 gap-4">
+   699→              <div className="grid gap-1.5">
+   700→                <Label htmlFor="class-capacity">Capacity</Label>
+   701→                <Input
+   702→                  id="class-capacity"
+   703→                  type="number"
+   704→                  min={0}
+   705→                  value={form.capacity}
+   706→                  onChange={(e) =>
+   707→                    setForm((f) => ({ ...f, capacity: e.target.value }))
+   708→                  }
+   709→                />
+   710→              </div>
+   711→              <div className="grid gap-1.5">
+   712→                <Label htmlFor="class-fee">Fee (LKR)</Label>
+   713→                <Input
+   714→                  id="class-fee"
+   715→                  type="number"
+   716→                  min={0}
+   717→                  value={form.fee}
+   718→                  onChange={(e) =>
+   719→                    setForm((f) => ({ ...f, fee: e.target.value }))
+   720→                  }
+   721→                />
+   722→              </div>
+   723→            </div>
+   724→
+   725→            <div className="grid gap-1.5">
+   726→              <Label htmlFor="class-notes">Notes</Label>
+   727→              <Textarea
+   728→                id="class-notes"
+   729→                value={form.notes}
+   730→                onChange={(e) =>
+   731→                  setForm((f) => ({ ...f, notes: e.target.value }))
+   732→                }
+   733→                placeholder="Optional notes about this class"
+   734→                className="min-h-16"
+   735→              />
+   736→            </div>
+   737→
+   738→            <div className="flex items-center justify-between rounded-lg border p-3">
+   739→              <div>
+   740→                <Label htmlFor="class-active" className="cursor-pointer">
+   741→                  Active
+   742→                </Label>
+   743→                <p className="text-xs text-muted-foreground">
+   744→                  Inactive classes are hidden from the timetable
+   745→                </p>
+   746→              </div>
+   747→              <Switch
+   748→                id="class-active"
+   749→                checked={form.active}
+   750→                onCheckedChange={(v) => setForm((f) => ({ ...f, active: v }))}
+   751→              />
+   752→            </div>
+   753→          </div>
+   754→
+   755→          <DialogFooter>
+   756→            <Button variant="outline" onClick={closeDialog} disabled={saving}>
+   757→              Cancel
+   758→            </Button>
+   759→            <Button onClick={handleSave} disabled={saving}>
+   760→              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+   761→              {editing ? 'Save Changes' : 'Create Class'}
+   762→            </Button>
+   763→          </DialogFooter>
+   764→        </DialogContent>
+   765→      </Dialog>
+   766→
+   767→      {/* Delete confirmation */}
+   768→      <ConfirmDialog
+   769→        open={!!deleteTarget}
+   770→        onOpenChange={(v) => !v && setDeleteTarget(null)}
+   771→        title={`Delete "${deleteTarget?.name}"?`}
+   772→        description={
+   773→          deleteTarget && (deleteTarget._count?.enrollments ?? 0) > 0
+   774→            ? `${deleteTarget._count?.enrollments} student(s) are enrolled in this class. Withdraw them before deleting.`
+   775→            : 'This action cannot be undone. The class will be permanently removed from the timetable.'
+   776→        }
+   777→        confirmText="Delete"
+   778→        onConfirm={handleDelete}
+   779→      />
+   780→    </div>
+   781→  )
+   782→}
+   783→
+   784→// ─── Timetable View (weekly grid: Mon..Sun columns × hourly rows) ──────────
+   785→interface TimetableViewProps {
+   786→  rows: ClassRow[]
+   787→}
+   788→
+   789→function parseHour(time: string | null): number | null {
+   790→  if (!time) return null
+   791→  const m = /^(\d{1,2}):(\d{2})/.exec(time)
+   792→  if (!m) return null
+   793→  const h = parseInt(m[1], 10)
+   794→  return isNaN(h) ? null : h
+   795→}
+   796→
+   797→function TimetableView({ rows }: TimetableViewProps) {
+   798→  const [compact, setCompact] = useState(true)
+   799→  // Group by day, sort by startTime within each day
+   800→  const byDay = useMemo(() => {
+   801→    const map: Record<string, ClassRow[]> = {}
+   802→    for (const d of DAYS) map[d] = []
+   803→    for (const c of rows) {
+   804→      if (c.dayOfWeek && map[c.dayOfWeek]) {
+   805→        map[c.dayOfWeek].push(c)
+   806→      }
+   807→    }
+   808→    for (const d of DAYS) {
+   809→      map[d].sort((a, b) =>
+   810→        (a.startTime || '').localeCompare(b.startTime || ''),
+   811→      )
+   812→    }
+   813→    return map
+   814→  }, [rows])
+   815→
+   816→  // Compute active hours (hours that have at least one class) for compact mode
+   817→  const activeHours = useMemo(() => {
+   818→    const set = new Set<number>()
+   819→    for (const d of DAYS) {
+   820→      for (const c of byDay[d]) {
+   821→        const h = parseHour(c.startTime)
+   822→        if (h !== null) set.add(h)
+   823→      }
+   824→    }
+   825→    const sorted = Array.from(set).sort((a, b) => a - b)
+   826→    // In compact mode, if no active hours, fall back to full range
+   827→    return sorted.length > 0 ? sorted : ALL_TIME_SLOTS
+   828→  }, [byDay])
+   829→
+   830→  const hours = compact ? activeHours : ALL_TIME_SLOTS
+   831→  const totalClasses = rows.length
+   832→
+   833→  return (
+   834→    <Card className="overflow-hidden p-0">
+   835→      {/* Toolbar with compact toggle + summary */}
+   836→      <div className="flex items-center justify-between border-b bg-muted/30 px-4 py-2">
+   837→        <div className="flex items-center gap-3 text-xs text-muted-foreground">
+   838→          <span className="flex items-center gap-1.5 font-medium text-foreground">
+   839→            <CalendarDays className="h-3.5 w-3.5" />
+   840→            {totalClasses} {totalClasses === 1 ? 'class' : 'classes'} this week
+   841→          </span>
+   842→          <span className="text-muted-foreground/60">·</span>
+   843→          <span>{hours.length} time slots</span>
+   844→        </div>
+   845→        <div className="flex items-center gap-2">
+   846→          <Button
+   847→            size="sm"
+   848→            variant={compact ? 'default' : 'outline'}
+   849→            className="h-7 gap-1.5 text-xs"
+   850→            onClick={() => setCompact(true)}
+   851→          >
+   852→            <Layers className="h-3 w-3" /> Active hours
+   853→          </Button>
+   854→          <Button
+   855→            size="sm"
+   856→            variant={!compact ? 'default' : 'outline'}
+   857→            className="h-7 gap-1.5 text-xs"
+   858→            onClick={() => setCompact(false)}
+   859→          >
+   860→            <Clock className="h-3 w-3" /> Full day
+   861→          </Button>
+   862→        </div>
+   863→      </div>
+   864→      <div className="scroll-thin overflow-x-auto">
+   865→        <div className="min-w-[1100px]">
+   866→          {/* Header row: time column + 7 day columns */}
+   867→          <div
+   868→            className="grid border-b bg-muted/40"
+   869→            style={{
+   870→              gridTemplateColumns: `64px repeat(${DAYS.length}, minmax(0, 1fr))`,
+   871→            }}
+   872→          >
+   873→            <div className="border-r p-2 text-xs font-medium text-muted-foreground">
+   874→              Time
+   875→            </div>
+   876→            {DAYS.map((d) => {
+   877→              const dayCount = byDay[d].length
+   878→              return (
+   879→                <div
+   880→                  key={d}
+   881→                  className="border-r p-2 text-center text-xs font-semibold last:border-r-0"
+   882→                >
+   883→                  <span>{d}</span>
+   884→                  {dayCount > 0 && (
+   885→                    <span className="ml-1.5 rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-medium text-primary">
+   886→                      {dayCount}
+   887→                    </span>
+   888→                  )}
+   889→                </div>
+   890→              )
+   891→            })}
+   892→          </div>
+   893→
+   894→          {/* Body: hour rows with day cells */}
+   895→          {hours.map((hour) => (
+   896→            <div
+   897→              key={hour}
+   898→              className="grid border-b last:border-b-0"
+   899→              style={{
+   900→                gridTemplateColumns: `64px repeat(${DAYS.length}, minmax(0, 1fr))`,
+   901→              }}
+   902→            >
+   903→              <div className="border-r bg-muted/20 p-2 text-xs font-mono text-muted-foreground">
+   904→                {String(hour).padStart(2, '0')}:00
+   905→              </div>
+   906→              {DAYS.map((d) => {
+   907→                // Classes that start at this hour in this day
+   908→                const cellClasses = byDay[d].filter((c) => {
+   909→                  const startH = parseHour(c.startTime)
+   910→                  return startH === hour
+   911→                })
+   912→                return (
+   913→                  <div
+   914→                    key={d}
+   915→                    className="min-h-[72px] border-r p-1.5 last:border-r-0"
+   916→                  >
+   917→                    <div className="flex flex-col gap-1.5">
+   918→                      {cellClasses.map((c) => (
+   919→                        <TimetableCard key={c.id} cls={c} />
+   920→                      ))}
+   921→                    </div>
+   922→                  </div>
+   923→                )
+   924→              })}
+   925→            </div>
+   926→          ))}
+   927→        </div>
+   928→      </div>
+   929→    </Card>
+   930→  )
+   931→}
+   932→
+   933→interface TimetableCardProps {
+   934→  cls: ClassRow
+   935→}
+   936→
+   937→function TimetableCard({ cls }: TimetableCardProps) {
+   938→  const color = cls.program?.color || '#475569'
+   939→  const enrolled = cls._count?.enrollments ?? 0
+   940→  const capacity = cls.capacity || 0
+   941→  const fillRate = capacity > 0 ? Math.round((enrolled / capacity) * 100) : 0
+   942→  return (
+   943→    <div
+   944→      className="group relative overflow-hidden rounded-md border p-2 text-xs shadow-sm transition-all hover:shadow-md hover:scale-[1.01]"
+   945→      style={{
+   946→        backgroundColor: `${color}1f`, // ~12% tint — stronger for contrast
+   947→        borderColor: `${color}80`, // 50% border — more visible
+   948→        borderLeftWidth: '4px',
+   949→        borderLeftColor: color,
+   950→      }}
+   951→      title={cls.notes || undefined}
+   952→    >
+   953→      {/* Top row: name + time */}
+   954→      <div className="flex items-start justify-between gap-1">
+   955→        <p className="font-semibold leading-tight text-foreground line-clamp-2">
+   956→          {cls.name}
+   957→        </p>
+   958→        <span
+   959→          className="shrink-0 rounded px-1 py-0.5 text-[9px] font-bold text-white"
+   960→          style={{ background: color }}
+   961→        >
+   962→          {fmtTime(cls.startTime)}
+   963→        </span>
+   964→      </div>
+   965→      {/* Teacher */}
+   966→      {cls.teacher && (
+   967→        <div className="mt-1 flex items-center gap-1">
+   968→          <GraduationCap className="h-3 w-3 shrink-0" style={{ color }} />
+   969→          <span className="truncate text-[10px] text-foreground/70">
+   970→            {cls.teacher.fullName}
+   971→          </span>
+   972→          {cls.teacher.type === 'External' && (
+   973→            <Badge
+   974→              variant="secondary"
+   975→              className="ml-auto h-3.5 shrink-0 px-1 text-[9px] leading-none"
+   976→            >
+   977→              Ext
+   978→            </Badge>
+   979→          )}
+   980→        </div>
+   981→      )}
+   982→      {/* Room + enrolled */}
+   983→      <div className="mt-1 flex items-center gap-2 text-[10px] text-muted-foreground">
+   984→        {cls.room && (
+   985→          <span className="flex items-center gap-0.5">
+   986→            <MapPin className="h-2.5 w-2.5" />
+   987→            {cls.room}
+   988→          </span>
+   989→        )}
+   990→        <span className="flex items-center gap-0.5">
+   991→          <Users className="h-2.5 w-2.5" />
+   992→          {enrolled}/{capacity || '?'}
+   993→        </span>
+   994→        {capacity > 0 && (
+   995→          <div className="ml-auto h-1 w-8 overflow-hidden rounded-full bg-background/60">
+   996→            <div
+   997→              className="h-full rounded-full"
+   998→              style={{
+   999→                width: `${fillRate}%`,
+  1000→                background: fillRate >= 80 ? '#16a34a' : fillRate >= 40 ? color : '#d97706',
+  1001→              }}
+  1002→            />
+  1003→          </div>
+  1004→        )}
+  1005→      </div>
+  1006→    </div>
+  1007→  )
+  1008→}
+  1009→
+  1010→// ─── List View (table) ─────────────────────────────────────────────────────
+  1011→interface ClassListTableProps {
+  1012→  rows: ClassRow[]
+  1013→  onEdit: (c: ClassRow) => void
+  1014→  onDelete: (c: ClassRow) => void
+  1015→}
+  1016→
+  1017→function ClassListTable({ rows, onEdit, onDelete }: ClassListTableProps) {
+  1018→  const sorted = useMemo(() => {
+  1019→    return [...rows].sort((a, b) => {
+  1020→      const dayA = DAYS.indexOf((a.dayOfWeek || '') as (typeof DAYS)[number])
+  1021→      const dayB = DAYS.indexOf((b.dayOfWeek || '') as (typeof DAYS)[number])
+  1022→      const da = dayA < 0 ? 99 : dayA
+  1023→      const db = dayB < 0 ? 99 : dayB
+  1024→      if (da !== db) return da - db
+  1025→      return (a.startTime || '').localeCompare(b.startTime || '')
+  1026→    })
+  1027→  }, [rows])
+  1028→
+  1029→  return (
+  1030→    <Card className="overflow-hidden p-0">
+  1031→      <div className="scroll-thin max-h-[60vh] overflow-y-auto">
+  1032→        <Table className="table-zebra">
+  1033→          <TableHeader className="sticky top-0 z-10 bg-muted/80 backdrop-blur">
+  1034→            <TableRow>
+  1035→              <TableHead>Class</TableHead>
+  1036→              <TableHead>Program</TableHead>
+  1037→              <TableHead>Teacher</TableHead>
+  1038→              <TableHead>Day</TableHead>
+  1039→              <TableHead>Time</TableHead>
+  1040→              <TableHead>Room</TableHead>
+  1041→              <TableHead className="w-32">Capacity</TableHead>
+  1042→              <TableHead className="text-right">Fee</TableHead>
+  1043→              <TableHead>Status</TableHead>
+  1044→              <TableHead className="w-16 text-right">Actions</TableHead>
+  1045→            </TableRow>
+  1046→          </TableHeader>
+  1047→          <TableBody>
+  1048→            {sorted.map((c) => {
+  1049→              const enrolled = c._count?.enrollments ?? 0
+  1050→              const pct =
+  1051→                c.capacity > 0 ? Math.min(100, (enrolled / c.capacity) * 100) : 0
+  1052→              return (
+  1053→                <TableRow key={c.id}>
+  1054→                  <TableCell>
+  1055→                    <div className="font-medium">{c.name}</div>
+  1056→                    {c.notes && (
+  1057→                      <div className="line-clamp-1 text-xs text-muted-foreground">
+  1058→                        {c.notes}
+  1059→                      </div>
+  1060→                    )}
+  1061→                  </TableCell>
+  1062→                  <TableCell>
+  1063→                    {c.program ? (
+  1064→                      <Badge
+  1065→                        variant="outline"
+  1066→                        className="gap-1.5"
+  1067→                        style={{
+  1068→                          borderColor: `${c.program.color}88`,
+  1069→                          color: c.program.color,
+  1070→                        }}
+  1071→                      >
+  1072→                        <span
+  1073→                          className="inline-block h-2 w-2 rounded-full"
+  1074→                          style={{ backgroundColor: c.program.color }}
+  1075→                        />
+  1076→                        {c.program.code}
+  1077→                      </Badge>
+  1078→                    ) : (
+  1079→                      <span className="text-xs text-muted-foreground">—</span>
+  1080→                    )}
+  1081→                  </TableCell>
+  1082→                  <TableCell>
+  1083→                    {c.teacher ? (
+  1084→                      <div className="flex items-center gap-1.5">
+  1085→                        <span className="text-sm">{c.teacher.fullName}</span>
+  1086→                        <Badge
+  1087→                          variant={
+  1088→                            c.teacher.type === 'External' ? 'secondary' : 'outline'
+  1089→                          }
+  1090→                          className="text-[10px]"
+  1091→                        >
+  1092→                          {c.teacher.type === 'External' ? 'Ext' : 'Int'}
+  1093→                        </Badge>
+  1094→                      </div>
+  1095→                    ) : (
+  1096→                      <span className="text-xs text-muted-foreground">
+  1097→                        Unassigned
+  1098→                      </span>
+  1099→                    )}
+  1100→                  </TableCell>
+  1101→                  <TableCell>
+  1102→                    {c.dayOfWeek ? (
+  1103→                      <Badge variant="secondary">{c.dayOfWeek}</Badge>
+  1104→                    ) : (
+  1105→                      <span className="text-xs text-muted-foreground">—</span>
+  1106→                    )}
+  1107→                  </TableCell>
+  1108→                  <TableCell className="whitespace-nowrap text-sm">
+  1109→                    <div className="flex items-center gap-1">
+  1110→                      <Clock className="h-3 w-3 text-muted-foreground" />
+  1111→                      {fmtTime(c.startTime)} – {fmtTime(c.endTime)}
+  1112→                    </div>
+  1113→                  </TableCell>
+  1114→                  <TableCell>
+  1115→                    {c.room ? (
+  1116→                      <span className="flex items-center gap-1 text-sm">
+  1117→                        <MapPin className="h-3 w-3 text-muted-foreground" />
+  1118→                        {c.room}
+  1119→                      </span>
+  1120→                    ) : (
+  1121→                      <span className="text-xs text-muted-foreground">—</span>
+  1122→                    )}
+  1123→                  </TableCell>
+  1124→                  <TableCell>
+  1125→                    <div className="flex flex-col gap-1">
+  1126→                      <div className="flex items-center justify-between text-xs">
+  1127→                        <span className="font-medium">{enrolled}</span>
+  1128→                        <span className="text-muted-foreground">/ {c.capacity}</span>
+  1129→                      </div>
+  1130→                      <Progress value={pct} className="h-1.5" />
+  1131→                    </div>
+  1132→                  </TableCell>
+  1133→                  <TableCell className="text-right font-medium tabular-nums">
+  1134→                    {currency(c.fee)}
+  1135→                  </TableCell>
+  1136→                  <TableCell>
+  1137→                    {c.active ? (
+  1138→                      <Badge className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-400">
+  1139→                        Active
+  1140→                      </Badge>
+  1141→                    ) : (
+  1142→                      <Badge variant="secondary">Inactive</Badge>
+  1143→                    )}
+  1144→                  </TableCell>
+  1145→                  <TableCell className="text-right">
+  1146→                    <DropdownMenu>
+  1147→                      <DropdownMenuTrigger asChild>
+  1148→                        <Button variant="ghost" size="icon" className="h-8 w-8">
+  1149→                          <MoreVertical className="h-4 w-4" />
+  1150→                          <span className="sr-only">Open menu</span>
+  1151→                        </Button>
+  1152→                      </DropdownMenuTrigger>
+  1153→                      <DropdownMenuContent align="end">
+  1154→                        <DropdownMenuItem onClick={() => onEdit(c)}>
+  1155→                          <Pencil className="mr-2 h-4 w-4" />
+  1156→                          Edit
+  1157→                        </DropdownMenuItem>
+  1158→                        <DropdownMenuSeparator />
+  1159→                        <DropdownMenuItem
+  1160→                          onClick={() => onDelete(c)}
+  1161→                          className="text-destructive focus:text-destructive"
+  1162→                        >
+  1163→                          <Trash2 className="mr-2 h-4 w-4" />
+  1164→                          Delete
+  1165→                        </DropdownMenuItem>
+  1166→                      </DropdownMenuContent>
+  1167→                    </DropdownMenu>
+  1168→                  </TableCell>
+  1169→                </TableRow>
+  1170→              )
+  1171→            })}
+  1172→          </TableBody>
+  1173→        </Table>
+  1174→      </div>
+  1175→    </Card>
+  1176→  )
+  1177→}
+  1178→

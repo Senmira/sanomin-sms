@@ -1,0 +1,1784 @@
+     1→     1→'use client'
+     2→     2→
+     3→     3→import { useCallback, useEffect, useMemo, useState } from 'react'
+     4→     4→import { toast } from 'sonner'
+     5→     5→import {
+     6→     6→  Users,
+     7→     7→  UserCheck,
+     8→     8→  GraduationCap,
+     9→     9→  Fingerprint,
+    10→    10→  Filter,
+    11→    11→  Search,
+    12→    12→  Plus,
+    13→    13→  Download,
+    14→    14→  MoreHorizontal,
+    15→    15→  Eye,
+    16→    16→  Pencil,
+    17→    17→  Trash2,
+    18→    18→  X,
+    19→    19→  Phone,
+    20→    20→  Mail,
+    21→    21→  MapPin,
+    22→    22→  CalendarDays,
+    23→    23→  ShieldCheck,
+    24→    24→  IdCard,
+    25→    25→  Loader2,
+    26→    26→  Users2,
+    27→    27→  Building2,
+    28→    28→  Briefcase,
+    29→    29→  Wallet,
+    30→    30→  CheckCircle2,
+    31→    31→  ScanLine,
+    32→    32→  Scan,
+    33→    33→  KeyRound,
+    34→    34→  AlertCircle,
+    35→    35→  Clock,
+    36→    36→} from 'lucide-react'
+    37→    37→
+    38→    38→import { api } from '@/lib/api'
+    39→    39→import {
+    40→    40→  TeacherRow,
+    41→    41→  GENDERS,
+    42→    42→  TEACHER_TYPES,
+    43→    43→  TEACHER_STATUS,
+    44→    44→  DAYS,
+    45→    45→} from '@/lib/types'
+    46→    46→import {
+    47→    47→  initials,
+    48→    48→  avatarColor,
+    49→    49→  fmtDate,
+    50→    50→  fmtTime,
+    51→    51→  fmtDateTime,
+    52→    52→  timeAgo,
+    53→    53→  currency,
+    54→    54→} from '@/lib/format'
+    55→    55→
+    56→    56→import { SectionHeader } from '@/components/shared/section-header'
+    57→    57→import { StatCard } from '@/components/shared/stat-card'
+    58→    58→import { EmptyState } from '@/components/shared/empty-state'
+    59→    59→import { ConfirmDialog } from '@/components/shared/confirm-dialog'
+    60→    60→
+    61→    61→import { Button } from '@/components/ui/button'
+    62→    62→import { Input } from '@/components/ui/input'
+    63→    63→import { Label } from '@/components/ui/label'
+    64→    64→import { Textarea } from '@/components/ui/textarea'
+    65→    65→import { Badge } from '@/components/ui/badge'
+    66→    66→import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+    67→    67→import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+    68→    68→import {
+    69→    69→  Select,
+    70→    70→  SelectContent,
+    71→    71→  SelectItem,
+    72→    72→  SelectTrigger,
+    73→    73→  SelectValue,
+    74→    74→} from '@/components/ui/select'
+    75→    75→import {
+    76→    76→  Dialog,
+    77→    77→  DialogContent,
+    78→    78→  DialogDescription,
+    79→    79→  DialogFooter,
+    80→    80→  DialogHeader,
+    81→    81→  DialogTitle,
+    82→    82→} from '@/components/ui/dialog'
+    83→    83→import {
+    84→    84→  DropdownMenu,
+    85→    85→  DropdownMenuContent,
+    86→    86→  DropdownMenuItem,
+    87→    87→  DropdownMenuLabel,
+    88→    88→  DropdownMenuSeparator,
+    89→    89→  DropdownMenuTrigger,
+    90→    90→} from '@/components/ui/dropdown-menu'
+    91→    91→import {
+    92→    92→  Table,
+    93→    93→  TableBody,
+    94→    94→  TableHead,
+    95→    95→  TableHeader,
+    96→    96→  TableRow,
+    97→    97→  TableCell,
+    98→    98→} from '@/components/ui/table'
+    99→    99→import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+   100→   100→import { Skeleton } from '@/components/ui/skeleton'
+   101→   101→
+   102→   102→// ─── Helpers ───────────────────────────────────────────────────────────────
+   103→   103→const PAGE_SIZE = 20
+   104→   104→
+   105→   105→function toDateInput(iso?: string | null): string {
+   106→   106→  if (!iso) return ''
+   107→   107→  const d = new Date(iso)
+   108→   108→  if (isNaN(d.getTime())) return ''
+   109→   109→  return d.toISOString().slice(0, 10)
+   110→   110→}
+   111→   111→
+   112→   112→function csvEscape(v: unknown): string {
+   113→   113→  const s = String(v ?? '')
+   114→   114→  if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`
+   115→   115→  return s
+   116→   116→}
+   117→   117→
+   118→   118→function exportTeachersCsv(rows: TeacherRow[]): void {
+   119→   119→  const headers = [
+   120→   120→    'Teacher ID',
+   121→   121→    'Fingerprint ID',
+   122→   122→    'Full Name',
+   123→   123→    'Type',
+   124→   124→    'Gender',
+   125→   125→    'Phone',
+   126→   126→    'Email',
+   127→   127→    'NIC',
+   128→   128→    'Qualification',
+   129→   129→    'Specialization',
+   130→   130→    'Status',
+   131→   131→    'Hire Date',
+   132→   132→    'Monthly Rate (LKR)',
+   133→   133→    'Classes',
+   134→   134→  ]
+   135→   135→  const lines = rows.map((r) =>
+   136→   136→    [
+   137→   137→      r.teacherId,
+   138→   138→      r.fingerprintId || '',
+   139→   139→      r.fullName,
+   140→   140→      r.type,
+   141→   141→      r.gender || '',
+   142→   142→      r.phone || '',
+   143→   143→      r.email || '',
+   144→   144→      r.nic || '',
+   145→   145→      r.qualification || '',
+   146→   146→      r.specialization || '',
+   147→   147→      r.status,
+   148→   148→      r.hireDate ? toDateInput(r.hireDate) : '',
+   149→   149→      String(r.monthlyRate ?? 0),
+   150→   150→      String(r._count?.classes ?? 0),
+   151→   151→    ]
+   152→   152→      .map(csvEscape)
+   153→   153→      .join(','),
+   154→   154→  )
+   155→   155→  const csv = [headers.join(','), ...lines].join('\n')
+   156→   156→  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+   157→   157→  const url = URL.createObjectURL(blob)
+   158→   158→  const a = document.createElement('a')
+   159→   159→  a.href = url
+   160→   160→  a.download = `sanomin-teachers-${new Date().toISOString().slice(0, 10)}.csv`
+   161→   161→  document.body.appendChild(a)
+   162→   162→  a.click()
+   163→   163→  document.body.removeChild(a)
+   164→   164→  URL.revokeObjectURL(url)
+   165→   165→}
+   166→   166→
+   167→   167→const STATUS_VARIANT: Record<
+   168→   168→  string,
+   169→   169→  'default' | 'secondary' | 'destructive' | 'outline'
+   170→   170→> = {
+   171→   171→  Active: 'default',
+   172→   172→  Inactive: 'secondary',
+   173→   173→  'On Leave': 'outline',
+   174→   174→}
+   175→   175→
+   176→   176→// ─── List response shape ───────────────────────────────────────────────────
+   177→   177→interface ListResponse {
+   178→   178→  data: TeacherRow[]
+   179→   179→  total: number
+   180→   180→  page: number
+   181→   181→  limit: number
+   182→   182→  stats: {
+   183→   183→    totalTeachers: number
+   184→   184→    internalCount: number
+   185→   185→    externalCount: number
+   186→   186→    onLeaveCount: number
+   187→   187→    filteredCount: number
+   188→   188→  }
+   189→   189→}
+   190→   190→
+   191→   191→// ─── Type filter tabs (All / Internal / External) ──────────────────────────
+   192→   192→type TypeFilter = 'All' | 'Internal' | 'External'
+   193→   193→
+   194→   194→// ─── Main section component ────────────────────────────────────────────────
+   195→   195→export function TeachersSection() {
+   196→   196→  const [rows, setRows] = useState<TeacherRow[]>([])
+   197→   197→  const [total, setTotal] = useState(0)
+   198→   198→  const [stats, setStats] = useState({
+   199→   199→    totalTeachers: 0,
+   200→   200→    internalCount: 0,
+   201→   201→    externalCount: 0,
+   202→   202→    onLeaveCount: 0,
+   203→   203→    filteredCount: 0,
+   204→   204→  })
+   205→   205→  const [loading, setLoading] = useState(true)
+   206→   206→  const [error, setError] = useState<string | null>(null)
+   207→   207→
+   208→   208→  // filters
+   209→   209→  const [q, setQ] = useState('')
+   210→   210→  const [typeFilter, setTypeFilter] = useState<TypeFilter>('All')
+   211→   211→  const [status, setStatus] = useState('')
+   212→   212→  const [page, setPage] = useState(1)
+   213→   213→
+   214→   214→  // dialog state
+   215→   215→  const [addEditOpen, setAddEditOpen] = useState(false)
+   216→   216→  const [editing, setEditing] = useState<TeacherRow | null>(null)
+   217→   217→  const [profileOpen, setProfileOpen] = useState(false)
+   218→   218→  const [profileTeacher, setProfileTeacher] = useState<TeacherRow | null>(null)
+   219→   219→  const [fpOpen, setFpOpen] = useState(false)
+   220→   220→  const [fpTarget, setFpTarget] = useState<TeacherRow | null>(null)
+   221→   221→  const [deleteTarget, setDeleteTarget] = useState<TeacherRow | null>(null)
+   222→   222→
+   223→   223→  const hasFilters = Boolean(q || status || typeFilter !== 'All')
+   224→   224→
+   225→   225→  const setFilter = useCallback(
+   226→   226→    <K extends 'q' | 'status'>(key: K, value: string) => {
+   227→   227→      setPage(1)
+   228→   228→      if (key === 'q') setQ(value)
+   229→   229→      else setStatus(value)
+   230→   230→    },
+   231→   231→    [],
+   232→   232→  )
+   233→   233→
+   234→   234→  const setTypeTab = useCallback((v: TypeFilter) => {
+   235→   235→    setTypeFilter(v)
+   236→   236→    setPage(1)
+   237→   237→  }, [])
+   238→   238→
+   239→   239→  const clearFilters = useCallback(() => {
+   240→   240→    setQ('')
+   241→   241→    setStatus('')
+   242→   242→    setTypeFilter('All')
+   243→   243→    setPage(1)
+   244→   244→  }, [])
+   245→   245→
+   246→   246→  const queryParams = useMemo(() => {
+   247→   247→    const p = new URLSearchParams()
+   248→   248→    if (q) p.set('q', q)
+   249→   249→    if (typeFilter !== 'All') p.set('type', typeFilter)
+   250→   250→    if (status) p.set('status', status)
+   251→   251→    p.set('page', String(page))
+   252→   252→    p.set('limit', String(PAGE_SIZE))
+   253→   253→    return p.toString()
+   254→   254→  }, [q, typeFilter, status, page])
+   255→   255→
+   256→   256→  // Fetch list — debounced via setTimeout; setState only inside async callback
+   257→   257→  useEffect(() => {
+   258→   258→    let alive = true
+   259→   259→    const t = setTimeout(() => {
+   260→   260→      if (!alive) return
+   261→   261→      setLoading(true)
+   262→   262→      api<ListResponse>(`/api/teachers?${queryParams}`)
+   263→   263→        .then((res) => {
+   264→   264→          if (!alive) return
+   265→   265→          setRows(res.data)
+   266→   266→          setTotal(res.total)
+   267→   267→          setStats(res.stats)
+   268→   268→          setError(null)
+   269→   269→          setLoading(false)
+   270→   270→        })
+   271→   271→        .catch((err: unknown) => {
+   272→   272→          if (!alive) return
+   273→   273→          const msg = err instanceof Error ? err.message : 'Failed to load'
+   274→   274→          setError(msg)
+   275→   275→          setLoading(false)
+   276→   276→          toast.error(msg)
+   277→   277→        })
+   278→   278→    }, 220)
+   279→   279→    return () => {
+   280→   280→      alive = false
+   281→   281→      clearTimeout(t)
+   282→   282→    }
+   283→   283→  }, [queryParams])
+   284→   284→
+   285→   285→  const reload = useCallback(() => {
+   286→   286→    setLoading(true)
+   287→   287→    api<ListResponse>(`/api/teachers?${queryParams}`)
+   288→   288→      .then((res) => {
+   289→   289→        setRows(res.data)
+   290→   290→        setTotal(res.total)
+   291→   291→        setStats(res.stats)
+   292→   292→        setError(null)
+   293→   293→        setLoading(false)
+   294→   294→      })
+   295→   295→      .catch((err: unknown) => {
+   296→   296→        const msg = err instanceof Error ? err.message : 'Failed to load'
+   297→   297→        setError(msg)
+   298→   298→        setLoading(false)
+   299→   299→      })
+   300→   300→  }, [queryParams])
+   301→   301→
+   302→   302→  // Action handlers
+   303→   303→  const openAdd = useCallback(() => {
+   304→   304→    setEditing(null)
+   305→   305→    setAddEditOpen(true)
+   306→   306→  }, [])
+   307→   307→
+   308→   308→  const openEdit = useCallback((t: TeacherRow) => {
+   309→   309→    setEditing(t)
+   310→   310→    setAddEditOpen(true)
+   311→   311→  }, [])
+   312→   312→
+   313→   313→  const openProfile = useCallback((t: TeacherRow) => {
+   314→   314→    setProfileTeacher(t)
+   315→   315→    setProfileOpen(true)
+   316→   316→  }, [])
+   317→   317→
+   318→   318→  const openFingerprint = useCallback((t: TeacherRow) => {
+   319→   319→    setFpTarget(t)
+   320→   320→    setFpOpen(true)
+   321→   321→  }, [])
+   322→   322→
+   323→   323→  const handleDelete = useCallback(async () => {
+   324→   324→    if (!deleteTarget) return
+   325→   325→    try {
+   326→   326→      await api(`/api/teachers/${deleteTarget.id}`, { method: 'DELETE' })
+   327→   327→      toast.success(`${deleteTarget.fullName} deleted`)
+   328→   328→      setDeleteTarget(null)
+   329→   329→      reload()
+   330→   330→    } catch (err) {
+   331→   331→      const msg = err instanceof Error ? err.message : 'Delete failed'
+   332→   332→      toast.error(msg)
+   333→   333→    }
+   334→   334→  }, [deleteTarget, reload])
+   335→   335→
+   336→   336→  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+   337→   337→  const showingFrom = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1
+   338→   338→  const showingTo = Math.min(total, page * PAGE_SIZE)
+   339→   339→
+   340→   340→  return (
+   341→   341→    <div className="flex flex-col gap-6">
+   342→   342→      <SectionHeader
+   343→   343→        title="Teachers"
+   344→   344→        description="Manage internal staff and external tuition teachers. Track fingerprints, classes, and contact details."
+   345→   345→        icon={<Users className="h-5 w-5" />}
+   346→   346→        actions={
+   347→   347→          <>
+   348→   348→            <Button
+   349→   349→              variant="outline"
+   350→   350→              size="sm"
+   351→   351→              onClick={() => exportTeachersCsv(rows)}
+   352→   352→              disabled={rows.length === 0}
+   353→   353→            >
+   354→   354→              <Download className="h-4 w-4" />
+   355→   355→              Export CSV
+   356→   356→            </Button>
+   357→   357→            <Button size="sm" onClick={openAdd}>
+   358→   358→              <Plus className="h-4 w-4" />
+   359→   359→              Add Teacher
+   360→   360→            </Button>
+   361→   361→          </>
+   362→   362→        }
+   363→   363→      />
+   364→   364→
+   365→   365→      {/* Stats strip */}
+   366→   366→      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+   367→   367→        <StatCard
+   368→   368→          label="Total teachers"
+   369→   369→          value={stats.totalTeachers}
+   370→   370→          icon={Users2}
+   371→   371→          accent="blue"
+   372→   372→          hint="Internal + External"
+   373→   373→        />
+   374→   374→        <StatCard
+   375→   375→          label="Internal staff"
+   376→   376→          value={stats.internalCount}
+   377→   377→          icon={Building2}
+   378→   378→          accent="green"
+   379→   379→          hint="On-roll employees"
+   380→   380→        />
+   381→   381→        <StatCard
+   382→   382→          label="External tuition"
+   383→   383→          value={stats.externalCount}
+   384→   384→          icon={Briefcase}
+   385→   385→          accent="purple"
+   386→   386→          hint="Visiting teachers"
+   387→   387→        />
+   388→   388→        <StatCard
+   389→   389→          label="On leave"
+   390→   390→          value={stats.onLeaveCount}
+   391→   391→          icon={Fingerprint}
+   392→   392→          accent="amber"
+   393→   393→          hint="Currently inactive"
+   394→   394→        />
+   395→   395→      </div>
+   396→   396→
+   397→   397→      {/* Type tabs (segmented control) */}
+   398→   398→      <Tabs
+   399→   399→        value={typeFilter}
+   400→   400→        onValueChange={(v) => setTypeTab(v as TypeFilter)}
+   401→   401→      >
+   402→   402→        <TabsList>
+   403→   403→          <TabsTrigger value="All">All</TabsTrigger>
+   404→   404→          <TabsTrigger value="Internal">Internal</TabsTrigger>
+   405→   405→          <TabsTrigger value="External">External</TabsTrigger>
+   406→   406→        </TabsList>
+   407→   407→      </Tabs>
+   408→   408→
+   409→   409→      {/* Toolbar */}
+   410→   410→      <div className="flex flex-col gap-3 rounded-xl border bg-card p-3 shadow-sm sm:flex-row sm:items-center sm:gap-2 sm:p-4">
+   411→   411→        <div className="relative flex-1">
+   412→   412→          <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+   413→   413→          <Input
+   414→   414→            placeholder="Search by name, teacher ID, fingerprint or phone…"
+   415→   415→            value={q}
+   416→   416→            onChange={(e) => setFilter('q', e.target.value)}
+   417→   417→            className="pl-9"
+   418→   418→          />
+   419→   419→        </div>
+   420→   420→        <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+   421→   421→          <Select
+   422→   422→            value={status || 'ALL'}
+   423→   423→            onValueChange={(v) => setFilter('status', v === 'ALL' ? '' : v)}
+   424→   424→          >
+   425→   425→            <SelectTrigger className="w-full sm:w-[150px]">
+   426→   426→              <SelectValue placeholder="Status" />
+   427→   427→            </SelectTrigger>
+   428→   428→            <SelectContent>
+   429→   429→              <SelectItem value="ALL">All status</SelectItem>
+   430→   430→              {TEACHER_STATUS.map((s) => (
+   431→   431→                <SelectItem key={s} value={s}>
+   432→   432→                  {s}
+   433→   433→                </SelectItem>
+   434→   434→              ))}
+   435→   435→            </SelectContent>
+   436→   436→          </Select>
+   437→   437→        </div>
+   438→   438→        {hasFilters && (
+   439→   439→          <Button
+   440→   440→            variant="ghost"
+   441→   441→            size="sm"
+   442→   442→            onClick={clearFilters}
+   443→   443→            className="shrink-0"
+   444→   444→          >
+   445→   445→            <X className="h-4 w-4" />
+   446→   446→            Clear
+   447→   447→          </Button>
+   448→   448→        )}
+   449→   449→      </div>
+   450→   450→
+   451→   451→      {/* Data table */}
+   452→   452→      <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
+   453→   453→        <div className="max-h-[60vh] overflow-y-auto scroll-thin">
+   454→   454→          <Table className="table-zebra">
+   455→   455→            <TableHeader className="sticky top-0 z-10 bg-muted/80 backdrop-blur">
+   456→   456→              <TableRow>
+   457→   457→                <TableHead className="min-w-[220px]">Teacher</TableHead>
+   458→   458→                <TableHead>Type</TableHead>
+   459→   459→                <TableHead>Specialization</TableHead>
+   460→   460→                <TableHead>Contact</TableHead>
+   461→   461→                <TableHead className="text-center">Classes</TableHead>
+   462→   462→                <TableHead>Joined</TableHead>
+   463→   463→                <TableHead>Last Active</TableHead>
+   464→   464→                <TableHead>Status</TableHead>
+   465→   465→                <TableHead>Fingerprint</TableHead>
+   466→   466→                <TableHead className="w-[60px] text-right">Actions</TableHead>
+   467→   467→              </TableRow>
+   468→   468→            </TableHeader>
+   469→   469→            <TableBody>
+   470→   470→              {loading ? (
+   471→   471→                Array.from({ length: 7 }).map((_, i) => (
+   472→   472→                  <TableRow key={`sk-${i}`}>
+   473→   473→                    <TableCell>
+   474→   474→                      <div className="flex items-center gap-3">
+   475→   475→                        <Skeleton className="h-9 w-9 rounded-full" />
+   476→   476→                        <div className="space-y-1.5">
+   477→   477→                          <Skeleton className="h-3 w-36" />
+   478→   478→                          <Skeleton className="h-2.5 w-20" />
+   479→   479→                        </div>
+   480→   480→                      </div>
+   481→   481→                    </TableCell>
+   482→   482→                    <TableCell>
+   483→   483→                      <Skeleton className="h-5 w-20 rounded-full" />
+   484→   484→                    </TableCell>
+   485→   485→                    <TableCell>
+   486→   486→                      <Skeleton className="h-4 w-24" />
+   487→   487→                    </TableCell>
+   488→   488→                    <TableCell>
+   489→   489→                      <div className="space-y-1.5">
+   490→   490→                        <Skeleton className="h-3 w-28" />
+   491→   491→                        <Skeleton className="h-2.5 w-32" />
+   492→   492→                      </div>
+   493→   493→                    </TableCell>
+   494→   494→                    <TableCell>
+   495→   495→                      <Skeleton className="mx-auto h-5 w-8" />
+   496→   496→                    </TableCell>
+   497→   497→                    <TableCell>
+   498→   498→                      <Skeleton className="h-4 w-20" />
+   499→   499→                    </TableCell>
+   500→   500→                    <TableCell>
+   501→   501→                      <Skeleton className="h-4 w-24" />
+   502→   502→                    </TableCell>
+   503→   503→                    <TableCell>
+   504→   504→                      <Skeleton className="h-5 w-16 rounded-full" />
+   505→   505→                    </TableCell>
+   506→   506→                    <TableCell>
+   507→   507→                      <Skeleton className="h-4 w-24" />
+   508→   508→                    </TableCell>
+   509→   509→                    <TableCell>
+   510→   510→                      <Skeleton className="h-7 w-7 rounded-md" />
+   511→   511→                    </TableCell>
+   512→   512→                  </TableRow>
+   513→   513→                ))
+   514→   514→              ) : rows.length === 0 ? (
+   515→   515→                <TableRow className="hover:bg-transparent">
+   516→   516→                  <TableCell colSpan={10} className="p-0">
+   517→   517→                    <EmptyState
+   518→   518→                      icon={Users}
+   519→   519→                      title={hasFilters ? 'No matching teachers' : 'No teachers yet'}
+   520→   520→                      description={
+   521→   521→                        hasFilters
+   522→   522→                          ? 'Try adjusting your search or filters.'
+   523→   523→                          : 'Add your first teacher — internal staff or external tuition teacher.'
+   524→   524→                      }
+   525→   525→                      action={
+   526→   526→                        <Button size="sm" onClick={openAdd}>
+   527→   527→                          <Plus className="h-4 w-4" />
+   528→   528→                          Add Teacher
+   529→   529→                        </Button>
+   530→   530→                      }
+   531→   531→                      className="m-4"
+   532→   532→                    />
+   533→   533→                  </TableCell>
+   534→   534→                </TableRow>
+   535→   535→              ) : (
+   536→   536→                rows.map((t) => (
+   537→   537→                  <TeacherTableRow
+   538→   538→                    key={t.id}
+   539→   539→                    teacher={t}
+   540→   540→                    onView={() => openProfile(t)}
+   541→   541→                    onEdit={() => openEdit(t)}
+   542→   542→                    onManageFingerprint={() => openFingerprint(t)}
+   543→   543→                    onDelete={() => setDeleteTarget(t)}
+   544→   544→                  />
+   545→   545→                ))
+   546→   546→              )}
+   547→   547→            </TableBody>
+   548→   548→          </Table>
+   549→   549→        </div>
+   550→   550→
+   551→   551→        {/* Pagination */}
+   552→   552→        {!loading && rows.length > 0 && (
+   553→   553→          <div className="flex flex-col items-center justify-between gap-2 border-t bg-muted/40 px-4 py-2.5 sm:flex-row">
+   554→   554→            <p className="text-xs text-muted-foreground">
+   555→   555→              Showing <span className="font-medium text-foreground">{showingFrom}</span>
+   556→   556→              –<span className="font-medium text-foreground">{showingTo}</span> of{' '}
+   557→   557→              <span className="font-medium text-foreground">{total}</span>
+   558→   558→            </p>
+   559→   559→            <div className="flex items-center gap-1.5">
+   560→   560→              <Button
+   561→   561→                variant="outline"
+   562→   562→                size="sm"
+   563→   563→                disabled={page <= 1}
+   564→   564→                onClick={() => setPage((p) => Math.max(1, p - 1))}
+   565→   565→              >
+   566→   566→                Previous
+   567→   567→              </Button>
+   568→   568→              <span className="text-xs text-muted-foreground">
+   569→   569→                Page <span className="font-medium text-foreground">{page}</span> of{' '}
+   570→   570→                {totalPages}
+   571→   571→              </span>
+   572→   572→              <Button
+   573→   573→                variant="outline"
+   574→   574→                size="sm"
+   575→   575→                disabled={page >= totalPages}
+   576→   576→                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+   577→   577→              >
+   578→   578→                Next
+   579→   579→              </Button>
+   580→   580→            </div>
+   581→   581→          </div>
+   582→   582→        )}
+   583→   583→      </div>
+   584→   584→
+   585→   585→      {/* Dialogs */}
+   586→   586→      {addEditOpen && (
+   587→   587→        <AddEditTeacherDialog
+   588→   588→          teacher={editing}
+   589→   589→          onClose={() => setAddEditOpen(false)}
+   590→   590→          onSaved={(msg) => {
+   591→   591→            toast.success(msg)
+   592→   592→            setAddEditOpen(false)
+   593→   593→            reload()
+   594→   594→          }}
+   595→   595→        />
+   596→   596→      )}
+   597→   597→
+   598→   598→      {profileOpen && profileTeacher && (
+   599→   599→        <ProfileDialog
+   600→   600→          teacher={profileTeacher}
+   601→   601→          onClose={() => setProfileOpen(false)}
+   602→   602→          onEdit={() => {
+   603→   603→            setProfileOpen(false)
+   604→   604→            openEdit(profileTeacher)
+   605→   605→          }}
+   606→   606→          onManageFingerprint={() => {
+   607→   607→            setProfileOpen(false)
+   608→   608→            openFingerprint(profileTeacher)
+   609→   609→          }}
+   610→   610→        />
+   611→   611→      )}
+   612→   612→
+   613→   613→      {fpOpen && fpTarget && (
+   614→   614→        <ManageFingerprintDialog
+   615→   615→          teacher={fpTarget}
+   616→   616→          onClose={() => setFpOpen(false)}
+   617→   617→          onSaved={(msg) => {
+   618→   618→            toast.success(msg)
+   619→   619→            setFpOpen(false)
+   620→   620→            reload()
+   621→   621→          }}
+   622→   622→        />
+   623→   623→      )}
+   624→   624→
+   625→   625→      <ConfirmDialog
+   626→   626→        open={deleteTarget !== null}
+   627→   627→        onOpenChange={(v) => !v && setDeleteTarget(null)}
+   628→   628→        title="Delete teacher?"
+   629→   629→        description={
+   630→   630→          deleteTarget
+   631→   631→            ? `This permanently removes ${deleteTarget.fullName} (${deleteTarget.teacherId}) and all related attendance records. Assigned classes will be unassigned but not deleted.`
+   632→   632→            : ''
+   633→   633→        }
+   634→   634→        confirmText="Delete"
+   635→   635→        onConfirm={handleDelete}
+   636→   636→      />
+   637→   637→    </div>
+   638→   638→  )
+   639→   639→}
+   640→   640→
+   641→   641→// ─── Teacher table row ─────────────────────────────────────────────────────
+   642→   642→function TeacherTableRow({
+   643→   643→  teacher,
+   644→   644→  onView,
+   645→   645→  onEdit,
+   646→   646→  onManageFingerprint,
+   647→   647→  onDelete,
+   648→   648→}: {
+   649→   649→  teacher: TeacherRow
+   650→   650→  onView: () => void
+   651→   651→  onEdit: () => void
+   652→   652→  onManageFingerprint: () => void
+   653→   653→  onDelete: () => void
+   654→   654→}) {
+   655→   655→  const classesCount = teacher._count?.classes ?? teacher.classes.length
+   656→   656→  const specs = (teacher.specialization || '')
+   657→   657→    .split(',')
+   658→   658→    .map((s) => s.trim())
+   659→   659→    .filter(Boolean)
+   660→   660→
+   661→   661→  return (
+   662→   662→    <TableRow className="cursor-pointer" onClick={onView}>
+   663→   663→      <TableCell>
+   664→   664→        <div className="flex items-center gap-3">
+   665→   665→          <Avatar className="size-9 ring-1 ring-border">
+   666→   666→            <AvatarFallback className={avatarColor(teacher.fullName)}>
+   667→   667→              {initials(teacher.fullName)}
+   668→   668→            </AvatarFallback>
+   669→   669→          </Avatar>
+   670→   670→          <div className="min-w-0">
+   671→   671→            <div className="truncate font-medium text-foreground">
+   672→   672→              {teacher.fullName}
+   673→   673→            </div>
+   674→   674→            <div className="font-mono text-xs text-muted-foreground">
+   675→   675→              {teacher.teacherId}
+   676→   676→            </div>
+   677→   677→          </div>
+   678→   678→        </div>
+   679→   679→      </TableCell>
+   680→   680→      <TableCell>
+   681→   681→        {teacher.type === 'Internal' ? (
+   682→   682→          <Badge
+   683→   683→            variant="outline"
+   684→   684→            className="border-blue-500/30 bg-blue-500/15 font-medium text-blue-700 dark:text-blue-300"
+   685→   685→          >
+   686→   686→            <Building2 className="h-3 w-3" />
+   687→   687→            Internal
+   688→   688→          </Badge>
+   689→   689→        ) : (
+   690→   690→          <Badge
+   691→   691→            variant="outline"
+   692→   692→            className="border-purple-500/30 bg-purple-500/15 font-medium text-purple-700 dark:text-purple-300"
+   693→   693→          >
+   694→   694→            <Briefcase className="h-3 w-3" />
+   695→   695→            External
+   696→   696→          </Badge>
+   697→   697→        )}
+   698→   698→      </TableCell>
+   699→   699→      <TableCell>
+   700→   700→        {specs.length === 0 ? (
+   701→   701→          <span className="text-xs text-muted-foreground">—</span>
+   702→   702→        ) : (
+   703→   703→          <div className="flex flex-wrap gap-1">
+   704→   704→            {specs.slice(0, 3).map((s) => (
+   705→   705→              <span
+   706→   706→                key={s}
+   707→   707→                className="inline-flex items-center rounded-md bg-muted px-1.5 py-0.5 text-xs font-medium text-foreground"
+   708→   708→              >
+   709→   709→                {s}
+   710→   710→              </span>
+   711→   711→            ))}
+   712→   712→          </div>
+   713→   713→        )}
+   714→   714→      </TableCell>
+   715→   715→      <TableCell>
+   716→   716→        <div className="text-sm">
+   717→   717→          <div className="flex items-center gap-1.5 font-mono text-xs text-foreground">
+   718→   718→            <Phone className="h-3 w-3 text-muted-foreground" />
+   719→   719→            {teacher.phone || '—'}
+   720→   720→          </div>
+   721→   721→          <div className="flex items-center gap-1.5 truncate text-xs text-muted-foreground">
+   722→   722→            <Mail className="h-3 w-3 shrink-0" />
+   723→   723→            <span className="truncate">{teacher.email || '—'}</span>
+   724→   724→          </div>
+   725→   725→        </div>
+   726→   726→      </TableCell>
+   727→   727→      <TableCell className="text-center">
+   728→   728→        <span className="inline-flex h-6 min-w-[28px] items-center justify-center rounded-md bg-muted px-1.5 text-xs font-semibold text-foreground">
+   729→   729→          {classesCount}
+   730→   730→        </span>
+   731→   731→      </TableCell>
+   732→   732→      <TableCell>
+   733→   733→        {teacher.hireDate ? (
+   734→   734→          <span className="text-xs text-muted-foreground" title={fmtDate(teacher.hireDate)}>
+   735→   735→            {fmtDate(teacher.hireDate)}
+   736→   736→          </span>
+   737→   737→        ) : (
+   738→   738→          <span className="text-xs text-muted-foreground">—</span>
+   739→   739→        )}
+   740→   740→      </TableCell>
+   741→   741→      <TableCell>
+   742→   742→        {teacher.lastActive ? (
+   743→   743→          <div className="flex flex-col">
+   744→   744→            <span className="text-xs font-medium text-foreground" title={fmtDateTime(teacher.lastActive)}>
+   745→   745→              {timeAgo(teacher.lastActive)}
+   746→   746→            </span>
+   747→   747→            <span className="text-[10px] text-muted-foreground">{fmtDate(teacher.lastActive)}</span>
+   748→   748→          </div>
+   749→   749→        ) : (
+   750→   750→          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+   751→   751→            <Clock className="h-3 w-3" />
+   752→   752→            Never
+   753→   753→          </span>
+   754→   754→        )}
+   755→   755→      </TableCell>
+   756→   756→      <TableCell>
+   757→   757→        <Badge variant={STATUS_VARIANT[teacher.status] || 'secondary'}>
+   758→   758→          {teacher.status}
+   759→   759→        </Badge>
+   760→   760→      </TableCell>
+   761→   761→      <TableCell>
+   762→   762→        {teacher.fingerprintId ? (
+   763→   763→          <span className="inline-flex items-center gap-1.5 font-mono text-xs text-foreground">
+   764→   764→            <Fingerprint className="h-3.5 w-3.5 text-primary" />
+   765→   765→            {teacher.fingerprintId}
+   766→   766→          </span>
+   767→   767→        ) : (
+   768→   768→          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+   769→   769→            <AlertCircle className="h-3.5 w-3.5" />
+   770→   770→            Not enrolled
+   771→   771→          </span>
+   772→   772→        )}
+   773→   773→      </TableCell>
+   774→   774→      <TableCell className="text-right">
+   775→   775→        <div onClick={(e) => e.stopPropagation()}>
+   776→   776→          <DropdownMenu>
+   777→   777→            <DropdownMenuTrigger asChild>
+   778→   778→              <Button variant="ghost" size="icon" className="size-8">
+   779→   779→                <MoreHorizontal className="h-4 w-4" />
+   780→   780→                <span className="sr-only">Open actions</span>
+   781→   781→              </Button>
+   782→   782→            </DropdownMenuTrigger>
+   783→   783→            <DropdownMenuContent align="end">
+   784→   784→              <DropdownMenuLabel>Actions</DropdownMenuLabel>
+   785→   785→              <DropdownMenuItem onClick={onView}>
+   786→   786→                <Eye className="mr-2 h-4 w-4" />
+   787→   787→                View profile
+   788→   788→              </DropdownMenuItem>
+   789→   789→              <DropdownMenuItem onClick={onEdit}>
+   790→   790→                <Pencil className="mr-2 h-4 w-4" />
+   791→   791→                Edit
+   792→   792→              </DropdownMenuItem>
+   793→   793→              <DropdownMenuItem onClick={onManageFingerprint}>
+   794→   794→                <Fingerprint className="mr-2 h-4 w-4" />
+   795→   795→                Manage fingerprint
+   796→   796→              </DropdownMenuItem>
+   797→   797→              <DropdownMenuSeparator />
+   798→   798→              <DropdownMenuItem
+   799→   799→                onClick={onDelete}
+   800→   800→                className="text-destructive focus:text-destructive"
+   801→   801→              >
+   802→   802→                <Trash2 className="mr-2 h-4 w-4" />
+   803→   803→                Delete
+   804→   804→              </DropdownMenuItem>
+   805→   805→            </DropdownMenuContent>
+   806→   806→          </DropdownMenu>
+   807→   807→        </div>
+   808→   808→      </TableCell>
+   809→   809→    </TableRow>
+   810→   810→  )
+   811→   811→}
+   812→   812→
+   813→   813→// ─── Add / Edit dialog ─────────────────────────────────────────────────────
+   814→   814→interface FormState {
+   815→   815→  fullName: string
+   816→   816→  type: string
+   817→   817→  gender: string
+   818→   818→  phone: string
+   819→   819→  email: string
+   820→   820→  address: string
+   821→   821→  nic: string
+   822→   822→  qualification: string
+   823→   823→  specialization: string
+   824→   824→  status: string
+   825→   825→  hireDate: string
+   826→   826→  monthlyRate: string
+   827→   827→  fingerprintId: string
+   828→   828→  photoUrl: string
+   829→   829→}
+   830→   830→
+   831→   831→function emptyForm(): FormState {
+   832→   832→  return {
+   833→   833→    fullName: '',
+   834→   834→    type: 'Internal',
+   835→   835→    gender: 'Male',
+   836→   836→    phone: '',
+   837→   837→    email: '',
+   838→   838→    address: '',
+   839→   839→    nic: '',
+   840→   840→    qualification: '',
+   841→   841→    specialization: '',
+   842→   842→    status: 'Active',
+   843→   843→    hireDate: toDateInput(new Date().toISOString()),
+   844→   844→    monthlyRate: '0',
+   845→   845→    fingerprintId: '',
+   846→   846→    photoUrl: '',
+   847→   847→  }
+   848→   848→}
+   849→   849→
+   850→   850→function formFromTeacher(t: TeacherRow): FormState {
+   851→   851→  return {
+   852→   852→    fullName: t.fullName,
+   853→   853→    type: t.type,
+   854→   854→    gender: t.gender || 'Male',
+   855→   855→    phone: t.phone || '',
+   856→   856→    email: t.email || '',
+   857→   857→    address: t.address || '',
+   858→   858→    nic: t.nic || '',
+   859→   859→    qualification: t.qualification || '',
+   860→   860→    specialization: t.specialization || '',
+   861→   861→    status: t.status,
+   862→   862→    hireDate: toDateInput(t.hireDate),
+   863→   863→    monthlyRate: String(t.monthlyRate ?? 0),
+   864→   864→    fingerprintId: t.fingerprintId || '',
+   865→   865→    photoUrl: t.photoUrl || '',
+   866→   866→  }
+   867→   867→}
+   868→   868→
+   869→   869→// Generate a random FP-{4-digit} fingerprint id (demo only)
+   870→   870→function randomFingerprintId(): string {
+   871→   871→  const n = Math.floor(1000 + Math.random() * 9000)
+   872→   872→  return `FP-${n}`
+   873→   873→}
+   874→   874→
+   875→   875→function AddEditTeacherDialog({
+   876→   876→  teacher,
+   877→   877→  onClose,
+   878→   878→  onSaved,
+   879→   879→}: {
+   880→   880→  teacher: TeacherRow | null
+   881→   881→  onClose: () => void
+   882→   882→  onSaved: (msg: string) => void
+   883→   883→}) {
+   884→   884→  // Lazy initial state — runs once when dialog mounts
+   885→   885→  const [form, setForm] = useState<FormState>(() =>
+   886→   886→    teacher ? formFromTeacher(teacher) : emptyForm(),
+   887→   887→  )
+   888→   888→  const [saving, setSaving] = useState(false)
+   889→   889→  const [err, setErr] = useState<string | null>(null)
+   890→   890→
+   891→   891→  const isEdit = teacher !== null
+   892→   892→  const isExternal = form.type === 'External'
+   893→   893→
+   894→   894→  const updateField = <K extends keyof FormState>(key: K, value: FormState[K]) => {
+   895→   895→    setForm((f) => ({ ...f, [key]: value }))
+   896→   896→  }
+   897→   897→
+   898→   898→  const handleSubmit = async () => {
+   899→   899→    setErr(null)
+   900→   900→    if (!form.fullName.trim()) {
+   901→   901→      setErr('Full name is required')
+   902→   902→      return
+   903→   903→    }
+   904→   904→
+   905→   905→    const monthlyRateNum = Number(form.monthlyRate || 0)
+   906→   906→    if (isNaN(monthlyRateNum) || monthlyRateNum < 0) {
+   907→   907→      setErr('Monthly rate must be a non-negative number')
+   908→   908→      return
+   909→   909→    }
+   910→   910→
+   911→   911→    const payload = {
+   912→   912→      fullName: form.fullName.trim(),
+   913→   913→      type: form.type,
+   914→   914→      gender: form.gender || null,
+   915→   915→      phone: form.phone || null,
+   916→   916→      email: form.email || null,
+   917→   917→      address: form.address || null,
+   918→   918→      nic: form.nic || null,
+   919→   919→      qualification: form.qualification || null,
+   920→   920→      specialization: form.specialization || null,
+   921→   921→      status: form.status,
+   922→   922→      hireDate: form.hireDate || null,
+   923→   923→      monthlyRate: monthlyRateNum,
+   924→   924→      fingerprintId: form.fingerprintId || null,
+   925→   925→      photoUrl: form.photoUrl || null,
+   926→   926→    }
+   927→   927→
+   928→   928→    setSaving(true)
+   929→   929→    try {
+   930→   930→      if (isEdit && teacher) {
+   931→   931→        const updated = await api<TeacherRow>(
+   932→   932→          `/api/teachers/${teacher.id}`,
+   933→   933→          { method: 'PUT', body: JSON.stringify(payload) },
+   934→   934→        )
+   935→   935→        onSaved(`Updated ${updated.fullName}`)
+   936→   936→      } else {
+   937→   937→        const created = await api<TeacherRow>('/api/teachers', {
+   938→   938→          method: 'POST',
+   939→   939→          body: JSON.stringify(payload),
+   940→   940→        })
+   941→   941→        onSaved(`Added ${created.fullName} (${created.teacherId})`)
+   942→   942→      }
+   943→   943→    } catch (e) {
+   944→   944→      const msg = e instanceof Error ? e.message : 'Save failed'
+   945→   945→      setErr(msg)
+   946→   946→      toast.error(msg)
+   947→   947→    } finally {
+   948→   948→      setSaving(false)
+   949→   949→    }
+   950→   950→  }
+   951→   951→
+   952→   952→  return (
+   953→   953→    <Dialog open onOpenChange={(v) => !v && onClose()}>
+   954→   954→      <DialogContent className="max-h-[90vh] overflow-y-auto scroll-thin sm:max-w-2xl">
+   955→   955→        <DialogHeader>
+   956→   956→          <DialogTitle>{isEdit ? 'Edit teacher' : 'Add new teacher'}</DialogTitle>
+   957→   957→          <DialogDescription>
+   958→   958→            {isEdit
+   959→   959→              ? `Update profile for ${teacher?.fullName} (${teacher?.teacherId}).`
+   960→   960→              : 'Add an internal staff member or external tuition teacher. Teacher ID is generated automatically.'}
+   961→   961→          </DialogDescription>
+   962→   962→        </DialogHeader>
+   963→   963→
+   964→   964→        {err && (
+   965→   965→          <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+   966→   966→            {err}
+   967→   967→          </div>
+   968→   968→        )}
+   969→   969→
+   970→   970→        <div className="grid gap-4 py-1">
+   971→   971→          {/* Identity */}
+   972→   972→          <div className="grid gap-3 sm:grid-cols-2">
+   973→   973→            <Field label="Full name *" className="sm:col-span-2">
+   974→   974→              <Input
+   975→   975→                value={form.fullName}
+   976→   976→                onChange={(e) => updateField('fullName', e.target.value)}
+   977→   977→                placeholder="e.g. Mrs. Kumari Jayawardena"
+   978→   978→              />
+   979→   979→            </Field>
+   980→   980→            <Field label="Teacher type *">
+   981→   981→              <RadioGroup
+   982→   982→                value={form.type}
+   983→   983→                onValueChange={(v) => updateField('type', v)}
+   984→   984→                className="flex gap-4"
+   985→   985→              >
+   986→   986→                {TEACHER_TYPES.map((t) => (
+   987→   987→                  <div key={t} className="flex items-center gap-2">
+   988→   988→                    <RadioGroupItem id={`type-${t}`} value={t} />
+   989→   989→                    <Label htmlFor={`type-${t}`} className="font-normal">
+   990→   990→                      {t}
+   991→   991→                    </Label>
+   992→   992→                  </div>
+   993→   993→                ))}
+   994→   994→              </RadioGroup>
+   995→   995→            </Field>
+   996→   996→            <Field label="Gender">
+   997→   997→              <RadioGroup
+   998→   998→                value={form.gender}
+   999→   999→                onValueChange={(v) => updateField('gender', v)}
+  1000→  1000→                className="flex gap-4"
+  1001→  1001→              >
+  1002→  1002→                {GENDERS.map((g) => (
+  1003→  1003→                  <div key={g} className="flex items-center gap-2">
+  1004→  1004→                    <RadioGroupItem id={`gender-${g}`} value={g} />
+  1005→  1005→                    <Label htmlFor={`gender-${g}`} className="font-normal">
+  1006→  1006→                      {g}
+  1007→  1007→                    </Label>
+  1008→  1008→                  </div>
+  1009→  1009→                ))}
+  1010→  1010→              </RadioGroup>
+  1011→  1011→            </Field>
+  1012→  1012→          </div>
+  1013→  1013→
+  1014→  1014→          {/* Contact */}
+  1015→  1015→          <div className="grid gap-3 sm:grid-cols-2">
+  1016→  1016→            <Field label="Phone">
+  1017→  1017→              <Input
+  1018→  1018→                value={form.phone}
+  1019→  1019→                onChange={(e) => updateField('phone', e.target.value)}
+  1020→  1020→                placeholder="077 123 4567"
+  1021→  1021→              />
+  1022→  1022→            </Field>
+  1023→  1023→            <Field label="Email">
+  1024→  1024→              <Input
+  1025→  1025→                type="email"
+  1026→  1026→                value={form.email}
+  1027→  1027→                onChange={(e) => updateField('email', e.target.value)}
+  1028→  1028→                placeholder="name@sanomin.lk"
+  1029→  1029→              />
+  1030→  1030→            </Field>
+  1031→  1031→            <Field label="NIC">
+  1032→  1032→              <Input
+  1033→  1033→                value={form.nic}
+  1034→  1034→                onChange={(e) => updateField('nic', e.target.value)}
+  1035→  1035→                placeholder="e.g. 851234567V"
+  1036→  1036→              />
+  1037→  1037→            </Field>
+  1038→  1038→            <Field label="Address" className="sm:col-span-2">
+  1039→  1039→              <Input
+  1040→  1040→                value={form.address}
+  1041→  1041→                onChange={(e) => updateField('address', e.target.value)}
+  1042→  1042→                placeholder="No. 12, Temple Road, Colombo"
+  1043→  1043→              />
+  1044→  1044→            </Field>
+  1045→  1045→          </div>
+  1046→  1046→
+  1047→  1047→          {/* Professional */}
+  1048→  1048→          <div className="grid gap-3 sm:grid-cols-2">
+  1049→  1049→            <Field label="Qualification">
+  1050→  1050→              <Input
+  1051→  1051→                value={form.qualification}
+  1052→  1052→                onChange={(e) => updateField('qualification', e.target.value)}
+  1053→  1053→                placeholder="e.g. Dip. in Early Childhood"
+  1054→  1054→              />
+  1055→  1055→            </Field>
+  1056→  1056→            <Field label="Specialization (comma separated)">
+  1057→  1057→              <Input
+  1058→  1058→                value={form.specialization}
+  1059→  1059→                onChange={(e) => updateField('specialization', e.target.value)}
+  1060→  1060→                placeholder="e.g. Preschool, Daycare"
+  1061→  1061→              />
+  1062→  1062→            </Field>
+  1063→  1063→          </div>
+  1064→  1064→
+  1065→  1065→          {/* Employment + fingerprint */}
+  1066→  1066→          <div className="grid gap-3 sm:grid-cols-2">
+  1067→  1067→            <Field label="Status">
+  1068→  1068→              <Select
+  1069→  1069→                value={form.status}
+  1070→  1070→                onValueChange={(v) => updateField('status', v)}
+  1071→  1071→              >
+  1072→  1072→                <SelectTrigger className="w-full">
+  1073→  1073→                  <SelectValue />
+  1074→  1074→                </SelectTrigger>
+  1075→  1075→                <SelectContent>
+  1076→  1076→                  {TEACHER_STATUS.map((s) => (
+  1077→  1077→                    <SelectItem key={s} value={s}>
+  1078→  1078→                      {s}
+  1079→  1079→                    </SelectItem>
+  1080→  1080→                  ))}
+  1081→  1081→                </SelectContent>
+  1082→  1082→              </Select>
+  1083→  1083→            </Field>
+  1084→  1084→            <Field label="Hire date">
+  1085→  1085→              <Input
+  1086→  1086→                type="date"
+  1087→  1087→                value={form.hireDate}
+  1088→  1088→                onChange={(e) => updateField('hireDate', e.target.value)}
+  1089→  1089→              />
+  1090→  1090→            </Field>
+  1091→  1091→            <Field
+  1092→  1092→              label={
+  1093→  1093→                isExternal
+  1094→  1094→                  ? 'Monthly rate (LKR) — tuition fee'
+  1095→  1095→                  : 'Monthly rate (LKR)'
+  1096→  1096→              }
+  1097→  1097→              hint={isExternal ? 'Per-class rate paid to external teacher' : undefined}
+  1098→  1098→            >
+  1099→  1099→              <Input
+  1100→  1100→                type="number"
+  1101→  1101→                min={0}
+  1102→  1102→                step={500}
+  1103→  1103→                value={form.monthlyRate}
+  1104→  1104→                onChange={(e) => updateField('monthlyRate', e.target.value)}
+  1105→  1105→                placeholder="0"
+  1106→  1106→              />
+  1107→  1107→            </Field>
+  1108→  1108→            <Field label="Photo URL (optional)">
+  1109→  1109→              <Input
+  1110→  1110→                value={form.photoUrl}
+  1111→  1111→                onChange={(e) => updateField('photoUrl', e.target.value)}
+  1112→  1112→                placeholder="https://…/photo.jpg"
+  1113→  1113→              />
+  1114→  1114→            </Field>
+  1115→  1115→            <Field label="Fingerprint ID" className="sm:col-span-2">
+  1116→  1116→              <div className="flex gap-2">
+  1117→  1117→                <Input
+  1118→  1118→                  value={form.fingerprintId}
+  1119→  1119→                  onChange={(e) => updateField('fingerprintId', e.target.value)}
+  1120→  1120→                  placeholder="FP-1008 — leave blank to skip"
+  1121→  1121→                  className="font-mono"
+  1122→  1122→                />
+  1123→  1123→                <Button
+  1124→  1124→                  type="button"
+  1125→  1125→                  variant="outline"
+  1126→  1126→                  size="sm"
+  1127→  1127→                  className="shrink-0"
+  1128→  1128→                  onClick={() =>
+  1129→  1129→                    updateField('fingerprintId', randomFingerprintId())
+  1130→  1130→                  }
+  1131→  1131→                >
+  1132→  1132→                  <Fingerprint className="h-4 w-4" />
+  1133→  1133→                  Generate
+  1134→  1134→                </Button>
+  1135→  1135→              </div>
+  1136→  1136→              <p className="mt-1.5 text-xs text-muted-foreground">
+  1137→  1137→                Generate a demo ID or use the dedicated fingerprint enrollment
+  1138→  1138→                scanner under <span className="font-medium">Manage fingerprint</span>.
+  1139→  1139→              </p>
+  1140→  1140→            </Field>
+  1141→  1141→          </div>
+  1142→  1142→        </div>
+  1143→  1143→
+  1144→  1144→        <DialogFooter>
+  1145→  1145→          <Button variant="outline" onClick={onClose} disabled={saving}>
+  1146→  1146→            Cancel
+  1147→  1147→          </Button>
+  1148→  1148→          <Button onClick={handleSubmit} disabled={saving}>
+  1149→  1149→            {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+  1150→  1150→            {isEdit ? 'Save changes' : 'Create teacher'}
+  1151→  1151→          </Button>
+  1152→  1152→        </DialogFooter>
+  1153→  1153→      </DialogContent>
+  1154→  1154→    </Dialog>
+  1155→  1155→  )
+  1156→  1156→}
+  1157→  1157→
+  1158→  1158→function Field({
+  1159→  1159→  label,
+  1160→  1160→  children,
+  1161→  1161→  className,
+  1162→  1162→  hint,
+  1163→  1163→}: {
+  1164→  1164→  label: string
+  1165→  1165→  children: React.ReactNode
+  1166→  1166→  className?: string
+  1167→  1167→  hint?: string
+  1168→  1168→}) {
+  1169→  1169→  return (
+  1170→  1170→    <div className={className}>
+  1171→  1171→      <Label className="mb-1.5 block">{label}</Label>
+  1172→  1172→      {children}
+  1173→  1173→      {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
+  1174→  1174→    </div>
+  1175→  1175→  )
+  1176→  1176→}
+  1177→  1177→
+  1178→  1178→// ─── Manage Fingerprint dialog (simulated scanner) ─────────────────────────
+  1179→  1179→function ManageFingerprintDialog({
+  1180→  1180→  teacher,
+  1181→  1181→  onClose,
+  1182→  1182→  onSaved,
+  1183→  1183→}: {
+  1184→  1184→  teacher: TeacherRow
+  1185→  1185→  onClose: () => void
+  1186→  1186→  onSaved: (msg: string) => void
+  1187→  1187→}) {
+  1188→  1188→  const [scanning, setScanning] = useState(false)
+  1189→  1189→  const [stage, setStage] = useState<'idle' | 'scanning' | 'enrolled'>('idle')
+  1190→  1190→  const [newFp, setNewFp] = useState<string | null>(null)
+  1191→  1191→  const [saving, setSaving] = useState(false)
+  1192→  1192→  const [err, setErr] = useState<string | null>(null)
+  1193→  1193→
+  1194→  1194→  const currentFp = teacher.fingerprintId
+  1195→  1195→
+  1196→  1196→  const runScan = () => {
+  1197→  1197→    if (scanning) return
+  1198→  1198→    setScanning(true)
+  1199→  1199→    setStage('scanning')
+  1200→  1200→    setErr(null)
+  1201→  1201→    // Simulate the fingerprint reader taking ~1.8s to capture the template
+  1202→  1202→    setTimeout(() => {
+  1203→  1203→      const generated = randomFingerprintId()
+  1204→  1204→      setNewFp(generated)
+  1205→  1205→      setStage('enrolled')
+  1206→  1206→      setScanning(false)
+  1207→  1207→    }, 1800)
+  1208→  1208→  }
+  1209→  1209→
+  1210→  1210→  const commit = async (fpToSet: string | null) => {
+  1211→  1211→    setSaving(true)
+  1212→  1212→    setErr(null)
+  1213→  1213→    try {
+  1214→  1214→      await api<TeacherRow>(`/api/teachers/${teacher.id}`, {
+  1215→  1215→        method: 'PUT',
+  1216→  1216→        body: JSON.stringify({ fingerprintId: fpToSet }),
+  1217→  1217→      })
+  1218→  1218→      onSaved(
+  1219→  1219→        fpToSet
+  1220→  1220→          ? `Fingerprint ${fpToSet} enrolled for ${teacher.fullName}`
+  1221→  1221→          : `Fingerprint removed from ${teacher.fullName}`,
+  1222→  1222→      )
+  1223→  1223→    } catch (e) {
+  1224→  1224→      const msg = e instanceof Error ? e.message : 'Failed to save fingerprint'
+  1225→  1225→      setErr(msg)
+  1226→  1226→      toast.error(msg)
+  1227→  1227→    } finally {
+  1228→  1228→      setSaving(false)
+  1229→  1229→    }
+  1230→  1230→  }
+  1231→  1231→
+  1232→  1232→  const handleEnroll = () => {
+  1233→  1233→    if (newFp) commit(newFp)
+  1234→  1234→  }
+  1235→  1235→
+  1236→  1236→  const handleRemove = () => {
+  1237→  1237→    commit(null)
+  1238→  1238→  }
+  1239→  1239→
+  1240→  1240→  return (
+  1241→  1241→    <Dialog open onOpenChange={(v) => !v && onClose()}>
+  1242→  1242→      <DialogContent className="sm:max-w-md">
+  1243→  1243→        <DialogHeader>
+  1244→  1244→          <DialogTitle>Manage fingerprint</DialogTitle>
+  1245→  1245→          <DialogDescription>
+  1246→  1246→            Enroll or remove the fingerprint template used for teacher attendance
+  1247→  1247→            via the USB fingerprint scanner.
+  1248→  1248→          </DialogDescription>
+  1249→  1249→        </DialogHeader>
+  1250→  1250→
+  1251→  1251→        {/* Identity strip */}
+  1252→  1252→        <div className="flex items-center gap-3 rounded-lg border bg-muted/30 p-3">
+  1253→  1253→          <Avatar className="size-10 ring-1 ring-border">
+  1254→  1254→            <AvatarFallback className={avatarColor(teacher.fullName)}>
+  1255→  1255→              {initials(teacher.fullName)}
+  1256→  1256→            </AvatarFallback>
+  1257→  1257→          </Avatar>
+  1258→  1258→          <div className="min-w-0">
+  1259→  1259→            <p className="truncate font-medium">{teacher.fullName}</p>
+  1260→  1260→            <p className="font-mono text-xs text-muted-foreground">
+  1261→  1261→              {teacher.teacherId}
+  1262→  1262→            </p>
+  1263→  1263→          </div>
+  1264→  1264→        </div>
+  1265→  1265→
+  1266→  1266→        {/* Simulated scanner panel */}
+  1267→  1267→        <div className="flex flex-col items-center gap-4 rounded-xl border bg-gradient-to-br from-muted/40 to-background p-6">
+  1268→  1268→          <div className="relative flex size-28 items-center justify-center">
+  1269→  1269→            {/* Pulse rings while scanning */}
+  1270→  1270→            {scanning && (
+  1271→  1271→              <>
+  1272→  1272→                <span className="absolute inset-0 rounded-full animate-pulse-ring" />
+  1273→  1273→                <span className="absolute inset-0 rounded-full animate-pulse-ring [animation-delay:600ms]" />
+  1274→  1274→              </>
+  1275→  1275→            )}
+  1276→  1276→            <div
+  1277→  1277→              className={`flex size-28 items-center justify-center rounded-full border-2 ${
+  1278→  1278→                scanning
+  1279→  1279→                  ? 'border-primary bg-primary/10'
+  1280→  1280→                  : stage === 'enrolled'
+  1281→  1281→                    ? 'border-emerald-500/50 bg-emerald-500/10'
+  1282→  1282→                    : 'border-border bg-muted'
+  1283→  1283→              }`}
+  1284→  1284→            >
+  1285→  1285→              {stage === 'enrolled' ? (
+  1286→  1286→                <CheckCircle2 className="h-12 w-12 text-emerald-600 dark:text-emerald-400" />
+  1287→  1287→              ) : (
+  1288→  1288→                <Fingerprint
+  1289→  1289→                  className={`h-12 w-12 ${
+  1290→  1290→                    scanning
+  1291→  1291→                      ? 'text-primary'
+  1292→  1292→                      : 'text-muted-foreground'
+  1293→  1293→                  }`}
+  1294→  1294→                />
+  1295→  1295→              )}
+  1296→  1296→            </div>
+  1297→  1297→          </div>
+  1298→  1298→
+  1299→  1299→          {/* Status text */}
+  1300→  1300→          <div className="text-center">
+  1301→  1301→            {stage === 'idle' && (
+  1302→  1302→              <>
+  1303→  1303→                <p className="text-sm font-medium">
+  1304→  1304→                  {currentFp ? 'Re-enroll fingerprint' : 'Enroll fingerprint'}
+  1305→  1305→                </p>
+  1306→  1306→                <p className="mt-0.5 text-xs text-muted-foreground">
+  1307→  1307→                  {currentFp ? (
+  1308→  1308→                    <>
+  1309→  1309→                      Currently enrolled:{' '}
+  1310→  1310→                      <span className="font-mono text-foreground">
+  1311→  1311→                        {currentFp}
+  1312→  1312→                      </span>
+  1313→  1313→                    </>
+  1314→  1314→                  ) : (
+  1315→  1315→                    'No fingerprint enrolled yet.'
+  1316→  1316→                  )}
+  1317→  1317→                </p>
+  1318→  1318→              </>
+  1319→  1319→            )}
+  1320→  1320→            {stage === 'scanning' && (
+  1321→  1321→              <>
+  1322→  1322→                <p className="text-sm font-medium text-primary">
+  1323→  1323→                  Scanning… place finger on the reader
+  1324→  1324→                </p>
+  1325→  1325→                <p className="mt-0.5 text-xs text-muted-foreground">
+  1326→  1326→                  Capturing fingerprint template
+  1327→  1327→                </p>
+  1328→  1328→              </>
+  1329→  1329→            )}
+  1330→  1330→            {stage === 'enrolled' && newFp && (
+  1331→  1331→              <>
+  1332→  1332→                <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
+  1333→  1333→                  Template captured
+  1334→  1334→                </p>
+  1335→  1335→                <p className="mt-0.5 text-xs text-muted-foreground">
+  1336→  1336→                  New ID:{' '}
+  1337→  1337→                  <span className="font-mono text-foreground">{newFp}</span>
+  1338→  1338→                </p>
+  1339→  1339→              </>
+  1340→  1340→            )}
+  1341→  1341→          </div>
+  1342→  1342→
+  1343→  1343→          {err && (
+  1344→  1344→            <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
+  1345→  1345→              {err}
+  1346→  1346→            </div>
+  1347→  1347→          )}
+  1348→  1348→
+  1349→  1349→          {/* Action buttons */}
+  1350→  1350→          <div className="flex w-full flex-col gap-2">
+  1351→  1351→            {stage !== 'enrolled' ? (
+  1352→  1352→              <Button
+  1353→  1353→                onClick={runScan}
+  1354→  1354→                disabled={scanning || saving}
+  1355→  1355→                className="w-full"
+  1356→  1356→              >
+  1357→  1357→                {scanning ? (
+  1358→  1358→                  <>
+  1359→  1359→                    <Loader2 className="h-4 w-4 animate-spin" />
+  1360→  1360→                    Scanning…
+  1361→  1361→                  </>
+  1362→  1362→                ) : currentFp ? (
+  1363→  1363→                  <>
+  1364→  1364→                    <Scan className="h-4 w-4" />
+  1365→  1365→                    Re-enroll / Scan
+  1366→  1366→                  </>
+  1367→  1367→                ) : (
+  1368→  1368→                  <>
+  1369→  1369→                    <ScanLine className="h-4 w-4" />
+  1370→  1370→                    Start scan
+  1371→  1371→                  </>
+  1372→  1372→                )}
+  1373→  1373→              </Button>
+  1374→  1374→            ) : (
+  1375→  1375→              <Button
+  1376→  1376→                onClick={handleEnroll}
+  1377→  1377→                disabled={saving}
+  1378→  1378→                className="w-full"
+  1379→  1379→              >
+  1380→  1380→                {saving ? (
+  1381→  1381→                  <Loader2 className="h-4 w-4 animate-spin" />
+  1382→  1382→                ) : (
+  1383→  1383→                  <CheckCircle2 className="h-4 w-4" />
+  1384→  1384→                )}
+  1385→  1385→                Save enrollment
+  1386→  1386→              </Button>
+  1387→  1387→            )}
+  1388→  1388→
+  1389→  1389→            {currentFp && stage !== 'enrolled' && (
+  1390→  1390→              <Button
+  1391→  1391→                variant="outline"
+  1392→  1392→                onClick={handleRemove}
+  1393→  1393→                disabled={scanning || saving}
+  1394→  1394→                className="w-full text-destructive hover:text-destructive"
+  1395→  1395→              >
+  1396→  1396→                <KeyRound className="h-4 w-4" />
+  1397→  1397→                Remove fingerprint
+  1398→  1398→              </Button>
+  1399→  1399→            )}
+  1400→  1400→
+  1401→  1401→            {stage === 'enrolled' && (
+  1402→  1402→              <Button
+  1403→  1403→                variant="ghost"
+  1404→  1404→                size="sm"
+  1405→  1405→                onClick={() => {
+  1406→  1406→                  setStage('idle')
+  1407→  1407→                  setNewFp(null)
+  1408→  1408→                }}
+  1409→  1409→                disabled={saving}
+  1410→  1410→                className="w-full"
+  1411→  1411→              >
+  1412→  1412→                Rescan
+  1413→  1413→              </Button>
+  1414→  1414→            )}
+  1415→  1415→          </div>
+  1416→  1416→        </div>
+  1417→  1417→
+  1418→  1418→        {/* Simulation disclaimer */}
+  1419→  1419→        <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-amber-700 dark:text-amber-400">
+  1420→  1420→          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+  1421→  1421→          <span>
+  1422→  1422→            <span className="font-semibold">Demo scanner</span> — in production
+  1423→  1423→            this reads from the USB fingerprint device and stores the encrypted
+  1424→  1424→            template; here it generates a placeholder FP-{`{4-digit}`} ID.
+  1425→  1425→          </span>
+  1426→  1426→        </div>
+  1427→  1427→
+  1428→  1428→        <DialogFooter>
+  1429→  1429→          <Button variant="outline" onClick={onClose} disabled={saving}>
+  1430→  1430→            Close
+  1431→  1431→          </Button>
+  1432→  1432→        </DialogFooter>
+  1433→  1433→      </DialogContent>
+  1434→  1434→    </Dialog>
+  1435→  1435→  )
+  1436→  1436→}
+  1437→  1437→
+  1438→  1438→// ─── Profile dialog (View) ─────────────────────────────────────────────────
+  1439→  1439→interface ClassDetail {
+  1440→  1440→  id: string
+  1441→  1441→  name: string
+  1442→  1442→  dayOfWeek: string | null
+  1443→  1443→  startTime: string | null
+  1444→  1444→  endTime: string | null
+  1445→  1445→  room: string | null
+  1446→  1446→  program: {
+  1447→  1447→    id: string
+  1448→  1448→    code: string
+  1449→  1449→    name: string
+  1450→  1450→    color: string
+  1451→  1451→  } | null
+  1452→  1452→}
+  1453→  1453→
+  1454→  1454→interface TeacherDetail extends TeacherRow {
+  1455→  1455→  classes: ClassDetail[]
+  1456→  1456→}
+  1457→  1457→
+  1458→  1458→function ProfileDialog({
+  1459→  1459→  teacher,
+  1460→  1460→  onClose,
+  1461→  1461→  onEdit,
+  1462→  1462→  onManageFingerprint,
+  1463→  1463→}: {
+  1464→  1464→  teacher: TeacherRow
+  1465→  1465→  onClose: () => void
+  1466→  1466→  onEdit: () => void
+  1467→  1467→  onManageFingerprint: () => void
+  1468→  1468→}) {
+  1469→  1469→  // Fetch the full profile (with class details: endTime, room, program) on mount
+  1470→  1470→  const [detail, setDetail] = useState<TeacherDetail | null>(null)
+  1471→  1471→  const [loadErr, setLoadErr] = useState(false)
+  1472→  1472→
+  1473→  1473→  useEffect(() => {
+  1474→  1474→    let alive = true
+  1475→  1475→    api<TeacherDetail>(`/api/teachers/${teacher.id}`)
+  1476→  1476→      .then((d) => {
+  1477→  1477→        if (!alive) return
+  1478→  1478→        setDetail(d)
+  1479→  1479→      })
+  1480→  1480→      .catch(() => {
+  1481→  1481→        if (!alive) return
+  1482→  1482→        setLoadErr(true)
+  1483→  1483→      })
+  1484→  1484→    return () => {
+  1485→  1485→      alive = false
+  1486→  1486→    }
+  1487→  1487→  }, [teacher.id])
+  1488→  1488→
+  1489→  1489→  const specs = (teacher.specialization || '')
+  1490→  1490→    .split(',')
+  1491→  1491→    .map((s) => s.trim())
+  1492→  1492→    .filter(Boolean)
+  1493→  1493→
+  1494→  1494→  const classesList = detail?.classes ?? teacher.classes ?? []
+  1495→  1495→
+  1496→  1496→  return (
+  1497→  1497→    <Dialog open onOpenChange={(v) => !v && onClose()}>
+  1498→  1498→      <DialogContent className="max-h-[90vh] overflow-y-auto scroll-thin sm:max-w-2xl">
+  1499→  1499→        <DialogHeader>
+  1500→  1500→          <DialogTitle>Teacher profile</DialogTitle>
+  1501→  1501→          <DialogDescription>
+  1502→  1502→            Full details for {teacher.fullName} ({teacher.teacherId}).
+  1503→  1503→          </DialogDescription>
+  1504→  1504→        </DialogHeader>
+  1505→  1505→
+  1506→  1506→        {/* Identity header */}
+  1507→  1507→        <div className="flex flex-col gap-4 rounded-lg border bg-muted/30 p-4 sm:flex-row sm:items-center">
+  1508→  1508→          <Avatar className="size-16 ring-2 ring-border">
+  1509→  1509→            <AvatarFallback
+  1510→  1510→              className={`text-lg font-semibold ${avatarColor(teacher.fullName)}`}
+  1511→  1511→            >
+  1512→  1512→              {initials(teacher.fullName)}
+  1513→  1513→            </AvatarFallback>
+  1514→  1514→          </Avatar>
+  1515→  1515→          <div className="min-w-0 flex-1">
+  1516→  1516→            <h3 className="text-lg font-semibold">{teacher.fullName}</h3>
+  1517→  1517→            <div className="mt-0.5 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+  1518→  1518→              <span className="font-mono">{teacher.teacherId}</span>
+  1519→  1519→              <span>·</span>
+  1520→  1520→              <span>{teacher.gender || '—'}</span>
+  1521→  1521→              <span>·</span>
+  1522→  1522→              <span>{teacher.type}</span>
+  1523→  1523→              {teacher.fingerprintId && (
+  1524→  1524→                <>
+  1525→  1525→                  <span>·</span>
+  1526→  1526→                  <span className="inline-flex items-center gap-1 font-mono">
+  1527→  1527→                    <Fingerprint className="h-3 w-3 text-primary" />
+  1528→  1528→                    {teacher.fingerprintId}
+  1529→  1529→                  </span>
+  1530→  1530→                </>
+  1531→  1531→              )}
+  1532→  1532→            </div>
+  1533→  1533→            <div className="mt-2 flex flex-wrap gap-1.5">
+  1534→  1534→              <Badge variant={STATUS_VARIANT[teacher.status] || 'secondary'}>
+  1535→  1535→                {teacher.status}
+  1536→  1536→              </Badge>
+  1537→  1537→              {teacher.type === 'Internal' ? (
+  1538→  1538→                <Badge
+  1539→  1539→                  variant="outline"
+  1540→  1540→                  className="border-blue-500/30 bg-blue-500/15 text-blue-700 dark:text-blue-300"
+  1541→  1541→                >
+  1542→  1542→                  <Building2 className="h-3 w-3" />
+  1543→  1543→                  Internal staff
+  1544→  1544→                </Badge>
+  1545→  1545→              ) : (
+  1546→  1546→                <Badge
+  1547→  1547→                  variant="outline"
+  1548→  1548→                  className="border-purple-500/30 bg-purple-500/15 text-purple-700 dark:text-purple-300"
+  1549→  1549→                >
+  1550→  1550→                  <Briefcase className="h-3 w-3" />
+  1551→  1551→                  External tuition
+  1552→  1552→                </Badge>
+  1553→  1553→              )}
+  1554→  1554→              {specs.map((s) => (
+  1555→  1555→                <span
+  1556→  1556→                  key={s}
+  1557→  1557→                  className="inline-flex items-center rounded-md bg-muted px-1.5 py-0.5 text-xs font-medium text-foreground"
+  1558→  1558→                >
+  1559→  1559→                  {s}
+  1560→  1560→                </span>
+  1561→  1561→              ))}
+  1562→  1562→            </div>
+  1563→  1563→          </div>
+  1564→  1564→          <div className="flex flex-row gap-2 sm:flex-col">
+  1565→  1565→            <Button variant="outline" size="sm" onClick={onEdit}>
+  1566→  1566→              <Pencil className="h-4 w-4" />
+  1567→  1567→              Edit
+  1568→  1568→            </Button>
+  1569→  1569→            <Button variant="outline" size="sm" onClick={onManageFingerprint}>
+  1570→  1570→              <Fingerprint className="h-4 w-4" />
+  1571→  1571→              Fingerprint
+  1572→  1572→            </Button>
+  1573→  1573→          </div>
+  1574→  1574→        </div>
+  1575→  1575→
+  1576→  1576→        <Tabs defaultValue="overview">
+  1577→  1577→          <TabsList>
+  1578→  1578→            <TabsTrigger value="overview">Overview</TabsTrigger>
+  1579→  1579→            <TabsTrigger value="classes">
+  1580→  1580→              Classes
+  1581→  1581→              {teacher._count && (
+  1582→  1582→                <span className="ml-1 text-xs text-muted-foreground">
+  1583→  1583→                  ({teacher._count.classes})
+  1584→  1584→                </span>
+  1585→  1585→              )}
+  1586→  1586→            </TabsTrigger>
+  1587→  1587→            <TabsTrigger value="attendance">
+  1588→  1588→              Attendance
+  1589→  1589→              {teacher._count && (
+  1590→  1590→                <span className="ml-1 text-xs text-muted-foreground">
+  1591→  1591→                  ({teacher._count.attendance})
+  1592→  1592→                </span>
+  1593→  1593→              )}
+  1594→  1594→            </TabsTrigger>
+  1595→  1595→          </TabsList>
+  1596→  1596→
+  1597→  1597→          <TabsContent value="overview" className="mt-3">
+  1598→  1598→            <div className="grid gap-4 sm:grid-cols-2">
+  1599→  1599→              <DetailItem
+  1600→  1600→                icon={<IdCard className="h-4 w-4" />}
+  1601→  1601→                label="Teacher ID"
+  1602→  1602→                value={teacher.teacherId}
+  1603→  1603→                mono
+  1604→  1604→              />
+  1605→  1605→              <DetailItem
+  1606→  1606→                icon={<Fingerprint className="h-4 w-4" />}
+  1607→  1607→                label="Fingerprint ID"
+  1608→  1608→                value={teacher.fingerprintId || 'Not enrolled'}
+  1609→  1609→                mono
+  1610→  1610→              />
+  1611→  1611→              <DetailItem
+  1612→  1612→                icon={<Phone className="h-4 w-4" />}
+  1613→  1613→                label="Phone"
+  1614→  1614→                value={teacher.phone || '—'}
+  1615→  1615→                mono
+  1616→  1616→              />
+  1617→  1617→              <DetailItem
+  1618→  1618→                icon={<Mail className="h-4 w-4" />}
+  1619→  1619→                label="Email"
+  1620→  1620→                value={teacher.email || '—'}
+  1621→  1621→                mono
+  1622→  1622→              />
+  1623→  1623→              <DetailItem
+  1624→  1624→                icon={<ShieldCheck className="h-4 w-4" />}
+  1625→  1625→                label="NIC"
+  1626→  1626→                value={teacher.nic || '—'}
+  1627→  1627→                mono
+  1628→  1628→              />
+  1629→  1629→              <DetailItem
+  1630→  1630→                icon={<GraduationCap className="h-4 w-4" />}
+  1631→  1631→                label="Qualification"
+  1632→  1632→                value={teacher.qualification || '—'}
+  1633→  1633→              />
+  1634→  1634→              <DetailItem
+  1635→  1635→                icon={<CalendarDays className="h-4 w-4" />}
+  1636→  1636→                label="Hire date"
+  1637→  1637→                value={fmtDate(teacher.hireDate)}
+  1638→  1638→              />
+  1639→  1639→              <DetailItem
+  1640→  1640→                icon={<Wallet className="h-4 w-4" />}
+  1641→  1641→                label="Monthly rate"
+  1642→  1642→                value={currency(teacher.monthlyRate)}
+  1643→  1643→              />
+  1644→  1644→              <DetailItem
+  1645→  1645→                icon={<MapPin className="h-4 w-4" />}
+  1646→  1646→                label="Address"
+  1647→  1647→                value={teacher.address || '—'}
+  1648→  1648→                fullSpan
+  1649→  1649→              />
+  1650→  1650→            </div>
+  1651→  1651→
+  1652→  1652→            {/* Specializations callout */}
+  1653→  1653→            {specs.length > 0 && (
+  1654→  1654→              <div className="mt-4 rounded-md border bg-muted/20 p-3">
+  1655→  1655→                <div className="mb-1.5 flex items-center gap-1.5 text-sm font-medium">
+  1656→  1656→                  <GraduationCap className="h-4 w-4" />
+  1657→  1657→                  Specializations
+  1658→  1658→                </div>
+  1659→  1659→                <div className="flex flex-wrap gap-1.5">
+  1660→  1660→                  {specs.map((s) => (
+  1661→  1661→                    <span
+  1662→  1662→                      key={s}
+  1663→  1663→                      className="inline-flex items-center rounded-md bg-background px-2 py-0.5 text-xs font-medium ring-1 ring-border"
+  1664→  1664→                    >
+  1665→  1665→                      {s}
+  1666→  1666→                    </span>
+  1667→  1667→                  ))}
+  1668→  1668→                </div>
+  1669→  1669→              </div>
+  1670→  1670→            )}
+  1671→  1671→          </TabsContent>
+  1672→  1672→
+  1673→  1673→          <TabsContent value="classes" className="mt-3">
+  1674→  1674→            {loadErr ? (
+  1675→  1675→              <EmptyState
+  1676→  1676→                icon={AlertCircle}
+  1677→  1677→                title="Couldn't load class details"
+  1678→  1678→                description="Try reopening the profile."
+  1679→  1679→                className="border-dashed"
+  1680→  1680→              />
+  1681→  1681→            ) : !detail ? (
+  1682→  1682→              <div className="flex items-center justify-center py-8">
+  1683→  1683→                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+  1684→  1684→              </div>
+  1685→  1685→            ) : classesList.length === 0 ? (
+  1686→  1686→              <EmptyState
+  1687→  1687→                icon={Users}
+  1688→  1688→                title="No classes assigned"
+  1689→  1689→                description="This teacher hasn't been assigned to any classes yet."
+  1690→  1690→                className="border-dashed"
+  1691→  1691→              />
+  1692→  1692→            ) : (
+  1693→  1693→              <div className="space-y-2">
+  1694→  1694→                {classesList.map((c) => (
+  1695→  1695→                  <div
+  1696→  1696→                    key={c.id}
+  1697→  1697→                    className="flex items-center justify-between gap-3 rounded-md border bg-muted/20 p-3"
+  1698→  1698→                  >
+  1699→  1699→                    <div className="flex min-w-0 items-center gap-3">
+  1700→  1700→                      {c.program ? (
+  1701→  1701→                        <span
+  1702→  1702→                          className="size-3 shrink-0 rounded-full"
+  1703→  1703→                          style={{ backgroundColor: c.program.color }}
+  1704→  1704→                        />
+  1705→  1705→                      ) : (
+  1706→  1706→                        <span className="size-3 shrink-0 rounded-full bg-muted-foreground/30" />
+  1707→  1707→                      )}
+  1708→  1708→                      <div className="min-w-0">
+  1709→  1709→                        <p className="truncate text-sm font-medium">{c.name}</p>
+  1710→  1710→                        <p className="truncate text-xs text-muted-foreground">
+  1711→  1711→                          {c.program ? `${c.program.name} · ` : ''}
+  1712→  1712→                          {c.dayOfWeek || '—'}
+  1713→  1713→                          {c.startTime ? ` · ${fmtTime(c.startTime)}` : ''}
+  1714→  1714→                          {c.endTime ? `–${fmtTime(c.endTime)}` : ''}
+  1715→  1715→                        </p>
+  1716→  1716→                      </div>
+  1717→  1717→                    </div>
+  1718→  1718→                    {c.room && (
+  1719→  1719→                      <Badge variant="outline" className="shrink-0 text-[10px]">
+  1720→  1720→                        {c.room}
+  1721→  1721→                      </Badge>
+  1722→  1722→                    )}
+  1723→  1723→                  </div>
+  1724→  1724→                ))}
+  1725→  1725→              </div>
+  1726→  1726→            )}
+  1727→  1727→          </TabsContent>
+  1728→  1728→
+  1729→  1729→          <TabsContent value="attendance" className="mt-3">
+  1730→  1730→            <EmptyState
+  1731→  1731→              icon={CalendarDays}
+  1732→  1732→              title="Attendance summary coming soon"
+  1733→  1733→              description="The teacher attendance dashboard will be available once the attendance module is finalized."
+  1734→  1734→              className="border-dashed"
+  1735→  1735→            />
+  1736→  1736→          </TabsContent>
+  1737→  1737→        </Tabs>
+  1738→  1738→
+  1739→  1739→        <DialogFooter>
+  1740→  1740→          <Button variant="outline" onClick={onClose}>
+  1741→  1741→            Close
+  1742→  1742→          </Button>
+  1743→  1743→        </DialogFooter>
+  1744→  1744→      </DialogContent>
+  1745→  1745→    </Dialog>
+  1746→  1746→  )
+  1747→  1747→}
+  1748→  1748→
+  1749→  1749→function DetailItem({
+  1750→  1750→  icon,
+  1751→  1751→  label,
+  1752→  1752→  value,
+  1753→  1753→  mono,
+  1754→  1754→  fullSpan,
+  1755→  1755→}: {
+  1756→  1756→  icon: React.ReactNode
+  1757→  1757→  label: string
+  1758→  1758→  value: string
+  1759→  1759→  mono?: boolean
+  1760→  1760→  fullSpan?: boolean
+  1761→  1761→}) {
+  1762→  1762→  return (
+  1763→  1763→    <div
+  1764→  1764→      className={`flex items-start gap-2.5 rounded-md border bg-muted/20 p-2.5 ${
+  1765→  1765→        fullSpan ? 'sm:col-span-2' : ''
+  1766→  1766→      }`}
+  1767→  1767→    >
+  1768→  1768→      <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md bg-background text-muted-foreground ring-1 ring-border">
+  1769→  1769→        {icon}
+  1770→  1770→      </div>
+  1771→  1771→      <div className="min-w-0">
+  1772→  1772→        <p className="text-xs text-muted-foreground">{label}</p>
+  1773→  1773→        <p
+  1774→  1774→          className={`text-sm font-medium ${
+  1775→  1775→            mono ? 'font-mono' : ''
+  1776→  1776→          } truncate`}
+  1777→  1777→        >
+  1778→  1778→          {value}
+  1779→  1779→        </p>
+  1780→  1780→      </div>
+  1781→  1781→    </div>
+  1782→  1782→  )
+  1783→  1783→}
+  1784→  1784→
