@@ -45,9 +45,14 @@ import {
   Gift,
   Send,
   Sparkles,
+  MessageCircle,
+  Newspaper,
+  Copy,
+  CalendarClock,
 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { toast } from 'sonner'
+import { useSchoolInfo } from '@/lib/school'
 import { SectionHeader } from '@/components/shared/section-header'
 import { StatCard } from '@/components/shared/stat-card'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -66,6 +71,7 @@ import {
 import { useAppStore } from '@/lib/store'
 import { initials, avatarColor, fmtTime, currency, currencyCompact } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 interface DashboardData {
   totals: {
@@ -817,6 +823,9 @@ export function DashboardSection() {
 
       {/* Upcoming birthdays & work anniversaries */}
       <CelebrationsCard onGoTo={setSection} />
+
+      {/* Share-ready operations digest (attendance / fees / people) */}
+      <WeeklyDigestCard />
     </div>
   )
 }
@@ -1267,6 +1276,7 @@ interface Celebration {
   daysUntil: number
   milestone: number | null
   kind: 'birthday' | 'anniversary'
+  contact: { name: string; phone: string } | null
 }
 interface CelebrationsData {
   days: number
@@ -1281,7 +1291,17 @@ function daysLabel(n: number): string {
   return `in ${n} days`
 }
 
+// Sri Lanka WhatsApp number normalisation (mirrors fees-section toWaPhone)
+function toWaDigits(phone: string): string | null {
+  const d = phone.replace(/\D/g, '')
+  if (d.length < 9) return null
+  if (d.startsWith('94')) return d
+  if (d.startsWith('0')) return '94' + d.slice(1)
+  return '94' + d
+}
+
 function CelebrationsCard({ onGoTo }: { onGoTo: (s: 'students' | 'teachers') => void }) {
+  const school = useSchoolInfo()
   const [data, setData] = useState<CelebrationsData | null>(null)
   const [posting, setPosting] = useState<string | null>(null) // ref being posted
 
@@ -1329,6 +1349,23 @@ function CelebrationsCard({ onGoTo }: { onGoTo: (s: 'students' | 'teachers') => 
     }
   }
 
+  const openWhatsApp = (c: Celebration) => {
+    if (!c.contact) return
+    const digits = toWaDigits(c.contact.phone)
+    if (!digits) {
+      toast.warning('This phone number cannot be used for WhatsApp', {
+        description: `${c.contact.phone} — update it in ${c.personType === 'Student' ? 'Students' : 'Teachers'}.`,
+      })
+      return
+    }
+    const first = c.name.split(' ')[0]
+    const msg =
+      c.kind === 'birthday'
+        ? `🎉 Happy Birthday, ${first}! Wishing you a wonderful day full of smiles and fun, from all of us at ${school.shortName}. 🎂`
+        : `🎉 Congratulations on ${c.milestone} year${c.milestone === 1 ? '' : 's'} with ${school.shortName}, ${first}! Thank you for everything you do for our children. 🌟`
+    window.open(`https://wa.me/${digits}?text=${encodeURIComponent(msg)}`, '_blank', 'noopener')
+  }
+
   return (
     <Card className="overflow-hidden border-pink-500/20">
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
@@ -1355,7 +1392,7 @@ function CelebrationsCard({ onGoTo }: { onGoTo: (s: 'students' | 'teachers') => 
         )}
       </CardHeader>
       <CardContent>
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {data.celebrations.slice(0, 6).map((c) => {
             const isToday = c.daysUntil === 0
             const isBirthday = c.kind === 'birthday'
@@ -1364,7 +1401,7 @@ function CelebrationsCard({ onGoTo }: { onGoTo: (s: 'students' | 'teachers') => 
               <div
                 key={`${c.personType}-${c.ref}`}
                 className={cn(
-                  'group flex items-center gap-3 rounded-xl border p-3 transition-all hover:shadow-sm',
+                  'group flex min-w-0 items-center gap-3 rounded-xl border p-3 transition-all hover:shadow-sm',
                   isToday
                     ? 'border-pink-500/50 bg-gradient-to-br from-pink-500/10 to-amber-500/10'
                     : 'border-border bg-muted/20 hover:border-pink-500/40',
@@ -1406,6 +1443,26 @@ function CelebrationsCard({ onGoTo }: { onGoTo: (s: 'students' | 'teachers') => 
                     <Button
                       variant="ghost"
                       size="icon"
+                      className={cn(
+                        'h-6 w-6',
+                        c.contact
+                          ? 'text-emerald-600 hover:bg-emerald-500/10 hover:text-emerald-700 dark:text-emerald-400'
+                          : 'text-muted-foreground/40',
+                      )}
+                      title={
+                        c.contact
+                          ? `WhatsApp ${c.contact.name} (${c.contact.phone})`
+                          : 'No WhatsApp-capable phone on file'
+                      }
+                      aria-label={`Send WhatsApp greeting to ${c.name}`}
+                      disabled={!c.contact}
+                      onClick={() => openWhatsApp(c)}
+                    >
+                      <MessageCircle className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       className="h-6 w-6"
                       title="Post announcement"
                       aria-label={`Post announcement for ${c.name}`}
@@ -1444,5 +1501,329 @@ function CelebrationsCard({ onGoTo }: { onGoTo: (s: 'students' | 'teachers') => 
         )}
       </CardContent>
     </Card>
+  )
+}
+
+// ─── Weekly Digest (share-ready operations summary) ─────────────────────────
+interface DigestData {
+  days: number
+  period: { start: string; end: string; label: string }
+  schoolName: string
+  attendance: {
+    records: number
+    present: number
+    late: number
+    absent: number
+    leave: number
+    rate: number | null
+    prevRate: number | null
+    delta: number | null
+    atRiskTotal: number
+    atRisk: { ref: string; name: string; rate: number }[]
+  }
+  fees: {
+    monthLabel: string
+    billed: number
+    collected: number
+    outstanding: number
+    outstandingBills: number
+    overdue: number
+  }
+  expenses: { total: number; count: number; topCategory: { name: string; total: number } | null }
+  payroll: { paidCount: number; paidTotal: number }
+  people: { celebrationsCount: number; celebrations: { name: string; kind: string; when: string }[] }
+  announcementsPosted: number
+  generatedAt: string
+  text: string
+}
+
+const DIGEST_WINDOWS = [
+  { value: '7', label: 'Last 7 days' },
+  { value: '14', label: 'Last 14 days' },
+  { value: '30', label: 'Last 30 days' },
+]
+
+function WeeklyDigestCard() {
+  const [windowDays, setWindowDays] = useState('7')
+  const [data, setData] = useState<DigestData | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [posting, setPosting] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  const generate = (d: string = windowDays) => {
+    setLoading(true)
+    setError(null)
+    api<DigestData>(`/api/reports/digest?days=${d}`)
+      .then((r) => setData(r))
+      .catch((e) => setError(e instanceof Error ? e.message : 'Failed to build the digest'))
+      .finally(() => setLoading(false))
+  }
+
+  const copyText = async () => {
+    if (!data) return
+    try {
+      await navigator.clipboard.writeText(data.text)
+      setCopied(true)
+      toast.success('Digest copied — paste it into WhatsApp or email')
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      toast.error('Copy failed — select the text manually from the dialog')
+    }
+  }
+
+  const postAnnouncement = async () => {
+    if (!data) return
+    setPosting(true)
+    try {
+      await api('/api/announcements', {
+        method: 'POST',
+        body: JSON.stringify({
+          title: `${data.days}-Day Digest — ${data.period.label}`,
+          body: data.text,
+          category: 'General',
+          audience: 'All',
+          priority: 'Normal',
+          status: 'Published',
+        }),
+      })
+      toast.success('Digest posted as an announcement', {
+        description: 'Visible to staff & parents under Announcements.',
+      })
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to post digest')
+    } finally {
+      setPosting(false)
+    }
+  }
+
+  const a = data?.attendance
+  const f = data?.fees
+
+  return (
+    <>
+      <Card className="overflow-hidden border-teal-500/20">
+        <CardHeader className="flex-col space-y-3 pb-3 sm:flex-row sm:items-center sm:justify-between sm:space-y-0">
+          <div className="flex items-center gap-2">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-teal-500/20 to-emerald-500/20 text-teal-600 dark:text-teal-400">
+              <Newspaper className="h-5 w-5" />
+            </div>
+            <div>
+              <CardTitle className="text-base font-semibold">Weekly Digest</CardTitle>
+              <p className="text-xs text-muted-foreground">
+                Attendance, fees &amp; people — one share-ready summary
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 sm:shrink-0">
+            <Select value={windowDays} onValueChange={(v) => setWindowDays(v)}>
+              <SelectTrigger className="h-8 w-[122px] text-xs" aria-label="Digest window">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {DIGEST_WINDOWS.map((w) => (
+                  <SelectItem key={w.value} value={w.value}>
+                    {w.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-2"
+              disabled={loading}
+              onClick={() => generate()}
+            >
+              {loading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <CalendarClock className="h-3.5 w-3.5" />
+              )}
+              {data ? 'Refresh' : 'Generate'}
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {loading && !data ? (
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <Skeleton key={i} className="h-20 w-full rounded-xl" />
+              ))}
+            </div>
+          ) : error && !data ? (
+            <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed p-5 text-center">
+              <AlertCircle className="h-6 w-6 text-destructive" />
+              <p className="text-sm text-muted-foreground">{error}</p>
+              <Button size="sm" variant="outline" onClick={() => generate()}>
+                Retry
+              </Button>
+            </div>
+          ) : !data || !a || !f ? (
+            <div className="flex flex-col items-center gap-1.5 rounded-lg border border-dashed p-5 text-center">
+              <Newspaper className="h-6 w-6 text-muted-foreground/50" />
+              <p className="text-sm font-medium">No digest generated yet</p>
+              <p className="max-w-md text-xs text-muted-foreground">
+                Pick a window and press <span className="font-semibold text-foreground">Generate</span> to
+                build a share-ready summary — attendance vs the previous period, money, and upcoming
+                celebrations. Copy it into WhatsApp or post it as an announcement.
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                {/* Attendance */}
+                <div className="rounded-xl border bg-muted/20 p-3 transition-all hover:shadow-sm">
+                  <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Attendance
+                  </p>
+                  <div className="mt-0.5 flex items-baseline gap-1.5">
+                    <span className="text-xl font-bold tabular-nums">
+                      {a.rate === null ? '—' : `${a.rate}%`}
+                    </span>
+                    {a.delta !== null && a.delta !== 0 && (
+                      <span
+                        className={cn(
+                          'flex items-center gap-0.5 text-[10px] font-semibold',
+                          a.delta > 0
+                            ? 'text-emerald-600 dark:text-emerald-400'
+                            : 'text-red-600 dark:text-red-400',
+                        )}
+                      >
+                        {a.delta > 0 ? (
+                          <TrendingUp className="h-2.5 w-2.5" />
+                        ) : (
+                          <TrendingDown className="h-2.5 w-2.5" />
+                        )}
+                        {a.delta > 0 ? '+' : '−'}
+                        {Math.abs(a.delta)}%
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    {a.records} records · {a.absent} absent
+                  </p>
+                </div>
+                {/* Collected */}
+                <div className="rounded-xl border bg-muted/20 p-3 transition-all hover:shadow-sm">
+                  <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Collected · {f.monthLabel.split(' ')[0]}
+                  </p>
+                  <p className="mt-0.5 text-xl font-bold tabular-nums">{currency(f.collected)}</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    of {currency(f.billed)} billed
+                  </p>
+                </div>
+                {/* Outstanding */}
+                <div className="rounded-xl border bg-muted/20 p-3 transition-all hover:shadow-sm">
+                  <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Outstanding
+                  </p>
+                  <p
+                    className={cn(
+                      'mt-0.5 text-xl font-bold tabular-nums',
+                      f.outstanding > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400',
+                    )}
+                  >
+                    {currency(f.outstanding)}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground">
+                    {f.outstandingBills} bill{f.outstandingBills === 1 ? '' : 's'}
+                    {f.overdue > 0 ? ` · ${f.overdue} overdue` : ' · none overdue'}
+                  </p>
+                </div>
+                {/* People */}
+                <div className="rounded-xl border bg-muted/20 p-3 transition-all hover:shadow-sm">
+                  <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Ahead
+                  </p>
+                  <p className="mt-0.5 text-xl font-bold tabular-nums">
+                    {data.people.celebrationsCount}
+                  </p>
+                  <p className="truncate text-[11px] text-muted-foreground">
+                    {data.people.celebrationsCount > 0
+                      ? data.people.celebrations
+                          .slice(0, 2)
+                          .map((c) => `${c.name.split(' ')[0]} (${c.when})`)
+                          .join(', ') + (data.people.celebrationsCount > 2 ? '…' : '')
+                      : 'no celebrations'}
+                  </p>
+                </div>
+              </div>
+
+              {/* At-risk note + actions */}
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                {a.atRiskTotal > 0 ? (
+                  <span className="inline-flex items-center gap-1 rounded-md bg-red-500/10 px-2 py-1 text-[11px] font-medium text-red-600 dark:text-red-400">
+                    <AlertTriangle className="h-3 w-3" />
+                    {a.atRiskTotal} student{a.atRiskTotal === 1 ? '' : 's'} below 75% —{' '}
+                    {a.atRisk
+                      .slice(0, 2)
+                      .map((s) => s.name.split(' ')[0])
+                      .join(', ')}
+                    {a.atRiskTotal > 2 ? '…' : ''}
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/10 px-2 py-1 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+                    <CheckCircle2 className="h-3 w-3" /> No attendance concerns
+                  </span>
+                )}
+                <div className="ml-auto flex gap-2">
+                  <Button size="sm" variant="outline" className="gap-1.5" onClick={copyText}>
+                    {copied ? (
+                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+                    ) : (
+                      <Copy className="h-3.5 w-3.5" />
+                    )}
+                    Copy text
+                  </Button>
+                  <Button size="sm" className="gap-1.5" onClick={() => setDialogOpen(true)}>
+                    <Newspaper className="h-3.5 w-3.5" /> View &amp; share
+                  </Button>
+                </div>
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Digest text dialog */}
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-teal-500/15 text-teal-600 dark:text-teal-400">
+                <Newspaper className="h-4 w-4" />
+              </div>
+              {data ? `${data.days}-Day Digest` : 'Digest'}
+            </DialogTitle>
+            <DialogDescription>
+              {data?.period.label} · generated {data ? new Date(data.generatedAt).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''}
+            </DialogDescription>
+          </DialogHeader>
+          <pre className="max-h-[46vh] overflow-y-auto scroll-thin whitespace-pre-wrap rounded-lg border bg-muted/30 p-3 font-mono text-[11px] leading-relaxed">
+            {data?.text}
+          </pre>
+          <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+            <Button variant="outline" onClick={copyText} className="gap-2 sm:mr-auto">
+              {copied ? (
+                <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+              ) : (
+                <Copy className="h-4 w-4" />
+              )}
+              {copied ? 'Copied!' : 'Copy text'}
+            </Button>
+            <Button variant="ghost" onClick={() => setDialogOpen(false)}>
+              Close
+            </Button>
+            <Button onClick={postAnnouncement} disabled={posting} className="gap-2">
+              {posting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              Post as announcement
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }

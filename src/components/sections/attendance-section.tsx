@@ -31,6 +31,9 @@ import {
   BookOpen,
   Printer,
   Download,
+  Trophy,
+  AlertTriangle,
+  Star,
 } from 'lucide-react'
 
 import { api } from '@/lib/api'
@@ -44,6 +47,7 @@ import {
 } from '@/lib/types'
 import { initials, avatarColor, fmtDate, fmtTime, fmtDateTime, timeAgo } from '@/lib/format'
 import { useSchoolInfo } from '@/lib/school'
+import { cn } from '@/lib/utils'
 
 import { SectionHeader } from '@/components/shared/section-header'
 import { StatCard } from '@/components/shared/stat-card'
@@ -2319,6 +2323,20 @@ interface RegisterStudent {
   leave: number
   rate: number | null
 }
+interface RegisterSummary {
+  rate: number | null
+  present: number
+  late: number
+  absent: number
+  leave: number
+  marked: number
+  daysWithRecords: number
+  bestDay: { day: number; present: number; rate: number } | null
+  worstDay: { day: number; present: number; rate: number } | null
+  perfect: number
+  atRiskCount: number
+  atRisk: { studentId: string; fullName: string; rate: number }[]
+}
 interface RegisterResponse {
   class: {
     id: string
@@ -2334,6 +2352,7 @@ interface RegisterResponse {
   days: RegisterDay[]
   students: RegisterStudent[]
   dayTotals: { day: number; present: number; late: number; absent: number; marked: number }[]
+  summary?: RegisterSummary
   totalStudents: number
 }
 
@@ -2600,6 +2619,91 @@ function RegisterView() {
               </div>
             </div>
 
+            {/* Class insights summary (prints too) */}
+            {data.summary && data.summary.marked > 0 && (
+              <div className="grid grid-cols-2 gap-2 border-b bg-gradient-to-r from-muted/40 to-transparent p-3 sm:grid-cols-4 lg:grid-cols-[auto_1fr_1fr_1fr]">
+                {/* Overall rate */}
+                <div className="flex items-center gap-2.5">
+                  <div
+                    className={cn(
+                      'flex h-11 w-11 shrink-0 items-center justify-center rounded-full border-2 text-sm font-extrabold tabular-nums',
+                      data.summary.rate === null
+                        ? 'border-border text-muted-foreground'
+                        : data.summary.rate >= 90
+                          ? 'border-emerald-500/60 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                          : data.summary.rate >= 75
+                            ? 'border-amber-500/60 bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                            : 'border-red-500/60 bg-red-500/10 text-red-600 dark:text-red-400',
+                    )}
+                  >
+                    {data.summary.rate === null ? '—' : `${data.summary.rate}%`}
+                  </div>
+                  <div className="leading-tight">
+                    <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Class rate
+                    </p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {data.summary.daysWithRecords} day{data.summary.daysWithRecords === 1 ? '' : 's'} with records
+                    </p>
+                  </div>
+                </div>
+                {/* P/L/A/V totals */}
+                <div className="flex items-center justify-center gap-1.5">
+                  {(
+                    [
+                      ['P', data.summary.present, 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'],
+                      ['L', data.summary.late, 'bg-amber-500/20 text-amber-700 dark:text-amber-300'],
+                      ['A', data.summary.absent, 'bg-red-500/15 text-red-700 dark:text-red-300'],
+                      ['V', data.summary.leave, 'bg-teal-500/15 text-teal-700 dark:text-teal-300'],
+                    ] as const
+                  ).map(([label, count, cls]) => (
+                    <span
+                      key={label}
+                      className={`inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[10px] font-semibold tabular-nums ${cls}`}
+                      title={`${label} — ${count} marked cell${count === 1 ? '' : 's'} this month`}
+                    >
+                      {label}
+                      <span className="font-bold">{count}</span>
+                    </span>
+                  ))}
+                </div>
+                {/* Best day */}
+                {data.summary.bestDay && (
+                  <div className="flex items-center justify-center gap-1.5 text-[11px]">
+                    <Trophy className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                    <span className="text-muted-foreground">
+                      Best day{' '}
+                      <span className="font-semibold text-foreground tabular-nums">
+                        {data.summary.bestDay.day} {data.monthLabel.split(' ')[0]}
+                      </span>{' '}
+                      <span className="font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
+                        {data.summary.bestDay.rate}%
+                      </span>
+                    </span>
+                  </div>
+                )}
+                {/* Perfect + at-risk */}
+                <div className="flex flex-wrap items-center justify-center gap-1.5 text-[11px]">
+                  {data.summary.perfect > 0 && (
+                    <span
+                      className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-1.5 py-1 font-semibold text-primary"
+                      title="Students present/late on every marked day"
+                    >
+                      <Star className="h-3 w-3" /> {data.summary.perfect} perfect
+                    </span>
+                  )}
+                  {data.summary.atRiskCount > 0 && (
+                    <span
+                      className="inline-flex cursor-help items-center gap-1 rounded-md bg-red-500/10 px-1.5 py-1 font-semibold text-red-600 dark:text-red-400"
+                      title={`Below 75%: ${data.summary.atRisk.map((s) => `${s.fullName} (${s.rate}%)`).join(', ')}`}
+                    >
+                      <AlertTriangle className="h-3 w-3" /> {data.summary.atRiskCount} at risk
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
             <div className="scroll-thin max-h-[62vh] overflow-auto p-0">
               <Table className="table-zebra min-w-[900px]">
                 <TableHeader className="sticky top-0 z-10 bg-muted/80 backdrop-blur">
@@ -2623,12 +2727,28 @@ function RegisterView() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {data.students.map((s) => (
-                    <TableRow key={s.id} className="animate-row-in">
-                      <TableCell className="sticky left-0 z-10 bg-card/95">
-                        <p className="truncate text-xs font-medium">{s.fullName}</p>
-                        <p className="font-mono text-[10px] text-muted-foreground">{s.studentId}</p>
-                      </TableCell>
+                  {data.students.map((s) => {
+                    const rateCls =
+                      s.rate === null
+                        ? 'text-muted-foreground'
+                        : s.rate >= 90
+                          ? 'text-emerald-600 dark:text-emerald-400'
+                          : s.rate >= 75
+                            ? 'text-amber-600 dark:text-amber-400'
+                            : 'text-red-600 dark:text-red-400'
+                    const isAtRisk = s.rate !== null && s.rate < 75
+                    return (
+                      <TableRow
+                        key={s.id}
+                        className={cn('animate-row-in', isAtRisk && 'bg-red-500/[0.04] hover:bg-red-500/10')}
+                      >
+                        <TableCell className="sticky left-0 z-10 bg-card/95" title={isAtRisk ? `At risk — attendance ${s.rate}% (below 75%)` : undefined}>
+                          <p className="flex items-center gap-1 truncate text-xs font-medium">
+                            {s.fullName}
+                            {isAtRisk && <AlertTriangle className="h-3 w-3 shrink-0 text-red-500" />}
+                          </p>
+                          <p className="font-mono text-[10px] text-muted-foreground">{s.studentId}</p>
+                        </TableCell>
                       {s.cells.map((c, i) => {
                         const disp = registerCellDisplay(c, data.days[i])
                         return (
@@ -2651,10 +2771,11 @@ function RegisterView() {
                         {s.absent}
                       </TableCell>
                       <TableCell className="text-center text-xs font-semibold tabular-nums">
-                        {s.rate === null ? '—' : `${s.rate}%`}
+                        <span className={rateCls}>{s.rate === null ? '—' : `${s.rate}%`}</span>
                       </TableCell>
                     </TableRow>
-                  ))}
+                    )
+                  })}
                 </TableBody>
                 <tfoot>
                   <TableRow className="border-t-2 bg-muted/50 font-semibold">
@@ -2691,6 +2812,11 @@ function RegisterView() {
                 Leave
               </span>
               <span>· unmarked / not yet due</span>
+              {data.summary && data.summary.atRiskCount > 0 && (
+                <span className="inline-flex items-center gap-1 font-medium text-red-600 dark:text-red-400">
+                  <AlertTriangle className="h-3 w-3" /> {data.summary.atRiskCount} below 75%
+                </span>
+              )}
               <span className="ml-auto">
                 {data.totalStudents} student{data.totalStudents === 1 ? '' : 's'} ·{' '}
                 {data.students.filter((s) => s.rate !== null).length} with records

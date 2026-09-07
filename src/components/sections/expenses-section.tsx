@@ -43,6 +43,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Switch } from '@/components/ui/switch'
 import {
   Dialog,
   DialogContent,
@@ -1117,6 +1118,17 @@ function RecurringTemplatesDialog({ month, onClose, onApplied }: RecurringTempla
     void persist(list, `"${t.name}" removed from recurring templates`)
   }
 
+  // Pause = stays in the list but is excluded from Apply (and future months)
+  const toggleActive = (t: RecurringTemplate) => {
+    const list = templates.map((x) => (x.id === t.id ? { ...x, active: !x.active } : x))
+    void persist(
+      list,
+      t.active
+        ? `"${t.name}" paused — won't be applied`
+        : `"${t.name}" resumed — back in monthly apply`,
+    )
+  }
+
   const applySelected = async () => {
     setApplying(true)
     try {
@@ -1196,11 +1208,16 @@ function RecurringTemplatesDialog({ month, onClose, onApplied }: RecurringTempla
               <div className="max-h-64 space-y-2 overflow-y-auto scroll-thin pr-0.5">
                 {templates.map((t) => {
                   const isSel = selected.has(t.id)
+                  const isPaused = t.active === false
                   return (
                     <div
                       key={t.id}
                       className={`group flex items-center gap-3 rounded-xl border p-3 transition-all hover:shadow-sm ${
-                        isSel ? 'border-primary/40 bg-primary/5' : 'bg-card'
+                        isPaused
+                          ? 'border-dashed border-border bg-muted/20 opacity-70'
+                          : isSel
+                            ? 'border-primary/40 bg-primary/5'
+                            : 'bg-card'
                       }`}
                     >
                       <button
@@ -1208,17 +1225,28 @@ function RecurringTemplatesDialog({ month, onClose, onApplied }: RecurringTempla
                         role="checkbox"
                         aria-checked={isSel}
                         aria-label={`Select ${t.name}`}
-                        onClick={() => toggle(t.id)}
+                        title={isPaused ? 'Paused — resume to apply this template' : `Select ${t.name}`}
+                        onClick={() => !isPaused && toggle(t.id)}
                         className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition-all ${
                           isSel
                             ? 'border-primary bg-primary text-primary-foreground'
                             : 'border-muted-foreground/40 hover:border-primary'
-                        }`}
+                        } ${isPaused ? 'cursor-not-allowed opacity-40 hover:border-muted-foreground/40' : ''}`}
                       >
                         {isSel && <CheckCircle2 className="h-3.5 w-3.5" />}
                       </button>
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium">{t.name}</p>
+                        <p className="flex items-center gap-1.5 truncate text-sm font-medium">
+                          <span className="min-w-0 truncate">{t.name}</span>
+                          {isPaused && (
+                            <Badge
+                              variant="outline"
+                              className="shrink-0 border-amber-500/40 bg-amber-500/10 text-[9px] uppercase tracking-wide text-amber-600 dark:text-amber-400"
+                            >
+                              Paused
+                            </Badge>
+                          )}
+                        </p>
                         <div className="mt-0.5 flex items-center gap-2 overflow-hidden whitespace-nowrap">
                           <Badge
                             variant="outline"
@@ -1240,9 +1268,19 @@ function RecurringTemplatesDialog({ month, onClose, onApplied }: RecurringTempla
                       </div>
                       {/* Amount above actions on mobile, side-by-side on desktop */}
                       <div className="flex shrink-0 flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-3">
-                        <p className="text-sm font-semibold tabular-nums">{currency(t.amount)}</p>
+                        <p className={`text-sm font-semibold tabular-nums ${isPaused ? 'text-muted-foreground line-through decoration-border' : ''}`}>
+                          {currency(t.amount)}
+                        </p>
                         {/* Touch devices have no hover — keep actions visible on mobile */}
-                        <div className="flex gap-0.5 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
+                        <div className="flex items-center gap-0.5 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
+                          <Switch
+                            checked={t.active !== false}
+                            disabled={saving}
+                            aria-label={`${t.active === false ? 'Resume' : 'Pause'} ${t.name}`}
+                            title={`${t.active === false ? 'Resume' : 'Pause'} — exclude/include from monthly apply`}
+                            onCheckedChange={() => toggleActive(t)}
+                            className="mr-1 scale-[0.8]"
+                          />
                           <Button
                             variant="ghost"
                             size="icon"
@@ -1285,6 +1323,8 @@ function RecurringTemplatesDialog({ month, onClose, onApplied }: RecurringTempla
                   const entry: RecurringTemplate = {
                     ...tpl,
                     id: exists ? editing!.id : tpl.name.toLowerCase().replace(/\s+/g, '-') + '-' + Date.now().toString(36),
+                    // Keep paused state through edits (form doesn't manage it)
+                    ...(exists ? { active: editing!.active } : {}),
                   }
                   const list = exists
                     ? templates.map((x) => (x.id === entry.id ? entry : x))
@@ -1299,9 +1339,17 @@ function RecurringTemplatesDialog({ month, onClose, onApplied }: RecurringTempla
 
             {/* Selection summary */}
             {templates.length > 0 && (
-              <div className="flex items-center justify-between gap-3 rounded-lg bg-muted/40 px-3 py-2 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-lg bg-muted/40 px-3 py-2 text-xs">
                 <span className="text-muted-foreground">
                   {selected.size} of {templates.length} selected
+                  {templates.some((t) => t.active === false) && (
+                    <>
+                      {' · '}
+                      <span className="font-medium text-amber-600 dark:text-amber-400">
+                        {templates.filter((t) => t.active === false).length} paused
+                      </span>
+                    </>
+                  )}
                 </span>
                 <span className="font-semibold tabular-nums">
                   ≈ {currency(selectedTotal)} per month

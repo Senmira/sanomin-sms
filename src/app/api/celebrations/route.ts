@@ -17,6 +17,9 @@ interface Celebration {
   // Birthdays: age the person is turning. Anniversaries: completed years.
   milestone: number | null
   kind: 'birthday' | 'anniversary'
+  // Best WhatsApp contact for greetings — primary guardian for students,
+  // the teacher's own phone for staff. null when no reachable phone on file.
+  contact: { name: string; phone: string } | null
 }
 
 function todayUtc(): Date {
@@ -41,6 +44,11 @@ function yearsBetween(from: Date, to: Date): number {
   return age
 }
 
+function isReachablePhone(phone?: string | null): boolean {
+  if (!phone) return false
+  return phone.replace(/\D/g, '').length >= 9
+}
+
 export async function GET(req: Request) {
   const url = new URL(req.url)
   const days = Math.min(90, Math.max(1, parseInt(url.searchParams.get('days') || '30', 10) || 30))
@@ -50,11 +58,17 @@ export async function GET(req: Request) {
   const [students, teachers] = await Promise.all([
     db.student.findMany({
       where: { status: 'Active', dob: { not: null } },
-      select: { studentId: true, fullName: true, dob: true, photoUrl: true },
+      select: {
+        studentId: true,
+        fullName: true,
+        dob: true,
+        photoUrl: true,
+        guardians: { select: { name: true, phone: true, isPrimary: true } },
+      },
     }),
     db.teacher.findMany({
       where: { status: { not: 'Inactive' }, hireDate: { not: null } },
-      select: { teacherId: true, fullName: true, hireDate: true, photoUrl: true },
+      select: { teacherId: true, fullName: true, hireDate: true, photoUrl: true, phone: true },
     }),
   ])
 
@@ -66,6 +80,12 @@ export async function GET(req: Request) {
     const next = nextOccurrence(dob.getUTCMonth() + 1, dob.getUTCDate(), today)
     if (next.getTime() > horizon.getTime()) continue
     const daysUntil = Math.round((next.getTime() - today.getTime()) / 86_400_000)
+    // Primary guardian first, then any guardian with a reachable phone
+    const guardians = s.guardians || []
+    const best =
+      guardians.find((g) => g.isPrimary && isReachablePhone(g.phone)) ??
+      guardians.find((g) => isReachablePhone(g.phone)) ??
+      null
     out.push({
       personType: 'Student',
       ref: s.studentId,
@@ -74,6 +94,7 @@ export async function GET(req: Request) {
       daysUntil,
       milestone: yearsBetween(dob, next),
       kind: 'birthday',
+      contact: best ? { name: best.name, phone: best.phone } : null,
     })
   }
 
@@ -95,6 +116,7 @@ export async function GET(req: Request) {
       daysUntil,
       milestone: years,
       kind: 'anniversary',
+      contact: isReachablePhone(t.phone) ? { name: t.fullName, phone: t.phone as string } : null,
     })
   }
 

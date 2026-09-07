@@ -109,6 +109,55 @@ export async function GET(req: Request) {
     marked: students.filter((s) => s.cells[i] !== null).length,
   }))
 
+  // ── Class-level summary insights ──
+  const totalPresent = students.reduce((n, s) => n + s.present, 0)
+  const totalLate = students.reduce((n, s) => n + s.late, 0)
+  const totalAbsent = students.reduce((n, s) => n + s.absent, 0)
+  const totalLeave = students.reduce((n, s) => n + s.leave, 0)
+  const totalMarked = totalPresent + totalLate + totalAbsent + totalLeave
+
+  const markedDayStats = dayTotals
+    .filter((d) => d.marked > 0)
+    .map((d) => ({
+      day: d.day,
+      present: d.present,
+      marked: d.marked,
+      rate: Math.round(((d.present + d.late) / d.marked) * 100),
+    }))
+  const bestDay =
+    markedDayStats.length > 0
+      ? markedDayStats.reduce((best, d) =>
+          d.rate > best.rate || (d.rate === best.rate && d.present > best.present) ? d : best,
+        )
+      : null
+  const worstDay =
+    markedDayStats.length > 0
+      ? markedDayStats.reduce((worst, d) =>
+          d.rate < worst.rate || (d.rate === worst.rate && d.present < worst.present) ? d : worst,
+        )
+      : null
+
+  const atRisk = students
+    .filter((s) => s.rate !== null && s.rate < 75)
+    .sort((a, b) => (a.rate ?? 0) - (b.rate ?? 0))
+    .slice(0, 6)
+    .map((s) => ({ studentId: s.studentId, fullName: s.fullName, rate: s.rate as number }))
+
+  const summary = {
+    rate: totalMarked > 0 ? Math.round(((totalPresent + totalLate) / totalMarked) * 100) : null,
+    present: totalPresent,
+    late: totalLate,
+    absent: totalAbsent,
+    leave: totalLeave,
+    marked: totalMarked,
+    daysWithRecords: markedDayStats.length,
+    bestDay: bestDay ? { day: bestDay.day, present: bestDay.present, rate: bestDay.rate } : null,
+    worstDay: worstDay ? { day: worstDay.day, present: worstDay.present, rate: worstDay.rate } : null,
+    perfect: students.filter((s) => s.rate === 100).length,
+    atRiskCount: students.filter((s) => s.rate !== null && s.rate < 75).length,
+    atRisk,
+  }
+
   return NextResponse.json({
     class: {
       id: cls.id,
@@ -129,6 +178,7 @@ export async function GET(req: Request) {
     days,
     students,
     dayTotals,
+    summary,
     totalStudents: students.length,
   })
 }
