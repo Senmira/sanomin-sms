@@ -23,9 +23,13 @@ import {
   Repeat,
   RotateCcw,
   XCircle,
+  Paperclip,
+  ImageIcon,
+  ImagePlus,
 } from 'lucide-react'
 
 import { api } from '@/lib/api'
+import { fileToCompressedDataUrl } from '@/lib/image'
 import {
   ExpenseRow,
   ExpenseSummary,
@@ -209,6 +213,9 @@ function emptyForm(): ExpenseFormState {
   }
 }
 
+// Receipts are downscaled to ≤900px JPEG (~50–150KB) before being stored.
+const RECEIPT_MAX_PX = 900
+
 // ─── Main component ────────────────────────────────────────────────────────
 export function ExpensesSection() {
   const [month, setMonth] = useState<string>(currentMonth())
@@ -226,6 +233,7 @@ export function ExpensesSection() {
   const [createOpen, setCreateOpen] = useState(false)
   const [editTarget, setEditTarget] = useState<ExpenseRow | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<ExpenseRow | null>(null)
+  const [receiptTarget, setReceiptTarget] = useState<ExpenseRow | null>(null)
   const [deleting, setDeleting] = useState(false)
 
   // Monthly budgets per category (vs actual spend)
@@ -808,6 +816,17 @@ export function ExpensesSection() {
                     <TableCell>
                       <div className="min-w-0">
                         <p className="flex items-center gap-1.5 truncate text-sm font-medium">
+                          {r.hasReceipt && (
+                            <button
+                              type="button"
+                              onClick={() => setReceiptTarget(r)}
+                              className="shrink-0 rounded-full bg-teal-500/15 p-1 text-teal-700 transition-colors hover:bg-teal-500/25 dark:text-teal-300"
+                              title={`View receipt${r.receiptName ? ` — ${r.receiptName}` : ''}`}
+                              aria-label="View attached receipt"
+                            >
+                              <Paperclip className="h-3 w-3" />
+                            </button>
+                          )}
                           {r.note === 'Recurring template' && (
                             <Repeat
                               className="h-3.5 w-3.5 shrink-0 text-primary"
@@ -900,6 +919,11 @@ export function ExpensesSection() {
                             </DropdownMenuItem>
                           )}
                           {r.status !== 'Pending' && <DropdownMenuSeparator />}
+                          {r.hasReceipt && (
+                            <DropdownMenuItem onClick={() => setReceiptTarget(r)}>
+                              <Paperclip className="mr-2 h-4 w-4" /> View receipt
+                            </DropdownMenuItem>
+                          )}
                           <DropdownMenuItem onClick={() => setEditTarget(r)}>
                             <Pencil className="mr-2 h-4 w-4" /> Edit
                           </DropdownMenuItem>
@@ -952,6 +976,11 @@ export function ExpensesSection() {
             fetchExpenses()
           }}
         />
+      )}
+
+      {/* Receipt viewer */}
+      {receiptTarget && (
+        <ReceiptViewerDialog expense={receiptTarget} onClose={() => setReceiptTarget(null)} />
       )}
 
       {/* Budgets dialog */}
@@ -1083,6 +1112,63 @@ function ExpenseDialog({ mode, expense, onClose, onSaved }: ExpenseDialogProps) 
 
   const isEdit = mode === 'edit' && !!expense
 
+  // ─── Receipt attachment state ──────────────────────────────────────
+  // receiptChanged guards the payload: without it, an edit that never touched
+  // the receipt would still send receiptUrl (list rows don't carry it) and
+  // accidentally wipe the stored image.
+  const [receipt, setReceipt] = useState<{ url: string; name: string }>({ url: '', name: '' })
+  const [receiptChanged, setReceiptChanged] = useState(false)
+  const [receiptLoading, setReceiptLoading] = useState(false)
+  const [receiptProcessing, setReceiptProcessing] = useState(false)
+  const receiptInputRef = useRef<HTMLInputElement>(null)
+
+  // Edit mode: fetch the stored receipt (list rows don't carry the data URL)
+  // so the existing image shows as a thumbnail.
+  useEffect(() => {
+    if (!isEdit || !expense) return
+    let alive = true
+    setReceiptLoading(true)
+    api<ExpenseRow>(`/api/expenses/${expense.id}`)
+      .then((full) => {
+        if (!alive) return
+        setReceipt({ url: full.receiptUrl ?? '', name: full.receiptName ?? '' })
+      })
+      .catch(() => {
+        /* non-fatal — the editor still works without the thumbnail */
+      })
+      .finally(() => {
+        if (alive) setReceiptLoading(false)
+      })
+    return () => {
+      alive = false
+    }
+  }, [isEdit, expense])
+
+  const handleReceiptFile = async (file: File | undefined) => {
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      toast.error('Please choose an image file (PNG or JPG)')
+      return
+    }
+    setReceiptProcessing(true)
+    try {
+      const url = await fileToCompressedDataUrl(file, RECEIPT_MAX_PX, 0.8)
+      setReceipt({ url, name: file.name })
+      setReceiptChanged(true)
+      toast.success('Receipt photo attached — saved with the expense')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not process the image')
+    } finally {
+      setReceiptProcessing(false)
+      if (receiptInputRef.current) receiptInputRef.current.value = ''
+    }
+  }
+
+  const removeReceipt = () => {
+    setReceipt({ url: '', name: '' })
+    setReceiptChanged(true)
+  }
+
   const setField = useCallback(
     <K extends keyof ExpenseFormState>(key: K, value: ExpenseFormState[K]) => {
       setForm((f) => ({ ...f, [key]: value }))
@@ -1113,6 +1199,8 @@ function ExpenseDialog({ mode, expense, onClose, onSaved }: ExpenseDialogProps) 
         method: form.method,
         note: form.note.trim() || null,
         ...(!isEdit && form.needsApproval ? { status: 'Pending' } : {}),
+        // Only send receipt fields when the user actually changed them.
+        ...(receiptChanged ? { receiptUrl: receipt.url, receiptName: receipt.name } : {}),
       }
       if (isEdit && expense) {
         await api(`/api/expenses/${expense.id}`, {
@@ -1251,6 +1339,98 @@ function ExpenseDialog({ mode, expense, onClose, onSaved }: ExpenseDialogProps) 
               placeholder="Optional remarks — invoice no., payment reference…"
               value={form.note}
               onChange={(e) => setField('note', e.target.value)}
+            />
+          </div>
+
+          {/* Receipt / bill photo attachment */}
+          <div className="flex flex-col gap-1.5">
+            <Label className="flex items-center gap-1.5">
+              <Paperclip className="h-3.5 w-3.5 text-muted-foreground" />
+              Receipt / bill photo
+              <span className="font-normal text-muted-foreground">(optional)</span>
+            </Label>
+            {receipt.url ? (
+              <div className="flex items-center gap-3 rounded-lg border bg-muted/20 p-2.5">
+                <div className="relative shrink-0">
+                  <img
+                    src={receipt.url}
+                    alt="Receipt preview"
+                    className="h-20 w-20 cursor-zoom-in rounded-md border object-cover"
+                    onClick={() => window.open(receipt.url, '_blank', 'noopener')}
+                  />
+                  {receiptProcessing && (
+                    <div className="absolute inset-0 flex items-center justify-center rounded-md bg-background/70">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    </div>
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium" title={receipt.name}>
+                    {receipt.name || 'Receipt image'}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground">
+                    ≈ {Math.round(receipt.url.length * 0.75 / 1024)} KB · stored with the record
+                  </p>
+                  <div className="mt-1.5 flex gap-1.5">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 gap-1.5 text-xs"
+                      onClick={() => receiptInputRef.current?.click()}
+                      disabled={receiptProcessing}
+                    >
+                      <ImagePlus className="h-3.5 w-3.5" /> Replace
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 gap-1.5 text-xs text-red-600 hover:text-red-700 dark:text-red-400"
+                      onClick={removeReceipt}
+                      disabled={receiptProcessing}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" /> Remove
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => receiptInputRef.current?.click()}
+                disabled={receiptProcessing || receiptLoading}
+                className="flex w-full items-center gap-3 rounded-lg border border-dashed bg-muted/20 p-3 text-left transition-colors hover:bg-muted/40 disabled:opacity-60"
+              >
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border bg-background">
+                  {receiptProcessing || receiptLoading ? (
+                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                  ) : (
+                    <ImageIcon className="h-4 w-4 text-muted-foreground" />
+                  )}
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium">
+                    {receiptProcessing
+                      ? 'Processing photo…'
+                      : receiptLoading
+                        ? 'Loading current receipt…'
+                        : 'Attach a photo of the receipt'}
+                  </span>
+                  <span className="mt-0.5 block text-xs text-muted-foreground">
+                    PNG or JPG — auto-resized to ≤900px so it stays lightweight. Useful for
+                    approvals &amp; audits.
+                  </span>
+                </span>
+              </button>
+            )}
+            <input
+              ref={receiptInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => handleReceiptFile(e.target.files?.[0])}
+              aria-label="Choose receipt image"
             />
           </div>
 
@@ -1779,5 +1959,121 @@ function TemplateForm({
         </div>
       </div>
     </div>
+  )
+}
+
+// ─── Receipt viewer dialog ──────────────────────────────────────────────────
+// Loads the full expense (single GET includes the receipt data URL; list rows
+// don't) and shows the attached image with the record's context, download
+// and zoom actions.
+function ReceiptViewerDialog({ expense, onClose }: { expense: ExpenseRow; onClose: () => void }) {
+  const [full, setFull] = useState<ExpenseRow | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [zoom, setZoom] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    api<ExpenseRow>(`/api/expenses/${expense.id}`)
+      .then((d) => {
+        if (!alive) return
+        setFull(d)
+        if (!d.receiptUrl) setError('This expense no longer has an attached receipt.')
+      })
+      .catch(() => {
+        if (alive) setError('Failed to load the receipt')
+      })
+      .finally(() => {
+        if (alive) setLoading(false)
+      })
+    return () => {
+      alive = false
+    }
+  }, [expense.id])
+
+  const download = () => {
+    if (!full?.receiptUrl) return
+    const a = document.createElement('a')
+    a.href = full.receiptUrl
+    a.download = full.receiptName || `receipt-${full.id}.jpg`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+  }
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-h-[92vh] overflow-y-auto scroll-thin sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-teal-500/15 text-teal-600 dark:text-teal-400">
+              <Paperclip className="h-4 w-4" />
+            </div>
+            Receipt — {expense.description}
+          </DialogTitle>
+          <DialogDescription>
+            Attached receipt / bill photo for {fmtDate(expense.date)} · {expense.category}
+          </DialogDescription>
+        </DialogHeader>
+
+        {loading ? (
+          <div className="flex h-64 items-center justify-center rounded-lg border bg-muted/20">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : error ? (
+          <div className="flex flex-col items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-8 text-center">
+            <AlertCircle className="h-6 w-6 text-amber-600 dark:text-amber-400" />
+            <p className="text-sm text-amber-700 dark:text-amber-300">{error}</p>
+          </div>
+        ) : (
+          full && (
+            <>
+              {/* Meta strip */}
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border bg-muted/20 px-3 py-2 text-xs">
+                <span className="font-medium">{fmtDate(full.date)}</span>
+                <Badge
+                  variant="outline"
+                  className={`h-auto px-1.5 py-0 text-[10px] ${categoryBadgeClasses(full.category)}`}
+                >
+                  <span className="min-w-0 truncate">{full.category}</span>
+                </Badge>
+                {full.vendor && <span className="text-muted-foreground">{full.vendor}</span>}
+                <span className="ml-auto text-sm font-semibold tabular-nums text-rose-600 dark:text-rose-400">
+                  {currency(full.amount)}
+                </span>
+              </div>
+
+              {/* Image (object-contain, max height, click to zoom 1:1) */}
+              <div className="scroll-thin flex max-h-[56vh] items-center justify-center overflow-auto rounded-lg border bg-[repeating-conic-gradient(#f1f5f9_0%_25%,#fff_0%_50%)] bg-[length:16px_16px] p-2 dark:bg-[repeating-conic-gradient(#1e293b_0%_25%,#0f172a_0%_50%)]">
+                <img
+                  src={full.receiptUrl ?? ''}
+                  alt={`Receipt for ${full.description}`}
+                  className={
+                    zoom
+                      ? 'max-w-none cursor-zoom-out'
+                      : 'max-h-[52vh] w-auto max-w-full cursor-zoom-in rounded object-contain'
+                  }
+                  onClick={() => setZoom((z) => !z)}
+                  title={zoom ? 'Click to fit' : 'Click for 1:1 size'}
+                />
+              </div>
+              <p className="text-center text-[11px] text-muted-foreground">
+                {zoom ? 'Showing 1:1 — click the image to fit' : 'Click the image for 1:1 size'}
+                {full.receiptName ? ` · ${full.receiptName}` : ''}
+              </p>
+
+              <DialogFooter>
+                <Button variant="outline" onClick={download} className="gap-2">
+                  <Download className="h-4 w-4" /> Download
+                </Button>
+                <Button variant="outline" onClick={onClose}>
+                  Close
+                </Button>
+              </DialogFooter>
+            </>
+          )
+        )}
+      </DialogContent>
+    </Dialog>
   )
 }

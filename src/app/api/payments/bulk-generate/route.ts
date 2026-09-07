@@ -2,12 +2,15 @@ import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 
 // POST /api/payments/bulk-generate
-// Body: { month: "YYYY-MM", dueDate?: "YYYY-MM-DD", skipExisting?: boolean }
+// Body: { month: "YYYY-MM", dueDate?: "YYYY-MM-DD", skipExisting?: boolean,
+//         skipEmpty?: boolean }
 //
 // Creates ONE BILL PER STUDENT for the given month. All of the student's
 // active programme enrolments become line items on that single bill — the
 // student's name appears only once no matter how many programmes they take.
 // The bill total = Σ monthlyFee of the enrolled programmes.
+// With skipEmpty (default false) students without any active programme are
+// left out instead of receiving a LKR 0 bill.
 //
 // Returns { created, skipped, total, message }
 export async function POST(req: Request) {
@@ -20,6 +23,7 @@ export async function POST(req: Request) {
   }
   const month: string = body.month
   const skipExisting = body.skipExisting !== false // default true
+  const skipEmpty = body.skipEmpty === true // default false (legacy behaviour)
   const dueDate = body.dueDate ? new Date(body.dueDate + 'T23:59:59') : null
 
   // Get the latest receipt number to continue sequencing
@@ -92,6 +96,10 @@ export async function POST(req: Request) {
     }
 
     const amount = lines.reduce((sum, li) => sum + li.amount, 0)
+    if (skipEmpty && lines.length === 0) {
+      skipped++
+      continue
+    }
     const receiptNo = `SAN-${new Date().getFullYear()}-${String(seq).padStart(4, '0')}`
     seq++
 

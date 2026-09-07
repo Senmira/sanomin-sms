@@ -11,8 +11,8 @@ import { db } from '@/lib/db'
 const ALLOWED_METHODS = new Set(['Cash', 'Bank', 'Card'])
 const ALLOWED_STATUSES = new Set(['Pending', 'Approved', 'Rejected'])
 
-function serialize(e: ExpenseRecord) {
-  return {
+function serialize(e: ExpenseRecord, includeReceipt = false) {
+  const base = {
     id: e.id,
     date: e.date.toISOString(),
     category: e.category,
@@ -24,9 +24,12 @@ function serialize(e: ExpenseRecord) {
     status: e.status,
     reviewedAt: e.reviewedAt ? e.reviewedAt.toISOString() : null,
     reviewedBy: e.reviewedBy,
+    hasReceipt: !!e.receiptUrl,
+    receiptName: e.receiptName,
     createdAt: e.createdAt.toISOString(),
     updatedAt: e.updatedAt.toISOString(),
   }
+  return includeReceipt ? { ...base, receiptUrl: e.receiptUrl } : base
 }
 
 type ExpenseRecord = Prisma.ExpenseGetPayload<Record<string, never>>
@@ -36,13 +39,15 @@ interface RouteCtx {
 }
 
 // ─── GET /api/expenses/[id] ─────────────────────────────────────────────────
+// Single-expense fetch INCLUDES the receipt data URL (list responses don't) —
+// this is the endpoint the receipt viewer calls.
 export async function GET(_req: Request, { params }: RouteCtx) {
   const { id } = await params
   const expense = await db.expense.findUnique({ where: { id } })
   if (!expense) {
     return NextResponse.json({ error: 'Expense not found' }, { status: 404 })
   }
-  return NextResponse.json(serialize(expense))
+  return NextResponse.json(serialize(expense, true))
 }
 
 // ─── PUT /api/expenses/[id] ─────────────────────────────────────────────────
@@ -56,6 +61,8 @@ interface UpdateBody {
   note?: string | null
   status?: string | null
   reviewedBy?: string | null
+  receiptUrl?: string | null
+  receiptName?: string | null
 }
 
 function parseIsoDate(v: unknown): Date | null {
@@ -124,6 +131,21 @@ export async function PUT(req: Request, { params }: RouteCtx) {
   }
   if (body.vendor !== undefined) data.vendor = body.vendor?.trim() || null
   if (body.note !== undefined) data.note = body.note?.trim() || null
+  // Receipt attachment — image data URL only; empty string clears it.
+  if (body.receiptUrl !== undefined) {
+    const ru = typeof body.receiptUrl === 'string' ? body.receiptUrl.trim() : ''
+    if (ru && !/^data:image\//.test(ru)) {
+      return NextResponse.json({ error: 'receiptUrl must be an image data URL' }, { status: 400 })
+    }
+    if (ru.length > 1_500_000) {
+      return NextResponse.json(
+        { error: 'receipt image is too large — please choose a smaller photo' },
+        { status: 400 },
+      )
+    }
+    data.receiptUrl = ru || null
+    data.receiptName = body.receiptName?.trim() || null
+  }
   if (body.status !== undefined && body.status !== null && body.status !== '') {
     const st = body.status.trim()
     if (!ALLOWED_STATUSES.has(st)) {

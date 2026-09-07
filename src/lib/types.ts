@@ -306,6 +306,9 @@ export interface ExpenseRow {
   status: ExpenseStatus
   reviewedAt: string | null
   reviewedBy: string | null
+  hasReceipt?: boolean
+  receiptName?: string | null
+  receiptUrl?: string | null // only present on single-expense GET
   createdAt: string
 }
 

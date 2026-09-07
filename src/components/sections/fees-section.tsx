@@ -29,6 +29,10 @@ import {
   Copy,
   ExternalLink,
   UserRound,
+  Eye,
+  ArrowLeft,
+  ChevronUp,
+  ChevronDown,
 } from 'lucide-react'
 
 import { api } from '@/lib/api'
@@ -326,14 +330,14 @@ export function FeesSection() {
 
   // ─── Bulk-generate payments for the selected month ─────────────────────
   const handleBulkGenerate = useCallback(
-    async (targetMonth: string, dueDate?: string) => {
+    async (targetMonth: string, dueDate?: string, skipEmpty?: boolean) => {
       setGenerating(true)
       try {
         const res = await api<{ created: number; skipped: number; total: number; message: string }>(
           '/api/payments/bulk-generate',
           {
             method: 'POST',
-            body: JSON.stringify({ month: targetMonth, dueDate }),
+            body: JSON.stringify({ month: targetMonth, dueDate, skipEmpty: skipEmpty === true }),
           },
         )
         if (res.created > 0) {
@@ -2273,13 +2277,49 @@ function ReceiptDialog({ payment, onClose }: ReceiptDialogProps) {
   )
 }
 
-// ─── Bulk Generate Dialog ──────────────────────────────────────────────────
+// ─── Bulk Generate Dialog (preview → confirm) ──────────────────────────────
+interface BulkPreviewLine {
+  programId: string
+  code: string
+  name: string
+  color: string | null
+  amount: number
+}
+interface BulkPreviewStudent {
+  studentId: string
+  studentCode: string
+  fullName: string
+  lines: BulkPreviewLine[]
+  total: number
+}
+interface BulkPreviewSkipped {
+  studentId: string
+  studentCode: string
+  fullName: string
+  billedAmount: number
+}
+interface BulkPreview {
+  month: string
+  monthLabel: string
+  toBill: BulkPreviewStudent[]
+  skipped: BulkPreviewSkipped[]
+  noProgrammes: Array<{ studentId: string; studentCode: string; fullName: string }>
+  totals: {
+    billCount: number
+    lineCount: number
+    grandTotal: number
+    skippedCount: number
+    noProgrammeCount: number
+    studentCount: number
+  }
+}
+
 interface BulkGenerateDialogProps {
   open: boolean
   onOpenChange: (v: boolean) => void
   defaultMonth: string
   generating: boolean
-  onConfirm: (month: string, dueDate?: string) => void
+  onConfirm: (month: string, dueDate?: string, skipEmpty?: boolean) => void
 }
 
 function BulkGenerateDialog({
@@ -2291,6 +2331,13 @@ function BulkGenerateDialog({
 }: BulkGenerateDialogProps) {
   const [targetMonth, setTargetMonth] = useState(defaultMonth)
   const [dueDate, setDueDate] = useState('')
+  const [skipEmpty, setSkipEmpty] = useState(true)
+  const [step, setStep] = useState<'setup' | 'preview'>('setup')
+
+  const [preview, setPreview] = useState<BulkPreview | null>(null)
+  const [previewing, setPreviewing] = useState(false)
+  const [previewError, setPreviewError] = useState<string | null>(null)
+  const [showSkipped, setShowSkipped] = useState(false)
 
   useEffect(() => {
     if (!open) return
@@ -2300,87 +2347,367 @@ function BulkGenerateDialog({
     Promise.resolve().then(() => {
       setTargetMonth(defaultMonth)
       setDueDate(dd)
+      setStep('setup')
+      setPreview(null)
+      setPreviewError(null)
+      setShowSkipped(false)
     })
   }, [open, defaultMonth])
 
+  const loadPreview = useCallback(async (m: string) => {
+    setPreviewing(true)
+    setPreviewError(null)
+    try {
+      const res = await api<BulkPreview>(
+        `/api/payments/bulk-generate/preview?month=${encodeURIComponent(m)}`,
+      )
+      setPreview(res)
+      setStep('preview')
+    } catch (e) {
+      setPreviewError(e instanceof Error ? e.message : 'Preview failed')
+    } finally {
+      setPreviewing(false)
+    }
+  }, [])
+
+  const t = preview?.totals
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
-              <Zap className="h-4 w-4" />
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+        {step === 'setup' ? (
+          <>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <Zap className="h-4 w-4" />
+                </div>
+                Generate Monthly Fees
+              </DialogTitle>
+              <DialogDescription>
+                Creates <span className="font-medium">one bill per student</span> for the selected
+                month. Every programme the student is enrolled in becomes a line item on that
+                single bill — the student&rsquo;s name appears once, no matter how many programmes
+                they take.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="grid gap-4 py-2">
+              <div className="grid gap-1.5">
+                <Label htmlFor="bulk-month">Target month *</Label>
+                <Input
+                  id="bulk-month"
+                  type="month"
+                  value={targetMonth}
+                  onChange={(e) => setTargetMonth(e.target.value)}
+                />
+              </div>
+
+              <div className="grid gap-1.5">
+                <Label htmlFor="bulk-due">Due date (optional)</Label>
+                <Input
+                  id="bulk-due"
+                  type="date"
+                  value={dueDate}
+                  onChange={(e) => setDueDate(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  When payment is due. Defaults to the 10th of the month.
+                </p>
+              </div>
+
+              <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-dashed bg-muted/20 p-3 transition-colors hover:bg-muted/40">
+                <Checkbox
+                  checked={skipEmpty}
+                  onCheckedChange={(v) => setSkipEmpty(v === true)}
+                  className="mt-0.5"
+                  aria-label="Skip students with no active programmes"
+                />
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium">
+                    Skip students with no active programmes
+                  </span>
+                  <span className="mt-0.5 block text-xs text-muted-foreground">
+                    Unchecked, they would receive a LKR&nbsp;0 bill marked as paid.
+                  </span>
+                </span>
+              </label>
+
+              <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                <div className="text-amber-700 dark:text-amber-300">
+                  <p className="font-medium">Students already billed are skipped</p>
+                  <p className="mt-0.5 text-amber-600/80 dark:text-amber-400/80">
+                    If a student already has a bill for this month, no duplicate will be created.
+                  </p>
+                </div>
+              </div>
             </div>
-            Generate Monthly Fees
-          </DialogTitle>
-          <DialogDescription>
-            Creates <span className="font-medium">one bill per student</span> for the selected
-            month. Every programme the student is enrolled in becomes a line item on that single
-            bill — the student&rsquo;s name appears once, no matter how many programmes they take.
-          </DialogDescription>
-        </DialogHeader>
 
-        <div className="grid gap-4 py-2">
-          <div className="grid gap-1.5">
-            <Label htmlFor="bulk-month">Target month *</Label>
-            <Input
-              id="bulk-month"
-              type="month"
-              value={targetMonth}
-              onChange={(e) => setTargetMonth(e.target.value)}
-            />
-            <p className="text-xs text-muted-foreground">
-              Bills will be created with status &ldquo;Pending&rdquo; and one line item per
-              enrolled programme.
-            </p>
-          </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => onOpenChange(false)} disabled={previewing}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => loadPreview(targetMonth)}
+                disabled={previewing || !targetMonth}
+                className="gap-2"
+              >
+                {previewing ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Preparing…
+                  </>
+                ) : (
+                  <>
+                    <Eye className="h-4 w-4" />
+                    Preview bills
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
+          </>
+        ) : (
+          <>
+            <DialogHeader>
+              <DialogTitle className="flex flex-wrap items-center gap-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <Eye className="h-4 w-4" />
+                </div>
+                Preview — {preview?.monthLabel ?? targetMonth}
+              </DialogTitle>
+              <DialogDescription>
+                Review exactly what will be created, then confirm. Nothing is written until you
+                press <span className="font-medium">Generate</span>.
+              </DialogDescription>
+            </DialogHeader>
 
-          <div className="grid gap-1.5">
-            <Label htmlFor="bulk-due">Due date (optional)</Label>
-            <Input
-              id="bulk-due"
-              type="date"
-              value={dueDate}
-              onChange={(e) => setDueDate(e.target.value)}
-            />
-            <p className="text-xs text-muted-foreground">
-              When payment is due. Defaults to the 10th of the month.
-            </p>
-          </div>
+            {previewError && (
+              <div className="flex flex-col items-center gap-3 rounded-lg border border-red-500/30 bg-red-500/5 p-6 text-center">
+                <AlertCircle className="h-6 w-6 text-red-600 dark:text-red-400" />
+                <p className="text-sm text-red-700 dark:text-red-300">{previewError}</p>
+                <Button variant="outline" size="sm" onClick={() => setStep('setup')}>
+                  Back to setup
+                </Button>
+              </div>
+            )}
 
-          <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
-            <div className="text-amber-700 dark:text-amber-300">
-              <p className="font-medium">Students already billed are skipped</p>
-              <p className="mt-0.5 text-amber-600/80 dark:text-amber-400/80">
-                If a student already has a bill for this month, no duplicate will be created.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={generating}>
-            Cancel
-          </Button>
-          <Button
-            onClick={() => onConfirm(targetMonth, dueDate || undefined)}
-            disabled={generating || !targetMonth}
-            className="gap-2"
-          >
-            {generating ? (
+            {!previewError && preview && t && (
               <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Generating…
-              </>
-            ) : (
-              <>
-                <Zap className="h-4 w-4" />
-                Generate
+                {/* Summary chips */}
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <div className="rounded-lg border bg-emerald-500/5 p-2.5 text-center">
+                    <p className="text-lg font-bold tabular-nums text-emerald-700 dark:text-emerald-400">
+                      {t.billCount}
+                    </p>
+                    <p className="text-[11px] font-medium text-muted-foreground">
+                      bill{t.billCount === 1 ? '' : 's'} to create
+                    </p>
+                  </div>
+                  <div className="rounded-lg border bg-sky-500/5 p-2.5 text-center">
+                    <p className="text-lg font-bold tabular-nums text-sky-700 dark:text-sky-400">
+                      {t.lineCount}
+                    </p>
+                    <p className="text-[11px] font-medium text-muted-foreground">
+                      programme line{t.lineCount === 1 ? '' : 's'}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border bg-primary/5 p-2.5 text-center">
+                    <p className="text-lg font-bold tabular-nums text-primary">
+                      {currencyCompact(t.grandTotal)}
+                    </p>
+                    <p className="text-[11px] font-medium text-muted-foreground">total billed</p>
+                  </div>
+                  <div className="rounded-lg border bg-amber-500/5 p-2.5 text-center">
+                    <p className="text-lg font-bold tabular-nums text-amber-700 dark:text-amber-400">
+                      {t.skippedCount}
+                    </p>
+                    <p className="text-[11px] font-medium text-muted-foreground">
+                      already billed
+                    </p>
+                  </div>
+                </div>
+
+                {/* Per-student bill drafts */}
+                <div className="grid gap-1.5">
+                  <p className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+                    <FileText className="h-3.5 w-3.5" />
+                    Bill drafts ({t.billCount})
+                  </p>
+                  {t.billCount === 0 ? (
+                    <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+                      Every active student already has a bill for this month — nothing to
+                      generate.
+                    </div>
+                  ) : (
+                    <div className="scroll-thin max-h-64 overflow-y-auto rounded-lg border">
+                      <div className="divide-y">
+                        {preview.toBill.map((s, idx) => (
+                          <div
+                            key={s.studentId}
+                            className="flex items-start gap-2.5 p-2.5 transition-colors hover:bg-muted/40 odd:bg-muted/20"
+                          >
+                            <Avatar className="h-7 w-7 shrink-0">
+                              <AvatarFallback
+                                className={`${avatarColor(s.fullName)} text-[10px] font-semibold`}
+                              >
+                                {initials(s.fullName)}
+                              </AvatarFallback>
+                            </Avatar>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-baseline justify-between gap-2">
+                                <p className="min-w-0 truncate text-sm font-medium">
+                                  {s.fullName}
+                                  <span className="ml-1.5 text-[10px] font-normal text-muted-foreground">
+                                    {s.studentCode}
+                                  </span>
+                                </p>
+                                <p className="shrink-0 text-sm font-semibold tabular-nums">
+                                  {currency(s.total)}
+                                </p>
+                              </div>
+                              <ul className="mt-1 space-y-0.5">
+                                {s.lines.map((li) => (
+                                  <li
+                                    key={li.programId}
+                                    className="flex items-center justify-between gap-2 text-xs text-muted-foreground"
+                                  >
+                                    <span className="flex min-w-0 items-center gap-1.5">
+                                      <span
+                                        className="h-1.5 w-1.5 shrink-0 rounded-full"
+                                        style={{ background: li.color ?? '#94a3b8' }}
+                                        aria-hidden
+                                      />
+                                      <span className="min-w-0 truncate">
+                                        {li.name}
+                                        <span className="ml-1 opacity-60">({li.code})</span>
+                                      </span>
+                                    </span>
+                                    <span className="shrink-0 tabular-nums">
+                                      {currency(li.amount)}
+                                    </span>
+                                  </li>
+                                ))}
+                              </ul>
+                              {s.lines.length > 1 && (
+                                <Badge
+                                  variant="outline"
+                                  className="mt-1 h-auto px-1.5 py-0 text-[10px]"
+                                >
+                                  {s.lines.length} programmes · one bill
+                                </Badge>
+                              )}
+                            </div>
+                            <span className="mt-0.5 shrink-0 text-[10px] tabular-nums text-muted-foreground/60">
+                              #{idx + 1}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Already-billed collapsible */}
+                {preview.skipped.length > 0 && (
+                  <div className="rounded-lg border border-amber-500/30 bg-amber-500/5">
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-between gap-2 p-2.5 text-left"
+                      onClick={() => setShowSkipped((v) => !v)}
+                      aria-expanded={showSkipped}
+                    >
+                      <span className="flex items-center gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-300">
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                        {preview.skipped.length} student
+                        {preview.skipped.length === 1 ? '' : 's'} already billed — will be skipped
+                      </span>
+                      {showSkipped ? (
+                        <ChevronUp className="h-3.5 w-3.5 text-amber-700 dark:text-amber-300" />
+                      ) : (
+                        <ChevronDown className="h-3.5 w-3.5 text-amber-700 dark:text-amber-300" />
+                      )}
+                    </button>
+                    {showSkipped && (
+                      <ul className="scroll-thin max-h-36 space-y-0.5 overflow-y-auto border-t border-amber-500/20 p-2.5 pt-2">
+                        {preview.skipped.map((s) => (
+                          <li
+                            key={s.studentId}
+                            className="flex items-center justify-between gap-2 text-xs text-amber-800/90 dark:text-amber-200/90"
+                          >
+                            <span className="min-w-0 truncate">
+                              {s.fullName}
+                              <span className="ml-1.5 opacity-60">{s.studentCode}</span>
+                            </span>
+                            <span className="shrink-0 tabular-nums opacity-80">
+                              billed {currency(s.billedAmount)}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+
+                {/* No-programme students */}
+                {preview.noProgrammes.length > 0 && (
+                  <div className="flex items-start gap-2 rounded-lg border border-sky-500/30 bg-sky-500/5 p-3 text-xs">
+                    <Users className="mt-0.5 h-4 w-4 shrink-0 text-sky-600 dark:text-sky-400" />
+                    <div className="min-w-0 text-sky-800 dark:text-sky-200">
+                      <p className="font-medium">
+                        {preview.noProgrammes.length} active student
+                        {preview.noProgrammes.length === 1 ? ' has' : 's have'} no programme
+                        enrolment
+                      </p>
+                      <p className="mt-0.5 text-sky-700/80 dark:text-sky-300/80">
+                        {skipEmpty
+                          ? 'They will be skipped (no LKR 0 bills).'
+                          : 'They will receive a LKR 0 bill marked as paid.'}{' '}
+                        {preview.noProgrammes
+                          .slice(0, 4)
+                          .map((s) => s.fullName)
+                          .join(', ')}
+                        {preview.noProgrammes.length > 4
+                          ? ` +${preview.noProgrammes.length - 4} more`
+                          : ''}
+                      </p>
+                    </div>
+                  </div>
+                )}
               </>
             )}
-          </Button>
-        </DialogFooter>
+
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setStep('setup')}
+                disabled={generating || previewing}
+                className="gap-2"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                Back
+              </Button>
+              <Button
+                onClick={() => onConfirm(targetMonth, dueDate || undefined, skipEmpty)}
+                disabled={generating || !preview || preview.totals.billCount === 0}
+                className="gap-2"
+              >
+                {generating ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Generating…
+                  </>
+                ) : (
+                  <>
+                    <Zap className="h-4 w-4" />
+                    Generate {preview ? preview.totals.billCount : ''} bill
+                    {preview?.totals.billCount === 1 ? '' : 's'}
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   )

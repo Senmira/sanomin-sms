@@ -7,7 +7,9 @@ import { db } from '@/lib/db'
 //      → { data, summary: { total, count, byCategory, methodTotals, statusTotals },
 //          page, totalPages, total }
 // POST /api/expenses { date, category, description, amount, method?, vendor?,
-//                      note?, status? }
+//                      note?, status?, receiptUrl?, receiptName? }
+// NOTE: list responses never include receiptUrl (large data URLs) — fetch a
+// single expense via GET /api/expenses/[id] to view its receipt.
 
 const ALLOWED_METHODS = new Set(['Cash', 'Bank', 'Card'])
 const ALLOWED_STATUSES = new Set(['Pending', 'Approved', 'Rejected'])
@@ -36,8 +38,10 @@ function monthRange(month: string): { start: Date; end: Date } {
 }
 
 // ─── Serializer: Expense → ExpenseRow JSON ──────────────────────────────────
-function serialize(e: ExpenseRecord) {
-  return {
+// `includeReceipt` adds the (large) receipt data URL — used by the single-
+// expense GET only, so list payloads stay small.
+function serialize(e: ExpenseRecord, includeReceipt = false) {
+  const base = {
     id: e.id,
     date: e.date.toISOString(),
     category: e.category,
@@ -49,9 +53,12 @@ function serialize(e: ExpenseRecord) {
     status: e.status,
     reviewedAt: e.reviewedAt ? e.reviewedAt.toISOString() : null,
     reviewedBy: e.reviewedBy,
+    hasReceipt: !!e.receiptUrl,
+    receiptName: e.receiptName,
     createdAt: e.createdAt.toISOString(),
     updatedAt: e.updatedAt.toISOString(),
   }
+  return includeReceipt ? { ...base, receiptUrl: e.receiptUrl } : base
 }
 
 type ExpenseRecord = Prisma.ExpenseGetPayload<Record<string, never>>
@@ -157,7 +164,7 @@ export async function GET(req: Request) {
   const totalPages = Math.max(1, Math.ceil(total / limit))
 
   return NextResponse.json({
-    data: rows.map(serialize),
+    data: rows.map((e) => serialize(e)),
     summary: {
       total: round2(agg._sum.amount ?? 0),
       count: agg._count._all,
@@ -181,6 +188,8 @@ interface ExpenseBody {
   vendor?: string | null
   note?: string | null
   status?: string | null
+  receiptUrl?: string | null
+  receiptName?: string | null
 }
 
 function parseIsoDate(v: unknown): Date | null {
@@ -244,6 +253,19 @@ function validate(
       return { error: `status must be one of ${Array.from(ALLOWED_STATUSES).join(', ')}` }
     }
     values.status = st
+  }
+  // Receipt attachment: must be an image data URL (client compresses to JPEG
+  // before sending); empty string / null clears it.
+  if (body.receiptUrl !== undefined) {
+    const ru = typeof body.receiptUrl === 'string' ? body.receiptUrl.trim() : ''
+    if (ru && !/^data:image\//.test(ru)) {
+      return { error: 'receiptUrl must be an image data URL' }
+    }
+    if (ru.length > 1_500_000) {
+      return { error: 'receipt image is too large — please choose a smaller photo' }
+    }
+    values.receiptUrl = ru || null
+    values.receiptName = body.receiptName?.trim() || null
   }
 
   return { values: values as Prisma.ExpenseUncheckedCreateInput }

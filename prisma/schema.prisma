@@ -254,6 +254,10 @@ model Expense {
   status      String   @default("Approved") // Pending | Approved | Rejected
   reviewedAt  DateTime?                     // when Approved/Rejected was set
   reviewedBy  String?                       // reviewer label (no auth system)
+  // Optional scanned receipt / bill photo, stored as a compressed JPEG data
+  // URL (client-side downscale keeps it ~50-150KB) for audit & approvals.
+  receiptUrl  String?
+  receiptName String?                       // original file name
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 }

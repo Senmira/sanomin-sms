@@ -31,6 +31,7 @@ import {
   BookOpen,
   Printer,
   Download,
+  FileDown,
   Trophy,
   AlertTriangle,
   Star,
@@ -2488,6 +2489,144 @@ function RegisterView() {
     )
   }, [])
 
+  // PDF / branded print: opens a SELF-CONTAINED A4-landscape letter in a
+  // popup (school-branded header, insights summary, full colour-coded grid)
+  // and triggers the print dialog — deterministic in every browser, unlike
+  // the app-cascade sheet above. Save as PDF from the print dialog.
+  const exportPdf = useCallback(() => {
+    if (!data) return
+    const w = window.open('', '_blank', 'width=1180,height=860')
+    if (!w) {
+      toast.error('Popup blocked — allow popups for this site to export PDF')
+      return
+    }
+    const esc = (s: string) =>
+      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+    const sum = data.summary
+    const rate = sum?.rate
+    const rateColor = rate == null ? '#64748b' : rate >= 90 ? '#059669' : rate >= 75 ? '#d97706' : '#dc2626'
+    const cellHtml = (status: string | null, day: RegisterDay) => {
+      if (status === 'Present') return '<td class="c p">P</td>'
+      if (status === 'Late') return '<td class="c l">L</td>'
+      if (status === 'Absent') return '<td class="c a">A</td>'
+      if (status === 'Leave') return '<td class="c v">V</td>'
+      if (day.isFuture) return '<td class="c f"></td>'
+      return '<td class="c n">·</td>'
+    }
+    const now = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
+
+    const riskSet = new Set((sum?.atRisk ?? []).map((r) => r.studentId))
+    const rowsHtml = data.students
+      .map((s) => {
+        const cells = s.cells.map((c, i) => cellHtml(c, data.days[i])).join('')
+        const rateTxt = s.rate == null ? '—' : `${s.rate}%`
+        const rateCls = s.rate == null ? '' : s.rate >= 90 ? 'good' : s.rate >= 75 ? 'mid' : 'bad'
+        return `<tr class="${riskSet.has(s.studentId) ? 'risk' : ''}">
+          <td class="id">${esc(s.studentId)}</td>
+          <td class="nm">${esc(s.fullName)}</td>
+          ${cells}
+          <td class="tot p-t">${s.present}</td>
+          <td class="tot l-t">${s.late}</td>
+          <td class="tot a-t">${s.absent}</td>
+          <td class="tot v-t">${s.leave}</td>
+          <td class="tot r ${rateCls}">${rateTxt}</td>
+        </tr>`
+      })
+      .join('')
+
+    const dayHead = data.days
+      .map((d) => `<th class="day ${d.isWeekend ? 'we' : ''}">${d.day}<span>${esc(d.dow)}</span></th>`)
+      .join('')
+
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"/><title>${esc(school.name)} — Register ${esc(data.class.name)} ${esc(data.monthLabel)}</title><style>
+      * { box-sizing: border-box; }
+      body { font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; color: #0f172a; margin: 0; background: #fff; font-size: 11px; }
+      .wrap { padding: 22px 24px; }
+      header { display: flex; gap: 14px; align-items: center; border-bottom: 3px solid #0f172a; padding-bottom: 12px; }
+      header img { width: 46px; height: 46px; border-radius: 10px; object-fit: cover; }
+      h1 { font-size: 17px; margin: 0; letter-spacing: -0.01em; }
+      .sub { color: #475569; font-size: 10.5px; margin-top: 2px; }
+      .meta { margin: 12px 0 0; font-size: 13.5px; font-weight: 700; }
+      .classline { color: #64748b; font-size: 10.5px; margin: 2px 0 10px; }
+      .insights { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+      .chip { border: 1px solid #e2e8f0; border-radius: 999px; padding: 3px 10px; font-size: 10px; font-weight: 600; background: #f8fafc; }
+      .chip b { font-weight: 800; }
+      .chip.rate { color: #fff; background: ${rateColor}; border-color: ${rateColor}; }
+      .chip.p b { color: #059669; } .chip.l b { color: #d97706; } .chip.a b { color: #dc2626; } .chip.v b { color: #0d9488; }
+      .chip.warn { color: #b91c1c; border-color: #fecaca; background: #fef2f2; }
+      .chip.star { color: #047857; border-color: #a7f3d0; background: #ecfdf5; }
+      table { border-collapse: collapse; width: 100%; table-layout: fixed; }
+      th, td { border: 1px solid #e2e8f0; padding: 3px 2px; text-align: center; overflow: hidden; }
+      thead th { background: #0f172a; color: #fff; font-size: 9px; padding: 4px 2px; }
+      thead th.day { font-size: 9.5px; }
+      thead th.day span { display: block; font-weight: 400; opacity: .65; font-size: 7.5px; }
+      thead th.day.we { background: #475569; }
+      th.id, td.id { width: 56px; }
+      th.nm, td.nm { width: 170px; }
+      th.id, th.nm { text-align: left; padding-left: 6px; }
+      th.tot-h, td.tot { width: 27px; }
+      th.tot-h { background: #334155; }
+      td.id { font-size: 8.5px; color: #64748b; text-align: left; padding-left: 6px; white-space: nowrap; }
+      td.nm { text-align: left; padding-left: 6px; font-weight: 600; font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      td.c { font-size: 9px; font-weight: 700; }
+      td.c.p { background: #d1fae5; color: #065f46; }
+      td.c.l { background: #fef3c7; color: #92400e; }
+      td.c.a { background: #fee2e2; color: #991b1b; }
+      td.c.v { background: #ccfbf1; color: #115e59; }
+      td.c.n { color: #cbd5e1; }
+      td.c.f { background: #f8fafc; }
+      td.tot { font-size: 9.5px; font-variant-numeric: tabular-nums; color: #334155; }
+      td.tot.r { font-weight: 800; }
+      td.tot.r.good { color: #059669; } td.tot.r.mid { color: #d97706; } td.tot.r.bad { color: #dc2626; }
+      tr.risk td.nm { color: #b91c1c; }
+      tr.risk td.nm::after { content: " ⚠"; font-size: 8px; }
+      tbody tr:nth-child(even) { background: #f8fafc; }
+      .legend { margin-top: 8px; font-size: 9px; color: #64748b; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+      .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 3px; vertical-align: -1px; }
+      footer { margin-top: 10px; padding-top: 8px; border-top: 1px solid #e2e8f0; color: #64748b; font-size: 9px; display: flex; justify-content: space-between; gap: 12px; }
+      @media print { body { background: #fff; } @page { size: A4 landscape; margin: 9mm; } }
+    </style></head><body><div class="wrap">
+      <header>
+        <img src="${school.logoUrl}" alt="logo" />
+        <div>
+          <h1>${esc(school.name)}</h1>
+          <div class="sub">${esc(school.subtitle)}${school.address ? ' · ' + esc(school.address) : ''}${school.phone ? ' · ' + esc(school.phone) : ''}</div>
+        </div>
+      </header>
+      <p class="meta">Class Attendance Register — ${esc(data.class.name)} · ${esc(data.monthLabel)}</p>
+      <p class="classline">Teacher: ${esc(data.class.teacher ?? '—')} · Program: ${esc(data.class.program ?? '—')} · Schedule: ${esc(data.class.schedule || '—')}${data.class.room ? ' · Room: ' + esc(data.class.room) : ''} · ${data.students.length} students</p>
+      <div class="insights">
+        <span class="chip rate"><b>${rate == null ? '—' : rate + '%'} attendance</b></span>
+        <span class="chip p"><b>${sum?.present ?? 0}</b> present</span>
+        <span class="chip l"><b>${sum?.late ?? 0}</b> late</span>
+        <span class="chip a"><b>${sum?.absent ?? 0}</b> absent</span>
+        <span class="chip v"><b>${sum?.leave ?? 0}</b> leave</span>
+        ${sum?.perfect ? `<span class="chip star"><b>${sum.perfect}</b> perfect</span>` : ''}
+        ${sum && sum.atRiskCount > 0 ? `<span class="chip warn"><b>${sum.atRiskCount}</b> below 75%</span>` : ''}
+        <span class="chip"><b>${sum?.daysWithRecords ?? 0}</b> days with records</span>
+      </div>
+      <table>
+        <thead><tr>
+          <th class="id">ID</th><th class="nm">Student</th>
+          ${dayHead}
+          <th class="tot-h">P</th><th class="tot-h">L</th><th class="tot-h">A</th><th class="tot-h">V</th><th class="tot-h">Rate</th>
+        </tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+      <div class="legend">
+        <span><i style="background:#d1fae5"></i>P Present</span>
+        <span><i style="background:#fef3c7"></i>L Late</span>
+        <span><i style="background:#fee2e2"></i>A Absent</span>
+        <span><i style="background:#ccfbf1"></i>V Leave</span>
+        <span><i style="background:#f1f5f9"></i>· not marked</span>
+        <span>⚠ = below 75% attendance</span>
+      </div>
+      <footer><span>${esc(school.name)}${school.phone ? ' · ' + esc(school.phone) : ''}</span><span>Printed ${esc(now)}</span></footer>
+    </div><script>window.onload=function(){setTimeout(function(){window.print()},250)}</script></body></html>`)
+    w.document.close()
+    toast.success('Register letter opened — use “Save as PDF” in the print dialog')
+  }, [data, school])
+
   return (
     <div className="flex flex-col gap-4">
       {/* Controls */}
@@ -2529,9 +2668,12 @@ function RegisterView() {
               </Select>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Button variant="outline" size="sm" onClick={exportCsv} disabled={!data} className="gap-2">
               <Download className="h-4 w-4" /> Export CSV
+            </Button>
+            <Button variant="outline" size="sm" onClick={exportPdf} disabled={!data} className="gap-2">
+              <FileDown className="h-4 w-4" /> PDF
             </Button>
             <Button variant="outline" size="sm" onClick={handlePrint} disabled={!data} className="gap-2">
               <Printer className="h-4 w-4" /> Print register
