@@ -88,3 +88,28 @@ export function currencyCompact(n: number): string {
   if (v >= 1_000) return `LKR ${(v / 1_000).toFixed(v >= 10_000 ? 0 : 1)}K`
   return `LKR ${v}`
 }
+
+// Relative time: "2 mins ago", "just now", "3h ago"
+export function timeAgo(d?: string | Date | null): string {
+  if (!d) return '—'
+  const dt = typeof d === 'string' ? new Date(d) : d
+  if (isNaN(dt.getTime())) return '—'
+  const diff = Date.now() - dt.getTime()
+  const sec = Math.floor(diff / 1000)
+  if (sec < 60) return 'just now'
+  const min = Math.floor(sec / 60)
+  if (min < 60) return `${min} min${min > 1 ? 's' : ''} ago`
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return `${hr}h ago`
+  const day = Math.floor(hr / 24)
+  if (day < 7) return `${day}d ago`
+  return fmtDate(dt)
+}
+
+// Mini sparkline data: returns last N values normalized 0-100 for sparkline bars
+export function sparkline(values: number[], maxBars = 12): number[] {
+  if (!values.length) return []
+  const slice = values.slice(-maxBars)
+  const max = Math.max(...slice, 1)
+  return slice.map((v) => Math.round((v / max) * 100))
+}

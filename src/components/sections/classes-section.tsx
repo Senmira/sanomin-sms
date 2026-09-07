@@ -90,8 +90,8 @@ interface TeacherListResponse {
   total: number
 }
 
-// Time slots for timetable grid (hourly)
-const TIME_SLOTS = Array.from({ length: 11 }, (_, i) => 8 + i) // 8..18
+// Time slots for timetable grid (hourly) — full day range
+const ALL_TIME_SLOTS = Array.from({ length: 11 }, (_, i) => 8 + i) // 8..18
 
 // ─── Form state ─────────────────────────────────────────────────────────────
 interface FormState {
@@ -795,6 +795,7 @@ function parseHour(time: string | null): number | null {
 }
 
 function TimetableView({ rows }: TimetableViewProps) {
+  const [compact, setCompact] = useState(true)
   // Group by day, sort by startTime within each day
   const byDay = useMemo(() => {
     const map: Record<string, ClassRow[]> = {}
@@ -812,32 +813,86 @@ function TimetableView({ rows }: TimetableViewProps) {
     return map
   }, [rows])
 
+  // Compute active hours (hours that have at least one class) for compact mode
+  const activeHours = useMemo(() => {
+    const set = new Set<number>()
+    for (const d of DAYS) {
+      for (const c of byDay[d]) {
+        const h = parseHour(c.startTime)
+        if (h !== null) set.add(h)
+      }
+    }
+    const sorted = Array.from(set).sort((a, b) => a - b)
+    // In compact mode, if no active hours, fall back to full range
+    return sorted.length > 0 ? sorted : ALL_TIME_SLOTS
+  }, [byDay])
+
+  const hours = compact ? activeHours : ALL_TIME_SLOTS
+  const totalClasses = rows.length
+
   return (
     <Card className="overflow-hidden p-0">
+      {/* Toolbar with compact toggle + summary */}
+      <div className="flex items-center justify-between border-b bg-muted/30 px-4 py-2">
+        <div className="flex items-center gap-3 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1.5 font-medium text-foreground">
+            <CalendarDays className="h-3.5 w-3.5" />
+            {totalClasses} {totalClasses === 1 ? 'class' : 'classes'} this week
+          </span>
+          <span className="text-muted-foreground/60">·</span>
+          <span>{hours.length} time slots</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant={compact ? 'default' : 'outline'}
+            className="h-7 gap-1.5 text-xs"
+            onClick={() => setCompact(true)}
+          >
+            <Layers className="h-3 w-3" /> Active hours
+          </Button>
+          <Button
+            size="sm"
+            variant={!compact ? 'default' : 'outline'}
+            className="h-7 gap-1.5 text-xs"
+            onClick={() => setCompact(false)}
+          >
+            <Clock className="h-3 w-3" /> Full day
+          </Button>
+        </div>
+      </div>
       <div className="scroll-thin overflow-x-auto">
-        <div className="min-w-[900px]">
+        <div className="min-w-[1100px]">
           {/* Header row: time column + 7 day columns */}
           <div
-            className="grid border-b"
+            className="grid border-b bg-muted/40"
             style={{
               gridTemplateColumns: `64px repeat(${DAYS.length}, minmax(0, 1fr))`,
             }}
           >
-            <div className="border-r bg-muted/40 p-2 text-xs font-medium text-muted-foreground">
+            <div className="border-r p-2 text-xs font-medium text-muted-foreground">
               Time
             </div>
-            {DAYS.map((d) => (
-              <div
-                key={d}
-                className="border-r bg-muted/40 p-2 text-center text-xs font-semibold last:border-r-0"
-              >
-                {d}
-              </div>
-            ))}
+            {DAYS.map((d) => {
+              const dayCount = byDay[d].length
+              return (
+                <div
+                  key={d}
+                  className="border-r p-2 text-center text-xs font-semibold last:border-r-0"
+                >
+                  <span>{d}</span>
+                  {dayCount > 0 && (
+                    <span className="ml-1.5 rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-medium text-primary">
+                      {dayCount}
+                    </span>
+                  )}
+                </div>
+              )
+            })}
           </div>
 
           {/* Body: hour rows with day cells */}
-          {TIME_SLOTS.map((hour) => (
+          {hours.map((hour) => (
             <div
               key={hour}
               className="grid border-b last:border-b-0"
@@ -857,9 +912,9 @@ function TimetableView({ rows }: TimetableViewProps) {
                 return (
                   <div
                     key={d}
-                    className="min-h-[68px] border-r p-1 last:border-r-0"
+                    className="min-h-[72px] border-r p-1.5 last:border-r-0"
                   >
-                    <div className="flex flex-col gap-1">
+                    <div className="flex flex-col gap-1.5">
                       {cellClasses.map((c) => (
                         <TimetableCard key={c.id} cls={c} />
                       ))}
@@ -882,56 +937,72 @@ interface TimetableCardProps {
 function TimetableCard({ cls }: TimetableCardProps) {
   const color = cls.program?.color || '#475569'
   const enrolled = cls._count?.enrollments ?? 0
+  const capacity = cls.capacity || 0
+  const fillRate = capacity > 0 ? Math.round((enrolled / capacity) * 100) : 0
   return (
     <div
-      className="rounded-md border p-1.5 text-xs shadow-sm transition-shadow hover:shadow-md"
+      className="group relative overflow-hidden rounded-md border p-2 text-xs shadow-sm transition-all hover:shadow-md hover:scale-[1.01]"
       style={{
-        backgroundColor: `${color}14`, // 8% tint
-        borderColor: `${color}55`,
-        borderLeftWidth: '3px',
+        backgroundColor: `${color}1f`, // ~12% tint — stronger for contrast
+        borderColor: `${color}80`, // 50% border — more visible
+        borderLeftWidth: '4px',
         borderLeftColor: color,
       }}
       title={cls.notes || undefined}
     >
-      <p className="truncate font-semibold text-foreground">{cls.name}</p>
-      <div className="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground">
-        <Clock className="h-2.5 w-2.5" />
-        <span>
-          {fmtTime(cls.startTime)} – {fmtTime(cls.endTime)}
+      {/* Top row: name + time */}
+      <div className="flex items-start justify-between gap-1">
+        <p className="font-semibold leading-tight text-foreground line-clamp-2">
+          {cls.name}
+        </p>
+        <span
+          className="shrink-0 rounded px-1 py-0.5 text-[9px] font-bold text-white"
+          style={{ background: color }}
+        >
+          {fmtTime(cls.startTime)}
         </span>
       </div>
+      {/* Teacher */}
       {cls.teacher && (
-        <div className="mt-0.5 flex items-center gap-1">
-          <GraduationCap className="h-2.5 w-2.5 text-muted-foreground" />
-          <span className="truncate text-[10px] text-muted-foreground">
+        <div className="mt-1 flex items-center gap-1">
+          <GraduationCap className="h-3 w-3 shrink-0" style={{ color }} />
+          <span className="truncate text-[10px] text-foreground/70">
             {cls.teacher.fullName}
           </span>
           {cls.teacher.type === 'External' && (
             <Badge
               variant="secondary"
-              className="ml-auto h-3 px-1 text-[9px] leading-none"
+              className="ml-auto h-3.5 shrink-0 px-1 text-[9px] leading-none"
             >
               Ext
             </Badge>
           )}
         </div>
       )}
-      {(cls.room || enrolled > 0) && (
-        <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
-          {cls.room && (
-            <span className="flex items-center gap-0.5">
-              <MapPin className="h-2.5 w-2.5" />
-              {cls.room}
-            </span>
-          )}
-          {enrolled > 0 && (
-            <span className="flex items-center gap-0.5">
-              <Users className="h-2.5 w-2.5" />
-              {enrolled}
-            </span>
-          )}
-        </div>
-      )}
+      {/* Room + enrolled */}
+      <div className="mt-1 flex items-center gap-2 text-[10px] text-muted-foreground">
+        {cls.room && (
+          <span className="flex items-center gap-0.5">
+            <MapPin className="h-2.5 w-2.5" />
+            {cls.room}
+          </span>
+        )}
+        <span className="flex items-center gap-0.5">
+          <Users className="h-2.5 w-2.5" />
+          {enrolled}/{capacity || '?'}
+        </span>
+        {capacity > 0 && (
+          <div className="ml-auto h-1 w-8 overflow-hidden rounded-full bg-background/60">
+            <div
+              className="h-full rounded-full"
+              style={{
+                width: `${fillRate}%`,
+                background: fillRate >= 80 ? '#16a34a' : fillRate >= 40 ? color : '#d97706',
+              }}
+            />
+          </div>
+        )}
+      </div>
     </div>
   )
 }

@@ -1,5 +1,6 @@
 'use client'
 
+import type { ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 import { Card } from '@/components/ui/card'
 import type { LucideIcon } from 'lucide-react'
@@ -13,6 +14,7 @@ interface StatCardProps {
   trend?: number
   accent?: 'blue' | 'purple' | 'red' | 'green' | 'amber'
   className?: string
+  footer?: ReactNode
 }
 
 const accentMap = {
@@ -23,6 +25,14 @@ const accentMap = {
   amber: 'from-amber-500/15 to-amber-500/0 text-amber-600 dark:text-amber-400',
 }
 
+const accentColor: Record<string, string> = {
+  blue: '#1e40af',
+  purple: '#7c3aed',
+  red: '#dc2626',
+  green: '#16a34a',
+  amber: '#d97706',
+}
+
 export function StatCard({
   label,
   value,
@@ -31,6 +41,7 @@ export function StatCard({
   trend,
   accent = 'blue',
   className,
+  footer,
 }: StatCardProps) {
   return (
     <Card className={cn('relative overflow-hidden p-5', className)}>
@@ -41,7 +52,7 @@ export function StatCard({
         )}
       />
       <div className="relative flex items-start justify-between gap-3">
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-muted-foreground">{label}</p>
           <p className="mt-1 text-3xl font-bold tracking-tight">{value}</p>
           {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
@@ -62,6 +73,7 @@ export function StatCard({
               {Math.abs(trend)}%
             </div>
           )}
+          {footer && <div className="mt-2">{footer}</div>}
         </div>
         <div
           className={cn(
@@ -75,3 +87,6 @@ export function StatCard({
     </Card>
   )
 }
+
+export { accentColor as STAT_ACCENT_COLOR }
+

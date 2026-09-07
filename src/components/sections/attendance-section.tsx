@@ -36,12 +36,13 @@ import {
   ATTENDANCE_METHODS,
   ATTENDANCE_STATUS,
 } from '@/lib/types'
-import { initials, avatarColor, fmtDate, fmtTime, fmtDateTime } from '@/lib/format'
+import { initials, avatarColor, fmtDate, fmtTime, fmtDateTime, timeAgo } from '@/lib/format'
 
 import { SectionHeader } from '@/components/shared/section-header'
 import { StatCard } from '@/components/shared/stat-card'
 import { EmptyState } from '@/components/shared/empty-state'
 import { ConfirmDialog } from '@/components/shared/confirm-dialog'
+import { Sparkline } from '@/components/shared/sparkline'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -1012,6 +1013,7 @@ function AttendanceTable({ rows, loading, onEdit, onDelete }: AttendanceTablePro
             <TableHead className="min-w-[80px]">Check-in</TableHead>
             <TableHead className="min-w-[110px]">Check-out</TableHead>
             <TableHead className="min-w-[90px]">Status</TableHead>
+            <TableHead className="min-w-[90px]">Updated</TableHead>
             <TableHead className="w-[60px] text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>
@@ -1082,6 +1084,11 @@ function AttendanceTable({ rows, loading, onEdit, onDelete }: AttendanceTablePro
                 </TableCell>
                 <TableCell>
                   <Badge className={STATUS_BADGE[r.status]?.cls || ''}>{r.status}</Badge>
+                </TableCell>
+                <TableCell>
+                  <span className="text-xs text-muted-foreground">
+                    {timeAgo(r.checkOut || r.checkIn || r.date)}
+                  </span>
                 </TableCell>
                 <TableCell className="text-right">
                   <DropdownMenu>
@@ -1358,6 +1365,9 @@ export function AttendanceSection() {
   const [editTarget, setEditTarget] = useState<AttendanceRow | null>(null)
   const [editOpen, setEditOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<AttendanceRow | null>(null)
+  const [trend, setTrend] = useState<{ students: number[]; teachers: number[]; late: number[] }>({
+    students: [], teachers: [], late: [],
+  })
 
   const todayQuery = useMemo(() => {
     const p = new URLSearchParams()
@@ -1391,6 +1401,24 @@ export function AttendanceSection() {
       clearInterval(id)
     }
   }, [todayQuery])
+
+  // Fetch 7-day trend once for sparklines
+  useEffect(() => {
+    let alive = true
+    api<{ trend: { students: number; teachers: number; late: number }[] }>(`/api/attendance/trend`)
+      .then((res) => {
+        if (!alive) return
+        setTrend({
+          students: res.trend.map((d) => d.students),
+          teachers: res.trend.map((d) => d.teachers),
+          late: res.trend.map((d) => d.late),
+        })
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [])
 
   const reloadToday = useCallback(() => {
     api<ListResponse>(`/api/attendance?${todayQuery}`)
@@ -1461,6 +1489,14 @@ export function AttendanceSection() {
           icon={GraduationCap}
           accent="blue"
           hint="Checked in today"
+          footer={
+            trend.students.length > 0 ? (
+              <div className="flex items-center gap-1.5">
+                <Sparkline values={trend.students} color="#1e40af" width={64} height={20} />
+                <span className="text-[10px] text-muted-foreground">7d</span>
+              </div>
+            ) : undefined
+          }
         />
         <StatCard
           label="Teachers present"
@@ -1468,6 +1504,14 @@ export function AttendanceSection() {
           icon={UserCheck}
           accent="purple"
           hint="Fingerprint check-in"
+          footer={
+            trend.teachers.length > 0 ? (
+              <div className="flex items-center gap-1.5">
+                <Sparkline values={trend.teachers} color="#7c3aed" width={64} height={20} />
+                <span className="text-[10px] text-muted-foreground">7d</span>
+              </div>
+            ) : undefined
+          }
         />
         <StatCard
           label="Late arrivals"
@@ -1475,6 +1519,14 @@ export function AttendanceSection() {
           icon={Clock}
           accent="amber"
           hint="After 08:30 grace"
+          footer={
+            trend.late.length > 0 ? (
+              <div className="flex items-center gap-1.5">
+                <Sparkline values={trend.late} color="#d97706" width={64} height={20} />
+                <span className="text-[10px] text-muted-foreground">7d</span>
+              </div>
+            ) : undefined
+          }
         />
         <StatCard
           label="Still checked-in"

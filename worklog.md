@@ -389,3 +389,49 @@ Task: QA assessment + new Announcements module + styling improvements (zebra str
   - Guardian portal (separate role — currently admin-only by design)
   - Bulk announcement send to multiple audiences
 - The 15-min recurring webDevReview cron (job 366041) will continue QA + feature additions autonomously.
+
+---
+Task ID: 9 (webDevReview cron round 3)
+Agent: main (orchestrator) — triggered by 15-min recurring webDevReview cron
+Task: QA assessment + Classes timetable redesign + Attendance sparklines/time-ago + class enrollment seed
+
+## Current project status assessment
+- App had 10 modules (Dashboard, Students, Teachers, Attendance, Classes, Programs, Fees, Announcements, Reports, Settings) after round 2. Dev server running on :3000, lint clean, DB seeded with 48 students + 130 payments + 8 announcements + 14 days attendance.
+- QA via agent-browser confirmed all 10 sections render error-free. VLM rated dashboard 8/10, attendance/classes 7-8/10. Identified issues: (1) Classes had 0 enrollments (VLM saw "Total Enrolled: 0" looking like an error); (2) Class card titles truncated; (3) Timetable too tall with empty hour rows; (4) Low card contrast; (5) Attendance log missing "time ago" column; (6) Stat cards lacked trend context.
+
+## Completed modifications & verification
+
+### Bug fix: Seeded class enrollments
+- Created `prisma/seed_class_enroll.ts` — enrolled eligible students (by program match) into the 5 tuition classes at 30-60% of capacity. Created 12 enrollments (IT 2, Elocution Speech&Drama 3, Kandyan Dancing 2, Elocution Senior 3, IT Advanced 2). Classes section now shows real enrollment counts + capacity fill bars.
+
+### Feature: Attendance "Updated" (time ago) column + sparkline trends
+- Added `timeAgo()` + `sparkline()` helpers to `src/lib/format.ts`.
+- Created `src/components/shared/sparkline.tsx` — lightweight inline SVG sparkline (no recharts overhead) with normalized bars + opacity gradient.
+- Added `footer?: ReactNode` prop to `StatCard` component (so sparklines can be added below the value).
+- Created `/api/attendance/trend` endpoint — returns 7-day {students, teachers, late} counts for sparklines.
+- Updated `AttendanceSection`: fetches trend on mount, renders `Sparkline` footers on 3 of 4 stat cards (Students present / Teachers present / Late arrivals) with accent-colored bars + "7d" label. Added "Updated" column to the attendance log table showing relative time (e.g., "6h ago", "just now", "5 mins ago") via `timeAgo(checkOut || checkIn || date)`.
+- VLM-verified: "stat cards display tiny sparkline bar charts at the bottom" + "log table includes an 'Updated' column showing relative times like '6h ago'". Rating 9/10.
+
+### Styling: Classes timetable complete redesign
+- **Compact/Active-hours toggle**: added "Active hours" (default) vs "Full day" toggle. Active-hours mode computes the set of hours that actually have classes and only shows those rows — eliminates empty 8-10 rows of whitespace. Falls back to full 8-18 range if no classes.
+- **Wider grid**: min-width 900px → 1100px so class titles fit without truncation.
+- **Day count badges**: each day column header shows a count badge (e.g., "Sat 2") when classes exist that day.
+- **Toolbar summary**: shows total classes this week + active time-slot count.
+- **Card redesign**: stronger background tint (`${color}1f` ~12% vs 8%), more visible border (`${color}80` 50% vs 55%), thicker left accent (4px vs 3px), `line-clamp-2` titles (2 lines allowed), time badge with solid program-color background, capacity fill-rate progress bar (green ≥80%, program color ≥40%, amber <40%), hover scale + shadow.
+- VLM-verified: "class card titles like 'IT Basics — Beginners' and 'Elocution — Senior' are fully visible without truncation" + "Active hours and Full day toggle buttons present". Rating 9/10.
+
+### Verification
+- `bun run lint` → 0 errors, 0 warnings.
+- agent-browser sweep: all 10 sections still render with zero runtime/console errors.
+- VLM ratings improved: Attendance 8→9/10, Classes 7→9/10.
+- New trend API returns 7 days of real data (Tue 41 students → Mon 38, with late counts).
+
+## Unresolved issues / risks & next-phase recommendations
+- **No critical bugs remaining.** All 10 modules operational and verified, polish ratings at 9/10.
+- **Next feature candidates** (not yet implemented):
+  - Attendance heatmap calendar view (month grid showing daily attendance rates)
+  - Export PDF reports (currently CSV only)
+  - Student photo upload / AI avatar generation (would use image-generation skill)
+  - Global quick-search (student/teacher/class/receipt lookup from topbar)
+  - Dashboard "live activity" feed with real-time WebSocket updates
+- The 15-min recurring webDevReview cron (job 366041) will continue QA + feature additions autonomously.
