@@ -34,6 +34,7 @@ import {
   Landmark,
   AlertCircle,
   Clock,
+  History,
 } from 'lucide-react'
 
 import { api } from '@/lib/api'
@@ -44,6 +45,7 @@ import {
   TEACHER_STATUS,
   DAYS,
   salaryBreakdown,
+  PayrollHistoryResponse,
 } from '@/lib/types'
 import {
   initials,
@@ -1664,6 +1666,16 @@ interface TeacherDetail extends TeacherRow {
   classes: ClassDetail[]
 }
 
+/** "2026-09" → "Sep 2026" */
+function payrollMonthLabel(m: string): string {
+  const [y, mm] = m.split('-').map((n) => parseInt(n, 10))
+  if (isNaN(y) || isNaN(mm)) return m
+  return new Date(y, mm - 1, 1).toLocaleDateString('en-US', {
+    month: 'short',
+    year: 'numeric',
+  })
+}
+
 function ProfileDialog({
   teacher,
   onClose,
@@ -1678,6 +1690,9 @@ function ProfileDialog({
   // Fetch the full profile (with class details: endTime, room, program) on mount
   const [detail, setDetail] = useState<TeacherDetail | null>(null)
   const [loadErr, setLoadErr] = useState(false)
+  // Salary history (paid/pending payroll records across months)
+  const [history, setHistory] = useState<PayrollHistoryResponse | null>(null)
+  const [historyErr, setHistoryErr] = useState(false)
 
   useEffect(() => {
     let alive = true
@@ -1689,6 +1704,15 @@ function ProfileDialog({
       .catch(() => {
         if (!alive) return
         setLoadErr(true)
+      })
+    api<PayrollHistoryResponse>(`/api/payroll?teacher=${teacher.id}`)
+      .then((d) => {
+        if (!alive) return
+        setHistory(d)
+      })
+      .catch(() => {
+        if (!alive) return
+        setHistoryErr(true)
       })
     return () => {
       alive = false
@@ -1812,6 +1836,15 @@ function ProfileDialog({
               {teacher._count && (
                 <span className="ml-1 text-xs text-muted-foreground">
                   ({teacher._count.attendance})
+                </span>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="salary">
+              <History className="h-3.5 w-3.5" />
+              Salary
+              {history && history.history.length > 0 && (
+                <span className="ml-1 text-xs text-muted-foreground">
+                  ({history.history.length})
                 </span>
               )}
             </TabsTrigger>
@@ -1984,6 +2017,109 @@ function ProfileDialog({
               description="The teacher attendance dashboard will be available once the attendance module is finalized."
               className="border-dashed"
             />
+          </TabsContent>
+
+          <TabsContent value="salary" className="mt-3">
+            {historyErr ? (
+              <EmptyState
+                icon={AlertCircle}
+                title="Couldn't load salary history"
+                description="Try reopening the profile."
+                className="border-dashed"
+              />
+            ) : !history ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              </div>
+            ) : history.history.length === 0 ? (
+              <EmptyState
+                icon={Landmark}
+                title="No payroll records yet"
+                description="This teacher has no payroll history. Mark salaries as paid in the Payroll section to build their history."
+                className="border-dashed"
+              />
+            ) : (
+              <div className="space-y-3">
+                {/* Summary strip */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-lg border bg-muted/20 p-3">
+                    <p className="text-xs text-muted-foreground">Paid to date</p>
+                    <p className="mt-0.5 text-lg font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
+                      {currency(history.totalPaid)}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground">
+                      across {history.paidCount} paid month
+                      {history.paidCount === 1 ? '' : 's'}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border bg-muted/20 p-3">
+                    <p className="text-xs text-muted-foreground">Current net salary</p>
+                    <p className="mt-0.5 text-lg font-bold tabular-nums">
+                      {currency(
+                        teacher.type === 'External' &&
+                          !teacher.basicSalary &&
+                          !teacher.allowances
+                          ? teacher.monthlyRate
+                          : sb.netSalary,
+                      )}
+                      <span className="text-xs font-normal text-muted-foreground"> /mo</span>
+                    </p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {teacher.epfNo ? `EPF #${teacher.epfNo}` : 'No EPF number set'}
+                    </p>
+                  </div>
+                </div>
+
+                {/* History rows */}
+                <div className="scroll-thin max-h-64 space-y-2 overflow-y-auto pr-1">
+                  {history.history.map((h) => {
+                    const paid = h.status === 'Paid'
+                    return (
+                      <div
+                        key={h.month}
+                        className="flex items-center justify-between gap-3 rounded-md border bg-muted/20 p-3"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-sm font-medium">
+                              {payrollMonthLabel(h.month)}
+                            </p>
+                            <Badge
+                              variant="outline"
+                              className={
+                                paid
+                                  ? 'border-transparent bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                                  : 'border-transparent bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                              }
+                            >
+                              {h.status}
+                            </Badge>
+                          </div>
+                          <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                            Gross {currency(h.gross)} · EPF −{currency(h.epfEmployee)}
+                            {h.method
+                              ? ` · ${h.method}${h.paidDate ? ` · ${fmtDate(h.paidDate)}` : ''}`
+                              : ''}
+                          </p>
+                          {h.note && (
+                            <p className="truncate text-[11px] italic text-muted-foreground">
+                              “{h.note}”
+                            </p>
+                          )}
+                        </div>
+                        <p
+                          className={`shrink-0 text-sm font-semibold tabular-nums ${
+                            paid ? 'text-emerald-600 dark:text-emerald-400' : ''
+                          }`}
+                        >
+                          {currency(h.netSalary)}
+                        </p>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
           </TabsContent>
         </Tabs>
 

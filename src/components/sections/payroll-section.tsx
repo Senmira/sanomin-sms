@@ -12,6 +12,8 @@ import {
   MoreVertical,
   Search,
   AlertCircle,
+  AlertTriangle,
+  ArrowRight,
   Loader2,
   Users,
   StickyNote,
@@ -20,6 +22,7 @@ import {
 } from 'lucide-react'
 
 import { api } from '@/lib/api'
+import { useAppStore } from '@/lib/store'
 import { PayrollRow, PayrollSummary, PAYROLL_METHODS } from '@/lib/types'
 import { currency, currencyCompact, fmtDate, initials, avatarColor } from '@/lib/format'
 
@@ -127,6 +130,7 @@ interface PayrollPostResponse {
 
 // ─── Main component ────────────────────────────────────────────────────────
 export function PayrollSection() {
+  const setSection = useAppStore((s) => s.setSection)
   const [month, setMonth] = useState<string>(currentMonth())
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [search, setSearch] = useState<string>('')
@@ -241,6 +245,9 @@ export function PayrollSection() {
     () => visibleRows.reduce((s, r) => s + r.allowances, 0),
     [visibleRows],
   )
+
+  // Teachers with no salary configured (net LKR 0) — surface a fix-it banner
+  const noSalaryRows = useMemo(() => rows.filter((r) => r.netSalary <= 0), [rows])
 
   // ─── CSV export ─────────────────────────────────────────────────────────
   const exportCsv = useCallback(() => {
@@ -377,7 +384,7 @@ export function PayrollSection() {
             <div className="flex flex-col gap-1.5">
               <Label className="text-xs text-muted-foreground">Billing month</Label>
               <Select value={month} onValueChange={setMonth}>
-                <SelectTrigger className="w-[180px]">
+                <SelectTrigger className="w-[200px]">
                   <SelectValue placeholder="Select month" />
                 </SelectTrigger>
                 <SelectContent>
@@ -431,6 +438,42 @@ export function PayrollSection() {
           show live salary figures; paid rows show the snapshot taken at payment time.
         </p>
       </Card>
+
+      {/* Zero-salary fix-it banner */}
+      {!loading && !error && noSalaryRows.length > 0 && (
+        <div
+          role="status"
+          className="flex flex-col gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 animate-row-in sm:flex-row sm:items-center"
+        >
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-amber-500/20 text-amber-600 dark:text-amber-400">
+            <AlertTriangle className="h-4 w-4" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+              {noSalaryRows.length} teacher{noSalaryRows.length === 1 ? '' : 's'}{' '}
+              {noSalaryRows.length === 1 ? 'has' : 'have'} no salary configured
+            </p>
+            <p className="text-xs text-amber-700/80 dark:text-amber-300/80">
+              {noSalaryRows
+                .slice(0, 4)
+                .map((r) => r.teacher.fullName)
+                .join(', ')
+                .concat(noSalaryRows.length > 4 ? ` +${noSalaryRows.length - 4} more` : '')}{' '}
+              — their payroll rows total LKR 0. Set a basic salary, allowances or monthly rate in
+              the Teachers section.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="shrink-0 border-amber-500/40 text-amber-800 hover:bg-amber-500/20 hover:text-amber-900 dark:text-amber-200 dark:hover:text-amber-100"
+            onClick={() => setSection('teachers')}
+          >
+            Go to Teachers
+            <ArrowRight className="h-4 w-4" />
+          </Button>
+        </div>
+      )}
 
       {/* Register table */}
       <Card className="p-0">

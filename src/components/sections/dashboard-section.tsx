@@ -103,6 +103,9 @@ interface DashboardData {
     paidRate: number
     overdueCount: number
     pendingCount: number
+    expenses: number
+    payroll: number
+    net: number
   }
   announcements: Array<{
     id: string
@@ -480,15 +483,57 @@ export function DashboardSection() {
             </div>
           </div>
           {/* Collection rate progress */}
-          <div className="mt-4 rounded-lg border bg-muted/20 p-4">
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-medium">Collection rate</span>
-              <span className="font-semibold text-primary">{data.fees.paidRate}%</span>
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <div className="rounded-lg border bg-muted/20 p-4">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-medium">Collection rate</span>
+                <span className="font-semibold text-primary">{data.fees.paidRate}%</span>
+              </div>
+              <Progress value={data.fees.paidRate} className="mt-2 h-2.5" />
+              <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
+                <span>Billed: {currencyCompact(data.fees.totalBilled)}</span>
+                <span>of {currency(data.fees.totalBilled)} total billed</span>
+              </div>
             </div>
-            <Progress value={data.fees.paidRate} className="mt-2 h-2.5" />
-            <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
-              <span>Billed: {currencyCompact(data.fees.totalBilled)}</span>
-              <span>of {currency(data.fees.totalBilled)} total billed</span>
+            {/* Cash position: collected − expenses − payroll */}
+            <div className="rounded-lg border bg-muted/20 p-4">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-medium">Cash position this month</span>
+                <button
+                  className="inline-flex items-center gap-0.5 font-medium text-primary hover:underline"
+                  onClick={() => setSection('expenses')}
+                >
+                  Expenses <ArrowRight className="h-3 w-3" />
+                </button>
+              </div>
+              <div className="mt-2 flex items-baseline justify-between">
+                <p
+                  className={`text-2xl font-bold tracking-tight tabular-nums ${
+                    data.fees.net >= 0
+                      ? 'text-emerald-600 dark:text-emerald-400'
+                      : 'text-red-600 dark:text-red-400'
+                  }`}
+                >
+                  {currencyCompact(data.fees.net)}
+                </p>
+                <p className="text-[11px] text-muted-foreground">
+                  collected − outgoings
+                </p>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+                <span className="inline-flex items-center gap-1">
+                  <span className="size-1.5 rounded-full bg-emerald-500" />
+                  Collected {currencyCompact(data.fees.totalCollected)}
+                </span>
+                <span className="inline-flex items-center gap-1">
+                  <span className="size-1.5 rounded-full bg-red-400" />
+                  Expenses {currencyCompact(data.fees.expenses)}
+                </span>
+                <span className="inline-flex items-center gap-1">
+                  <span className="size-1.5 rounded-full bg-amber-500" />
+                  Payroll {currencyCompact(data.fees.payroll)}
+                </span>
+              </div>
             </div>
           </div>
         </CardContent>

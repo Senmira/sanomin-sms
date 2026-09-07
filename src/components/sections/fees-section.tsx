@@ -531,7 +531,7 @@ export function FeesSection() {
             <div className="flex flex-col gap-1.5">
               <Label className="text-xs text-muted-foreground">Billing month</Label>
               <Select value={month} onValueChange={setMonth}>
-                <SelectTrigger className="w-[180px]">
+                <SelectTrigger className="w-[200px]">
                   <SelectValue placeholder="Select month" />
                 </SelectTrigger>
                 <SelectContent>

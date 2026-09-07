@@ -45,8 +45,50 @@ function round2(n: number): number {
 }
 
 // ─── GET /api/payroll?month=YYYY-MM ────────────────────────────────────────
+//      /api/payroll?teacher=<Teacher.id> → salary history (profile dialog)
 export async function GET(req: Request) {
   const url = new URL(req.url)
+
+  // Salary history for a single teacher across all recorded months
+  const teacherIdParam = url.searchParams.get('teacher')?.trim() || ''
+  if (teacherIdParam) {
+    const teacher = await db.teacher.findUnique({
+      where: { id: teacherIdParam },
+      select: { id: true, teacherId: true, fullName: true, type: true },
+    })
+    if (!teacher) {
+      return NextResponse.json({ error: 'Teacher not found' }, { status: 404 })
+    }
+    const records = await db.payrollRecord.findMany({
+      where: { teacherId: teacherIdParam },
+      orderBy: [{ month: 'desc' }],
+      take: 24,
+    })
+    const paid = records.filter((r) => r.status === 'Paid')
+    return NextResponse.json({
+      teacher: {
+        id: teacher.id,
+        teacherId: teacher.teacherId,
+        fullName: teacher.fullName,
+        type: teacher.type,
+      },
+      history: records.map((r) => ({
+        month: r.month,
+        gross: round2(r.gross),
+        netSalary: round2(r.netSalary),
+        epfEmployee: round2(r.epfEmployee),
+        epfEmployer: round2(r.epfEmployer),
+        etfEmployer: round2(r.etfEmployer),
+        status: r.status,
+        method: r.method,
+        paidDate: r.paidDate ? r.paidDate.toISOString() : null,
+        note: r.note,
+      })),
+      paidCount: paid.length,
+      totalPaid: round2(paid.reduce((s, r) => s + r.netSalary, 0)),
+    })
+  }
+
   const month = url.searchParams.get('month')?.trim() || currentMonth()
   if (!/^\d{4}-\d{2}$/.test(month)) {
     return NextResponse.json({ error: 'month must be YYYY-MM' }, { status: 400 })

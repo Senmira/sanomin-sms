@@ -168,3 +168,65 @@ Stage Summary:
 - NEW: print stylesheet making receipt & payslip printing produce clean sheets only.
 - Data state: 7 active teachers all Pending for 2026-09 (net LKR 27,000); no test rows left.
 - Risks/next: pre-existing tsc strictness errors in untouched files remain (documented in Task 3); payroll snapshot semantics mean editing a teacher's salary won't rewrite past Paid months (intentional); consider Payslip PDF export & salary history chart next round.
+---
+Task ID: 4-b
+Agent: full-stack-developer
+Task: New Expenses module end-to-end (Expense model + /api/expenses CRUD + Expenses section UI with stats/filters/dialog/CSV)
+
+Work Log:
+- prisma/schema.prisma: appended Expense model (date, category, description, amount, method Cash|Bank|Card default Cash, vendor?, note?, timestamps) — no existing models modified; `bun run db:push` OK (db/custom.db synced, client regenerated). Dev server restarted afterwards (old process held the stale Prisma Client → db.expense undefined; clean restart fixed).
+- NEW src/app/api/expenses/route.ts (payments/payroll route conventions: NextResponse.json, Prisma where input, round2 helper): GET ?month=YYYY-MM&q=&category=&limit=&page= → { data, summary: { total, count, byCategory: [{category,total,count}] sorted total desc, methodTotals: {Cash,Bank,Card} }, page, totalPages, total }; month filter = UTC calendar-month range on date (gte 1st, lt next-month 1st), q = case-insensitive contains on description/vendor/note (SQLite contains), category exact, sort date desc + createdAt desc, limit cap 200 default 100, page default 1, month validated YYYY-MM (defaults to current). POST validates date ISO-parseable, category/description non-empty, amount positive finite, method ∈ Cash|Bank|Card, vendor/note trimmed (null when blank) → 201 + created row; invalid JSON → 400.
+- NEW src/app/api/expenses/[id]/route.ts: GET row; PUT partial-tolerant (absent fields preserved, present fields fully validated, same rules as POST) → updated row; DELETE → { ok: true, id }; unknown id → 404.
+- src/lib/types.ts: added 'expenses' to SectionKey union; APPENDED at end: ExpenseMethod, EXPENSE_METHODS, EXPENSE_CATEGORIES (9 categories incl. Rent & Utilities…Miscellaneous), ExpenseCategory, ExpenseByCategory, ExpenseSummary, ExpenseRow.
+- src/components/layout/app-shell.tsx: ONE nav entry after 'fees' — { key: 'expenses', label: 'Expenses', icon: ReceiptText, group: 'Operations', description: 'Institute operating expenses & outgoings' }.
+- src/app/page.tsx: import ExpensesSection + `section === 'expenses'` case in the switch (same direct-import pattern as the rest of the file).
+- NEW src/components/sections/expenses-section.tsx ('use client', follows fees-section/payroll-section conventions exactly: SectionHeader/StatCard/EmptyState/ConfirmDialog, api() + sonner, alive-flag useEffect with reloadRef + deferred setTimeout(run,0), lastNMonths/monthLabel/toIsoDate, table-zebra + scroll-thin + animate-row-in, currency/currencyCompact/fmtDate from '@/lib/format'): SectionHeader "Expenses" + Export CSV (outline) + primary "+ Add Expense"; 4 stat cards (grid-cols-2 lg:grid-cols-4, Skeleton h-28): Total this month (ReceiptText, red, "{count} payments"), Top category (PieChart, amber, share % of total + compact amount), Average per entry (Calculator, purple, "across {count} entries"), Bank + Card (CreditCard, green, "vs Cash {x}"); filter card (Billing month Select last 6 months w-[180px], Category Select All+EXPENSE_CATEGORIES w-[200px], debounced search Input sent as &q= like fees, Clear filters button when active); table Card p-0 max-h-[62vh] min-w-[860px] sticky header: Date (fmtDate), Category (deterministic soft badge — fixed amber/rose/emerald/cyan/orange/purple/lime/teal/fuchsia map with hash fallback, bg-*-500/15 + dark:text-*-300), Description (font-medium + vendor muted second line), Note (muted truncated w/ title tooltip), Method (badge like fees), Amount (semibold right tabular-nums rose-600 dark:rose-400), Actions dropdown (Edit/Delete); footer hint "Showing N of M expenses · {monthLabel}"; Add/Edit dialog (max-h-[90vh] overflow-y-auto: date default today, category Select fixed list, description, vendor, amount number min 0 step 10 with inline error, method Select default Cash, note Textarea; live validation disables submit until valid); delete → ConfirmDialog destructive → DELETE; CSV export (Date, Category, Description, Vendor, Method, Amount, Note) over currently loaded rows, filename sanomin-expenses-{month}.csv; loading = 4 skeleton stats + 6 skeleton rows; error = EmptyState + Retry; empty = filter-aware "No expenses recorded".
+- Verification: bun run lint clean; bunx tsc --noEmit → ZERO errors in my files (fixed ExpenseUncheckedCreateInput narrowing; remaining errors pre-existing in untouched files per Task 3). curl API matrix: summary/byCategory/methodTotals correct; month boundaries (2026-08-31 & 2026-10-01 excluded from 2026-09); q matches vendor/note case-insensitively; category exact; POST/PUT validation errors (amount ≤ 0, bad method, missing date, invalid JSON → 400); unknown id → 404; DELETE → {ok:true}. Test rows cleaned after.
+- agent-browser QA @1440 & 375: sidebar → Expenses; added "September electricity bill" (Rent & Utilities, 8,500, Cash) + "Classroom posters" (Teaching Materials, 3,200, Card) via dialog; stats updated correctly (LKR 12K · 2 payments / Rent & Utilities 73% / avg LKR 5.8K / Bank+Card 3.2K vs Cash 8.5K); submit disabled until form valid; edited posters → 3,500 + vendor "Local Print Shop" + note "Invoice #4471" (prefill, vendor second line, note column, PUT persisted); deleted both via ConfirmDialog → empty state; search/category/month filters + Clear verified; CSV export toast "Exported 1 expenses to CSV"; dark mode verified via app toggle (badges switch dark variants); 375px: 2-col stat cards, no page horizontal overflow (table scrolls in card); agent-browser errors: none. Screenshots tool-results/exp-01..06.
+- Re-created one realistic expense via the UI and LEFT it: "September electricity bill", Rent & Utilities, LKR 8,500, Cash, vendor CEB, date today (2026-09-07) — section not empty for the user.
+
+Stage Summary:
+- NEW Expenses module (sidebar → Operations → "Expenses"): Expense table + GET/POST/PUT/DELETE API + complete section UI (month/category/search filters, 4 stat cards, zebra table w/ colored category badges, add/edit dialog w/ live validation, delete confirm, CSV export, loading/empty/error states, responsive + dark-safe).
+- API contract: GET /api/expenses?month=YYYY-MM&q=&category=&limit=&page= → { data: ExpenseRow[], summary: { total, count, byCategory[], methodTotals{Cash,Bank,Card} }, page, totalPages, total }; POST { date, category, description, amount, method?, vendor?, note? } → 201; PUT/DELETE /api/expenses/[id]; types in src/lib/types.ts (ExpenseRow, ExpenseSummary, EXPENSE_CATEGORIES, EXPENSE_METHODS).
+- Files: prisma/schema.prisma (+Expense), api/expenses/route.ts, api/expenses/[id]/route.ts, lib/types.ts, components/layout/app-shell.tsx, app/page.tsx, components/sections/expenses-section.tsx. Lint clean, tsc clean in own files, browser-verified.
+- Data left: exactly 1 expense (Sept electricity bill, LKR 8,500, Cash, CEB, 2026-09-07); no other test data. Risks: fixed category list (add via EXPENSE_CATEGORIES; badge colors auto-fallback), SQLite contains-case-insensitivity dependency (same as payments).
+---
+---
+Task ID: 4-a
+Agent: main (Z.ai Code)
+Task: QA round + QA fixes — teacher salary history (API + profile tab), payroll zero-salary banner, month-select truncation fixes
+
+Work Log:
+- Assessment: dev.log clean (all 200s), APIs healthy (students/payroll/dashboard), agent-browser pass over all sections → no runtime errors; app stable → proceeded to new work per instructions.
+- QA bug #1 fixed: "Billing month" SelectTrigger truncated "Sept 2026 (2026-09)" → widened w-[180px] → w-[200px] in payroll-section.tsx, fees-section.tsx (and expenses-section.tsx, found same issue there). Verified full label renders at 1440px.
+- QA gap #2 fixed (payroll): 4 internal teachers showed Net LKR 0 with no guidance. Added amber fix-it banner between filter card and register (payroll-section.tsx): AlertTriangle + "{N} teacher(s) has/have no salary configured" + names (first 4 + "+N more") + "Go to Teachers →" button wired to useAppStore setSection('teachers'). Renders only when !loading && !error && rows have netSalary <= 0. Browser-verified with all 4 names + navigation.
+- NEW: teacher salary history —
+  - API: GET /api/payroll?teacher=<Teacher.id> now returns { teacher:{id,teacherId,fullName,type}, history: PayrollHistoryEntry[] (month desc, take 24: month, gross, netSalary, epfEmployee, epfEmployer, etfEmployer, status, method, paidDate, note), paidCount, totalPaid }; unknown teacher → 404. Monthly register endpoint unchanged when no teacher param.
+  - types.ts: appended PayrollHistoryEntry + PayrollHistoryResponse.
+  - teachers-section.tsx ProfileDialog: new 4th tab "Salary" (History icon, count badge) fetching /api/payroll?teacher= on open; summary strip (Paid to date emerald across N months + Current net salary w/ EPF hint, rate-only-external aware); scrollable history list (month label en-US short, Paid emerald / Pending amber badge, gross/EPF/method/paid-date subline, italic note, net right-aligned); loading spinner + error/empty EmptyStates.
+  - Browser-verified on Mr. Ravi Bandara: tab shows "Salary (1)", Paid to date LKR 0 · 0 paid months, current net LKR 8,000/mo, history row "Sep 2026 · Pending · Gross LKR 8,000 · EPF −LKR 0 · Cash · LKR 8,000".
+- Verification: bun run lint clean; bunx tsc --noEmit → 0 errors in all touched files (14 remaining errors are the pre-existing set in examples/, prisma seeds, attendance/[id], at-risk, reports, lib/api, skills/ — unchanged from Task 3).
+
+Stage Summary:
+- Payroll now self-explains zero-salary rows with a one-click jump to Teachers; teachers' profiles expose full payroll history per teacher (foundation for payslip re-print later).
+- QA fixes: month selects no longer truncate in fees/payroll/expenses.
+- API addition: GET /api/payroll?teacher=<id> (non-breaking, distinct query param).
+
+---
+Task ID: 5
+Agent: main (Z.ai Code)
+Task: Dashboard cash-position panel + expenses seed data + polish; final full-app QA
+
+Work Log:
+- src/app/api/dashboard/route.ts: fees object extended with expenses (Σ Expense.date in current month), payroll (Σ live net salary over Active teachers using IDENTICAL semantics to /api/payroll — EPF 8% on basic; rate-only externals count monthlyRate, no deductions), net = collected − expenses − payroll (all round2).
+- dashboard-section.tsx: DashboardData.fees extended; Fee Collection card's rate block split into a 2-col lg grid: Collection rate (unchanged) + NEW "Cash position this month" panel — net value emerald/red by sign, dot-legend Collected/Expenses/Payroll (currencyCompact), "Expenses →" link → setSection('expenses'). Math verified live: 214,700 − 57,700 − 27,000 = LKR 130K.
+- expenses-section.tsx polish: singular/plural grammar ("1 payment"/"1 entry"/"1 expense"), month select width fix.
+- Seed data for demonstrability (left in DB intentionally): "Building rent — September" (Rent & Utilities, 45,000, Bank, Landlord, 2026-09-01), "Classroom craft supplies — term 3" (Teaching Materials, 4,200, Card, Papers & More, note "Preschool + Daycare", 2026-09-05) + subagent's electricity bill → 3 expenses, Sept total LKR 57,700.
+- Final QA: fresh reload → 0 console errors, 0 page errors (earlier "Module not found expenses-section" console line was a stale Fast-Refresh message from mid-creation; cleared + fresh load clean); visited all 12 sections sequentially → all render, zero errors; dark mode on Expenses (badges/tables/labels all dark-safe); mobile 375px dashboard (panels stack, dot legend wraps, updated LKR 130K correct); payroll banner + full month label verified; salary tab verified; dev.log clean; bun run lint clean; tsc: only the 14 pre-existing untouched-file errors.
+- Closed browser session cleanly.
+
+Stage Summary:
+- Dashboard now answers "are we profitable this month?" at a glance (collected vs expenses vs payroll with net).
+- Full feature set this round: Expenses module (4-b), salary history tab (4-a), zero-salary banner (4-a), cash position panel (5), truncation + grammar fixes.
+- Data state: 3 September expenses (LKR 57,700), 7 active teachers (4 need salary config — banner visible), 2026-09 payroll all Pending (net LKR 27,000), 65 bills (LKR 273K billed / LKR 215K collected).
+- Risks/next: fixed EXPENSE_CATEGORIES list (extend via types.ts — badge colors auto-fallback); dashboard payroll figure is live (not snapshot) so it shifts when salaries change mid-month; suggested next: expense categories pie chart in Reports, payslip PDF download, per-teacher revenue share report (25% institute cut), salary quick-edit from payroll banner.

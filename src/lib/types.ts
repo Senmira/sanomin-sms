@@ -9,6 +9,7 @@ export type SectionKey =
   | 'classes'
   | 'programs'
   | 'fees'
+  | 'expenses'
   | 'announcements'
   | 'reports'
   | 'settings'
@@ -255,3 +256,66 @@ export interface AnnouncementRow {
   updatedAt: string
 }
 
+// ─── Expenses (institute operating expenses & outgoings) ──────────────────
+export type ExpenseMethod = 'Cash' | 'Bank' | 'Card'
+export const EXPENSE_METHODS: ExpenseMethod[] = ['Cash', 'Bank', 'Card']
+
+export const EXPENSE_CATEGORIES = [
+  'Rent & Utilities',
+  'Salaries & Wages',
+  'Teaching Materials',
+  'Equipment & Maintenance',
+  'Transport',
+  'Marketing',
+  'Events & Activities',
+  'Licenses & Fees',
+  'Miscellaneous',
+] as const
+export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number]
+
+export interface ExpenseByCategory {
+  category: string
+  total: number
+  count: number
+}
+
+export interface ExpenseSummary {
+  total: number
+  count: number
+  byCategory: ExpenseByCategory[]
+  methodTotals: Record<string, number>
+}
+
+export interface ExpenseRow {
+  id: string
+  date: string
+  category: string
+  description: string
+  amount: number
+  method: ExpenseMethod
+  vendor: string | null
+  note: string | null
+  createdAt: string
+}
+
+
+// ─── Payroll history (teacher profile dialog) ──────────────────────────────
+export interface PayrollHistoryEntry {
+  month: string
+  gross: number
+  netSalary: number
+  epfEmployee: number
+  epfEmployer: number
+  etfEmployer: number
+  status: 'Paid' | 'Pending'
+  method: string | null
+  paidDate: string | null
+  note: string | null
+}
+
+export interface PayrollHistoryResponse {
+  teacher: { id: string; teacherId: string; fullName: string; type: string }
+  history: PayrollHistoryEntry[]
+  paidCount: number
+  totalPaid: number
+}

@@ -236,6 +236,22 @@ model PaymentItem {
   program     Program? @relation(fields: [programId], references: [id], onDelete: SetNull)
 }
 
+// ─── Expenses (institute operating expenses & outgoings) ──────────────────
+// Salaries are handled by Payroll (PayrollRecord) — this tracks everything
+// else the institute spends: rent, utilities, supplies, transport, etc.
+model Expense {
+  id          String   @id @default(cuid())
+  date        DateTime
+  category    String
+  description String
+  amount      Float
+  method      String   @default("Cash")    // Cash | Bank | Card
+  vendor      String?
+  note        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
 // ─── Announcements / Notices (admin broadcast to staff & parents) ─────────
 model Announcement {
   id          String   @id @default(cuid())

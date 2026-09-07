@@ -135,6 +135,32 @@ export async function GET() {
   const overdueCount = monthPayments.filter((p) => p.status === 'Overdue').length
   const pendingCount = monthPayments.filter((p) => p.status === 'Pending' || p.status === 'Partial').length
 
+  // Cash position: operating expenses + payroll net for the current month
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
+  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999)
+  const [monthExpenses, activeTeachers] = await Promise.all([
+    db.expense.findMany({
+      where: { date: { gte: monthStart, lte: monthEnd } },
+      select: { amount: true },
+    }),
+    db.teacher.findMany({
+      where: { status: 'Active' },
+      select: { type: true, basicSalary: true, allowances: true, monthlyRate: true },
+    }),
+  ])
+  const totalExpenses = monthExpenses.reduce((s, e) => s + e.amount, 0)
+  const round2 = (n: number) => Math.round(n * 100) / 100
+  // Same net-salary semantics as /api/payroll: EPF 8% on basic; rate-only
+  // external teachers count their monthly tuition rate with no deductions.
+  const payrollNet = activeTeachers.reduce((sum, t) => {
+    const basic = Math.max(0, t.basicSalary || 0)
+    const allowances = Math.max(0, t.allowances || 0)
+    if (t.type === 'External' && basic <= 0 && allowances <= 0) {
+      return sum + Math.max(0, t.monthlyRate || 0)
+    }
+    return sum + (basic + allowances - basic * 0.08)
+  }, 0)
+
   // Recent announcements (top 4 published, pinned first)
   const recentAnnouncements = await db.announcement.findMany({
     where: { status: 'Published' },
@@ -219,6 +245,9 @@ export async function GET() {
       paidRate: totalBilled ? Math.round((totalCollected / totalBilled) * 100) : 0,
       overdueCount,
       pendingCount,
+      expenses: round2(totalExpenses),
+      payroll: round2(payrollNet),
+      net: round2(totalCollected - totalExpenses - payrollNet),
     },
     announcements: recentAnnouncements.map((a) => ({
       ...a,
