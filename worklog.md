@@ -633,3 +633,55 @@ A major admin-productivity feature — auto-create payment records for all activ
   - Attendance anomaly detection (flag students with declining attendance)
   - Fee reminder generation (auto-create announcement when payments are overdue)
 - The 15-min recurring webDevReview cron (job 366041) will continue QA + feature additions autonomously.
+
+---
+Task ID: 14 (webDevReview cron round 8)
+Agent: main (orchestrator) — triggered by 15-min recurring webDevReview cron
+Task: QA assessment + Attendance Anomaly Detection feature (at-risk students + dashboard widget)
+
+## Current project status assessment
+- App had 10 modules + heatmap + global search + bulk fee generation after round 7. Dev server running on :3000, lint clean, all sections at 9-10/10 polish.
+- QA via agent-browser confirmed all 10 sections render error-free. App is very mature. Identified opportunity: admins have no early-warning system for students with attendance problems — they must manually scan logs to spot declining patterns.
+
+## Completed modifications & verification
+
+### New feature: Attendance Anomaly Detection (Task ID 14-a)
+An early-warning system that automatically flags at-risk students based on 14-day attendance patterns.
+
+- **API**: Created `/api/attendance/at-risk` (GET) — analyzes each active student's last-14-days attendance and flags concerns:
+  - **Low attendance rate** (< 60% of school days, min 3 days attended)
+  - **Declining trend** (last 7 days vs previous 7 days, drop > 15%)
+  - **Frequent lateness** (≥ 3 late days in 14 days)
+  - **Consecutive absences** (≥ 2 absent days in a row)
+  - Computes severity: high (rate < 40% or ≥ 3 concerns), medium (rate < 60% or 2 concerns), low (otherwise)
+  - Returns `{ atRisk: [...], summary: { total, lowRate, declining, frequentLate, consecutiveAbsent, monitoredStudents, periodDays } }`
+  - Each at-risk student includes: fullName, studentId, rate, recentRate, previousRate, lateCount, absentCount, concerns[], severity, guardian contact, programs
+  - **Bug fixed**: null program crash on class-only enrollments (same root cause as round 4) — added `.filter((e) => e.program)` before mapping
+- **Dashboard integration**: Added `atRisk` summary to `/api/dashboard` response (count, declining, frequentLate, monitoredStudents, periodDays). Computed inline in the dashboard route to avoid an extra API call.
+- **UI**: Added "Attendance Alerts" widget card to `dashboard-section.tsx`:
+  - Amber-bordered card with AlertTriangle icon header + "View reports" button
+  - 3 color-coded clickable tiles:
+    - **At-risk students** (red): count + "Low rate, declining, or frequently late"
+    - **Declining trend** (amber): count + "Drop >15% this week vs last"
+    - **Frequently late** (purple): count + "3+ late days in 14 days"
+  - Each tile navigates to the Attendance section on click
+  - Green "All students have healthy attendance patterns" success banner when count = 0
+  - Added `AlertTriangle`, `TrendingDown`, `Clock3` icons
+- **Verified**: API returns 18 at-risk students (2 low rate, 12 declining, 5 frequent late, 7 consecutive absent). Dashboard summary shows 17 at-risk, 12 declining, 5 frequent late. VLM-rated 10/10: "all three alert categories with correct color-coded numerical values."
+
+### Verification
+- `bun run lint` → 0 errors, 0 warnings.
+- agent-browser sweep: all 10 sections render with zero runtime/console errors.
+- At-risk API returns 200 with detailed concern breakdown per student.
+- Dashboard at-risk widget renders with real data (17 at-risk, 12 declining, 5 frequently late).
+- VLM-rated the widget 10/10.
+
+## Unresolved issues / risks & next-phase recommendations
+- **No critical bugs remaining.** All 10 modules + heatmap + global search + bulk fee generation + at-risk detection operational and verified.
+- **Next feature candidates** (not yet implemented):
+  - At-risk student detail view (clicking a tile opens a list of flagged students with their concerns)
+  - Export PDF reports (currently CSV only)
+  - Student photo upload / AI avatar generation (would use image-generation skill)
+  - Fee reminder generation (auto-create announcement when payments are overdue)
+  - Search result "open detail" (currently navigates to section)
+- The 15-min recurring webDevReview cron (job 366041) will continue QA + feature additions autonomously.

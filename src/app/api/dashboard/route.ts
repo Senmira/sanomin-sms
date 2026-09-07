@@ -147,6 +147,51 @@ export async function GET() {
     },
   })
 
+  // At-risk students summary (last 14 days)
+  const fourteenDaysAgo = new Date(now)
+  fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 13)
+  fourteenDaysAgo.setHours(0, 0, 0, 0)
+  const sevenDaysAgo = new Date(now)
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6)
+  sevenDaysAgo.setHours(0, 0, 0, 0)
+  const todayEnd = new Date(now)
+  todayEnd.setHours(23, 59, 59, 999)
+
+  const atRiskRecords = await db.attendance.findMany({
+    where: {
+      personType: 'Student',
+      date: { gte: fourteenDaysAgo, lte: todayEnd },
+    },
+    select: { personId: true, date: true, status: true },
+    orderBy: { date: 'asc' },
+  })
+  const byStudentAtRisk: Record<string, typeof atRiskRecords> = {}
+  for (const r of atRiskRecords) {
+    if (!byStudentAtRisk[r.personId]) byStudentAtRisk[r.personId] = []
+    byStudentAtRisk[r.personId].push(r)
+  }
+  let atRiskCount = 0
+  let decliningCount = 0
+  let frequentLateCount = 0
+  for (const id of Object.keys(byStudentAtRisk)) {
+    const recs = byStudentAtRisk[id]
+    const total = recs.length
+    if (total < 3) continue
+    const present = recs.filter((r) => r.status === 'Present' || r.status === 'Late').length
+    const rate = total > 0 ? Math.round((present / total) * 100) : 100
+    const lateCount = recs.filter((r) => r.status === 'Late').length
+    const recent = recs.filter((r) => r.date >= sevenDaysAgo)
+    const previous = recs.filter((r) => r.date < sevenDaysAgo)
+    const recentRate = recent.length > 0 ? Math.round(recent.filter((r) => r.status === 'Present' || r.status === 'Late').length / recent.length * 100) : null
+    const previousRate = previous.length > 0 ? Math.round(previous.filter((r) => r.status === 'Present' || r.status === 'Late').length / previous.length * 100) : null
+    const isDeclining = recentRate !== null && previousRate !== null && (previousRate - recentRate) > 15
+    const isFrequentLate = lateCount >= 3
+    const isLowRate = rate < 60
+    if (isLowRate || isDeclining || isFrequentLate) atRiskCount++
+    if (isDeclining) decliningCount++
+    if (isFrequentLate) frequentLateCount++
+  }
+
   return NextResponse.json({
     totals: {
       students: totalStudents,
@@ -179,6 +224,13 @@ export async function GET() {
       ...a,
       publishDate: a.publishDate.toISOString(),
     })),
+    atRisk: {
+      count: atRiskCount,
+      declining: decliningCount,
+      frequentLate: frequentLateCount,
+      monitoredStudents: totalStudents,
+      periodDays: 14,
+    },
   })
 }
 

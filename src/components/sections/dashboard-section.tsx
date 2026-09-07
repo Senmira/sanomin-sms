@@ -32,6 +32,9 @@ import {
   CheckCircle2,
   Megaphone,
   Pin,
+  AlertTriangle,
+  TrendingDown,
+  Clock3,
 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { SectionHeader } from '@/components/shared/section-header'
@@ -100,6 +103,13 @@ interface DashboardData {
     pinned: boolean
     publishDate: string
   }>
+  atRisk: {
+    count: number
+    declining: number
+    frequentLate: number
+    monitoredStudents: number
+    periodDays: number
+  }
 }
 
 export function DashboardSection() {
@@ -630,6 +640,86 @@ export function DashboardSection() {
                   </button>
                 )
               })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* At-Risk Students widget */}
+      <Card className="overflow-hidden border-amber-500/20">
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+          <div className="flex items-center gap-2">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400">
+              <AlertTriangle className="h-5 w-5" />
+            </div>
+            <div>
+              <CardTitle className="text-base font-semibold">Attendance Alerts</CardTitle>
+              <p className="text-xs text-muted-foreground">
+                Last {data.atRisk.periodDays} days · {data.atRisk.monitoredStudents} students monitored
+              </p>
+            </div>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => setSection('reports')}>
+            View reports <ArrowRight className="ml-1 h-3 w-3" />
+          </Button>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-3 sm:grid-cols-3">
+            {/* At-risk count */}
+            <button
+              onClick={() => setSection('attendance')}
+              className="group rounded-xl border border-red-500/30 bg-red-500/5 p-4 text-left transition-all hover:border-red-500/50 hover:shadow-sm"
+            >
+              <div className="flex items-center gap-2 text-red-600 dark:text-red-400">
+                <AlertTriangle className="h-4 w-4" />
+                <span className="text-xs font-medium">At-risk students</span>
+              </div>
+              <p className="mt-1 text-2xl font-bold tracking-tight text-red-700 dark:text-red-300">
+                {data.atRisk.count}
+              </p>
+              <p className="text-[11px] text-muted-foreground">
+                Low rate, declining, or frequently late
+              </p>
+            </button>
+
+            {/* Declining trend */}
+            <button
+              onClick={() => setSection('attendance')}
+              className="group rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-left transition-all hover:border-amber-500/50 hover:shadow-sm"
+            >
+              <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400">
+                <TrendingDown className="h-4 w-4" />
+                <span className="text-xs font-medium">Declining trend</span>
+              </div>
+              <p className="mt-1 text-2xl font-bold tracking-tight text-amber-700 dark:text-amber-300">
+                {data.atRisk.declining}
+              </p>
+              <p className="text-[11px] text-muted-foreground">
+                Drop &gt;15% this week vs last
+              </p>
+            </button>
+
+            {/* Frequently late */}
+            <button
+              onClick={() => setSection('attendance')}
+              className="group rounded-xl border border-purple-500/30 bg-purple-500/5 p-4 text-left transition-all hover:border-purple-500/50 hover:shadow-sm"
+            >
+              <div className="flex items-center gap-2 text-purple-600 dark:text-purple-400">
+                <Clock3 className="h-4 w-4" />
+                <span className="text-xs font-medium">Frequently late</span>
+              </div>
+              <p className="mt-1 text-2xl font-bold tracking-tight text-purple-700 dark:text-purple-300">
+                {data.atRisk.frequentLate}
+              </p>
+              <p className="text-[11px] text-muted-foreground">
+                3+ late days in {data.atRisk.periodDays} days
+              </p>
+            </button>
+          </div>
+          {data.atRisk.count === 0 && (
+            <div className="mt-3 flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm text-emerald-700 dark:text-emerald-300">
+              <CheckCircle2 className="h-4 w-4" />
+              All students have healthy attendance patterns. No concerns detected.
             </div>
           )}
         </CardContent>
