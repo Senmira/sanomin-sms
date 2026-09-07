@@ -448,7 +448,7 @@ export function TeachersSection() {
       {/* Data table */}
       <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
         <div className="max-h-[60vh] overflow-y-auto scroll-thin">
-          <Table>
+          <Table className="table-zebra">
             <TableHeader className="sticky top-0 z-10 bg-muted/80 backdrop-blur">
               <TableRow>
                 <TableHead className="min-w-[220px]">Teacher</TableHead>

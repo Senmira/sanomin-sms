@@ -541,7 +541,7 @@ export function FeesSection() {
           </div>
         ) : (
           <div className="scroll-thin max-h-[60vh] overflow-y-auto">
-            <Table>
+            <Table className="table-zebra">
               <TableHeader className="sticky top-0 z-10 bg-muted/80 backdrop-blur">
                 <TableRow>
                   <TableHead className="w-[120px]">Receipt No</TableHead>

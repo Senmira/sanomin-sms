@@ -30,6 +30,8 @@ import {
   Wallet,
   AlertCircle,
   CheckCircle2,
+  Megaphone,
+  Pin,
 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { SectionHeader } from '@/components/shared/section-header'
@@ -88,6 +90,16 @@ interface DashboardData {
     overdueCount: number
     pendingCount: number
   }
+  announcements: Array<{
+    id: string
+    title: string
+    body: string
+    category: string
+    audience: string
+    priority: string
+    pinned: boolean
+    publishDate: string
+  }>
 }
 
 export function DashboardSection() {
@@ -543,6 +555,85 @@ export function DashboardSection() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Recent Announcements */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+          <div className="flex items-center gap-2">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-purple-500/15 text-purple-600 dark:text-purple-400">
+              <Megaphone className="h-5 w-5" />
+            </div>
+            <div>
+              <CardTitle className="text-base font-semibold">Recent Announcements</CardTitle>
+              <p className="text-xs text-muted-foreground">Latest notices & broadcasts</p>
+            </div>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => setSection('announcements')}>
+            View all <ArrowRight className="ml-1 h-3 w-3" />
+          </Button>
+        </CardHeader>
+        <CardContent>
+          {data.announcements.length === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-muted/20 px-4 py-8 text-center">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                <Megaphone className="h-5 w-5" />
+              </div>
+              <p className="text-xs font-medium">No announcements yet</p>
+              <p className="text-[11px] text-muted-foreground">
+                Create announcements to broadcast notices to staff and parents.
+              </p>
+            </div>
+          ) : (
+            <div className="scroll-thin grid gap-2 sm:grid-cols-2">
+              {data.announcements.map((a) => {
+                const isHigh = a.priority === 'High'
+                const isUrgent = a.category === 'Urgent'
+                return (
+                  <button
+                    key={a.id}
+                    onClick={() => setSection('announcements')}
+                    className="group relative overflow-hidden rounded-lg border bg-card p-3 text-left transition-all hover:border-primary/40 hover:shadow-sm"
+                  >
+                    {a.pinned && (
+                      <Pin className="absolute right-2 top-2 h-3.5 w-3.5 text-primary" />
+                    )}
+                    <div className="flex items-center gap-2">
+                      <Badge
+                        variant="outline"
+                        className={
+                          isUrgent
+                            ? 'border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400'
+                            : isHigh
+                              ? 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                              : 'border-slate-500/30 bg-slate-500/10 text-slate-600 dark:text-slate-400'
+                        }
+                      >
+                        {a.category}
+                      </Badge>
+                      {isHigh && (
+                        <span className="text-[10px] font-semibold text-red-500">● High</span>
+                      )}
+                    </div>
+                    <p className="mt-1.5 line-clamp-1 text-sm font-semibold group-hover:text-primary">
+                      {a.title}
+                    </p>
+                    <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
+                      {a.body}
+                    </p>
+                    <p className="mt-1.5 text-[10px] text-muted-foreground">
+                      {new Date(a.publishDate).toLocaleDateString('en-GB', {
+                        day: '2-digit',
+                        month: 'short',
+                      })}{' '}
+                      · {a.audience}
+                    </p>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   )
 }

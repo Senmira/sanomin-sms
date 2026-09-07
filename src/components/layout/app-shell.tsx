@@ -12,6 +12,7 @@ import {
   CalendarDays,
   BookOpen,
   Wallet,
+  Megaphone,
   FileBarChart,
   Settings,
   Menu,
@@ -59,6 +60,7 @@ const NAV: NavItem[] = [
   { key: 'classes', label: 'Classes', icon: CalendarDays, group: 'Operations', description: 'Tuition class scheduling' },
   { key: 'programs', label: 'Programs', icon: BookOpen, group: 'Operations', description: 'Preschool, Daycare, IT, Elocution, Dancing' },
   { key: 'fees', label: 'Fees & Payments', icon: Wallet, group: 'Operations', description: 'Monthly tuition fee tracking & receipts' },
+  { key: 'announcements', label: 'Announcements', icon: Megaphone, group: 'Operations', description: 'Broadcast notices to staff & parents' },
   { key: 'reports', label: 'Reports', icon: FileBarChart, group: 'Insights', description: 'Attendance & enrollment analytics' },
   { key: 'settings', label: 'Settings', icon: Settings, group: 'Insights', description: 'School & device configuration' },
 ]

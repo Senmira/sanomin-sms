@@ -10,6 +10,7 @@ import { AttendanceSection } from '@/components/sections/attendance-section'
 import { ClassesSection } from '@/components/sections/classes-section'
 import { ProgramsSection } from '@/components/sections/programs-section'
 import { FeesSection } from '@/components/sections/fees-section'
+import { AnnouncementsSection } from '@/components/sections/announcements-section'
 import { ReportsSection } from '@/components/sections/reports-section'
 import { SettingsSection } from '@/components/sections/settings-section'
 
@@ -37,6 +38,7 @@ export default function Home() {
       {section === 'classes' && <ClassesSection />}
       {section === 'programs' && <ProgramsSection />}
       {section === 'fees' && <FeesSection />}
+      {section === 'announcements' && <AnnouncementsSection />}
       {section === 'reports' && <ReportsSection />}
       {section === 'settings' && <SettingsSection />}
     </AppShell>

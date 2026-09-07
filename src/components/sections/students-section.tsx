@@ -489,7 +489,7 @@ export function StudentsSection() {
       {/* Data table */}
       <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
         <div className="max-h-[60vh] overflow-y-auto">
-          <Table>
+          <Table className="table-zebra">
             <TableHeader className="sticky top-0 z-10 bg-muted/80 backdrop-blur">
               <TableRow>
                 <TableHead className="min-w-[200px]">Student</TableHead>
@@ -1534,7 +1534,7 @@ function ProfileDialog({
               />
             ) : attendance && attendance.length > 0 ? (
               <div className="max-h-72 overflow-y-auto rounded-md border">
-                <Table>
+                <Table className="table-zebra">
                   <TableHeader className="sticky top-0 bg-muted/80">
                     <TableRow>
                       <TableHead>Date</TableHead>

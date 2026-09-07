@@ -8,11 +8,17 @@ export type SectionKey =
   | 'classes'
   | 'programs'
   | 'fees'
+  | 'announcements'
   | 'reports'
   | 'settings'
 
 export const PAYMENT_STATUSES = ['Pending', 'Partial', 'Paid', 'Overdue'] as const
 export const PAYMENT_METHODS = ['Cash', 'Card', 'Bank', 'Online'] as const
+
+export const ANNOUNCEMENT_CATEGORIES = ['General', 'Event', 'Holiday', 'Urgent', 'Payment', 'Meeting'] as const
+export const ANNOUNCEMENT_AUDIENCES = ['All', 'Staff', 'Parents', 'Teachers'] as const
+export const ANNOUNCEMENT_PRIORITIES = ['Low', 'Normal', 'High'] as const
+export const ANNOUNCEMENT_STATUSES = ['Draft', 'Published', 'Archived'] as const
 
 export const PROGRAM_COLORS: Record<string, string> = {
   PRESCHOOL: '#1e40af',
@@ -152,3 +158,20 @@ export interface PaymentSummary {
   pendingCount: number
   overdueCount: number
 }
+
+export interface AnnouncementRow {
+  id: string
+  title: string
+  body: string
+  category: string
+  audience: string
+  priority: string
+  pinned: boolean
+  status: string
+  publishDate: string
+  expiryDate: string | null
+  authorName: string | null
+  createdAt: string
+  updatedAt: string
+}
+

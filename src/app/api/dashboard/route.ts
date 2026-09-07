@@ -135,6 +135,18 @@ export async function GET() {
   const overdueCount = monthPayments.filter((p) => p.status === 'Overdue').length
   const pendingCount = monthPayments.filter((p) => p.status === 'Pending' || p.status === 'Partial').length
 
+  // Recent announcements (top 4 published, pinned first)
+  const recentAnnouncements = await db.announcement.findMany({
+    where: { status: 'Published' },
+    orderBy: [{ pinned: 'desc' }, { publishDate: 'desc' }],
+    take: 4,
+    select: {
+      id: true, title: true, body: true, category: true,
+      audience: true, priority: true, pinned: true,
+      publishDate: true,
+    },
+  })
+
   return NextResponse.json({
     totals: {
       students: totalStudents,
@@ -163,6 +175,10 @@ export async function GET() {
       overdueCount,
       pendingCount,
     },
+    announcements: recentAnnouncements.map((a) => ({
+      ...a,
+      publishDate: a.publishDate.toISOString(),
+    })),
   })
 }
 

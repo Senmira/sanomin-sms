@@ -184,3 +184,21 @@ model Payment {
   student     Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
   program     Program? @relation(fields: [programId], references: [id], onDelete: SetNull)
 }
+
+// ─── Announcements / Notices (admin broadcast to staff & parents) ─────────
+model Announcement {
+  id          String   @id @default(cuid())
+  title       String
+  body        String
+  category    String   @default("General")   // General | Event | Holiday | Urgent | Payment | Meeting
+  audience    String   @default("All")        // All | Staff | Parents | Teachers
+  priority    String   @default("Normal")     // Low | Normal | High
+  pinned      Boolean  @default(false)
+  status      String   @default("Published")  // Draft | Published | Archived
+  publishDate DateTime @default(now())
+  expiryDate  DateTime?
+  authorName  String?                          // admin who posted
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+

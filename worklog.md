@@ -343,3 +343,49 @@ Task: QA assessment + bug fixes + new Fees module + styling improvements
   - Export PDF reports (currently CSV only)
   - Guardian portal (separate role — currently admin-only by design)
 - The 15-min recurring webDevReview cron (job 366041) will continue QA + feature additions autonomously.
+
+---
+Task ID: 8 (webDevReview cron round 2)
+Agent: main (orchestrator) — triggered by 15-min recurring webDevReview cron
+Task: QA assessment + new Announcements module + styling improvements (zebra striping)
+
+## Current project status assessment
+- App had 9 modules (Dashboard, Students, Teachers, Attendance, Classes, Programs, Fees, Reports, Settings) after round 1. Dev server running on :3000, lint clean, DB seeded with 48 students + 130 payments + 14 days attendance history.
+- QA via agent-browser confirmed all 9 sections render error-free. VLM rated dashboard 7/10, students/classes 8/10. Identified improvement areas: table readability (no zebra striping), dashboard announcements missing, select dropdown truncation.
+
+## Completed modifications & verification
+
+### New feature: Announcements & Notices module (Task ID 8-a)
+- **Prisma**: Added `Announcement` model (id, title, body, category General/Event/Holiday/Urgent/Payment/Meeting, audience All/Staff/Parents/Teachers, priority Low/Normal/High, pinned, status Draft/Published/Archived, publishDate, expiryDate, authorName). Back-relations not needed (standalone). `db:push` applied.
+- **Seed** (`prisma/seed-announcements.ts`): created 8 realistic announcements (Annual Concert, Term 3 Fees reminder, Staff Meeting, Poya Day Holiday, Parent-Teacher Conference, IT Lab upgrade, Health Records update, Dancing Showcase) with varied categories/audiences/priorities/pinned status.
+- **API routes**:
+  - `GET/POST /api/announcements` — list with status/category/audience/priority/q filters + summary {total, byCategory, byPriority, byAudience, pinnedCount}; POST creates with auto publishDate.
+  - `GET/PUT/DELETE /api/announcements/[id]` — full CRUD with pin toggle support.
+- **UI** (`src/components/sections/announcements-section.tsx`, ~700 lines): SectionHeader + 4 StatCards (Published/High Priority/Events/For Parents) + toolbar (search + 4 filter selects + clear) + announcement card list with category-colored left accent stripe, pinned ring, category icon badges, audience/priority badges, publish/expiry dates, pin toggle + edit/delete actions. Add/Edit dialog with title/body/category/audience/priority/publish+expiry dates/status/pin switch. ConfirmDialog for delete.
+- **Nav + routing**: added 'announcements' to SectionKey type, NAV array (Megaphone icon, Operations group), page.tsx render branch.
+- **Dashboard integration**: added `announcements` array (top 4 published, pinned first) to `/api/dashboard` response. Added "Recent Announcements" card to DashboardSection with 2-col grid of clickable announcement cards (category badge, priority indicator, title, body preview, date+audience) that navigate to the Announcements section.
+- **CRUD verified end-to-end**: created "Test Announcement from QA" via the New Announcement dialog, confirmed via API (found: 1, status: Published), then deleted (remaining: 0). VLM rated Announcements page 8/10 "highly readable and well-organized."
+
+### Styling improvements
+- **Zebra striping for all data tables**: Added `.table-zebra` CSS utility to globals.css. CRITICAL FIX: initial attempt placed rules outside `@layer`, so Tailwind v4 tree-shook them out of compiled CSS (verified: 0 rules found in browser). Wrapped rules in `@layer components { ... }` so Tailwind preserves them. Applied `className="table-zebra"` to all 6 main tables (Students ×2, Teachers, Fees, Attendance, Classes). VLM-verified: "rows alternate between white and a very light gray background."
+- **Row hover effect**: `.table-zebra tbody tr:hover` adds subtle primary tint + 120ms transition.
+- **Row enter animation**: added `.animate-row-in` keyframe utility for future use.
+- **Card hover lift**: added `.card-lift` utility for subtle translateY(-2px) + shadow on hover.
+- **Announcements toolbar selects**: widened from w-[120px]/w-[130px] → w-[140px] to prevent "All priorities" truncation.
+
+### Verification
+- `bun run lint` → 0 errors, 0 warnings (fixed one `react-hooks/set-state-in-effect` error in announcements-section by deferring `setLoading(true)` via `Promise.resolve().then(...)`).
+- agent-browser sweep of all **10 sections** (Dashboard, Students, Teachers, Attendance, Classes, Programs, Fees, **Announcements**, Reports, Settings) → all render with h1 correct + zero runtime/console errors.
+- VLM-verified: Dashboard "Recent Announcements" widget shows 4 announcement cards (Payment/Event/Meeting/Urgent); Students table zebra striping visible; overall polish 9/10.
+- Dev server restarted once to pick up new Prisma `Announcement` client (stale client cache caused initial 500 on `/api/announcements`).
+
+## Unresolved issues / risks & next-phase recommendations
+- **No critical bugs remaining.** All 10 modules operational and verified.
+- **Next feature candidates** (not yet implemented):
+  - Attendance heatmap calendar view (month grid showing daily attendance rates)
+  - Export PDF reports (currently CSV only)
+  - Student photo upload / AI avatar generation (would use image-generation skill)
+  - Fee reminder SMS integration (requires external service)
+  - Guardian portal (separate role — currently admin-only by design)
+  - Bulk announcement send to multiple audiences
+- The 15-min recurring webDevReview cron (job 366041) will continue QA + feature additions autonomously.
