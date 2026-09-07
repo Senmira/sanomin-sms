@@ -1,0 +1,162 @@
+// SANOMIN International Preschool — Student Management System
+// Prisma schema (SQLite)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider      = "sqlite"
+  url           = env("DATABASE_URL")
+  // Polymorphic personId on Attendance backs BOTH the `student` and `teacher`
+  // relations — SQLite can't enforce two FKs on one column. Defer referential
+  // integrity to the Prisma Client so inserts work for either person type.
+  relationMode  = "prisma"
+}
+
+// ─── Programs (Preschool, Daycare, IT, Elocution, Dancing) ───────────────
+model Program {
+  id          String   @id @default(cuid())
+  code        String   @unique            // "PRESCHOOL", "DAYCARE", "IT"...
+  name        String
+  description String?
+  color       String   @default("#7c3aed")
+  monthlyFee  Float    @default(0)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  enrollments Enrollment[]
+  classes     Class[]
+}
+
+// ─── Students ─────────────────────────────────────────────────────────────
+model Student {
+  id             String   @id @default(cuid())
+  studentId      String   @unique           // "P24001"
+  indexNo        String?                    // "200"
+  barcode        String   @unique           // barcode value for scanner
+  fullName       String
+  gender         String                     // Male | Female
+  dob            DateTime?
+  ageGroup       String?                    // "2-3"
+  admissionDate  DateTime?
+  religion       String?
+  nationality    String?
+  previousSchool String?
+  photoUrl       String?
+  status         String   @default("Active") // Active | Inactive | Graduated
+  medicalNotes   String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  guardians      Guardian[]
+  enrollments    Enrollment[]
+  attendance     Attendance[]
+}
+
+// ─── Guardians (parents) ──────────────────────────────────────────────────
+model Guardian {
+  id          String   @id @default(cuid())
+  studentId   String
+  name        String
+  phone       String
+  address     String?
+  email       String?
+  relationship String  @default("Guardian")
+  occupation  String?
+  isPrimary   Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  student     Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+}
+
+// ─── Teachers (Internal & External) ───────────────────────────────────────
+model Teacher {
+  id             String   @id @default(cuid())
+  teacherId      String   @unique            // "T001"
+  fingerprintId  String?  @unique            // fingerprint template id for scanner
+  fullName       String
+  type           String   @default("Internal") // Internal | External
+  gender         String?
+  phone          String?
+  email          String?
+  address        String?
+  nic            String?                      // national ID
+  qualification  String?
+  specialization String?                      // subjects e.g. "Elocution,IT"
+  photoUrl       String?
+  status         String   @default("Active")  // Active | Inactive | On Leave
+  hireDate       DateTime?
+  monthlyRate    Float    @default(0)          // for external tuition teachers
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  classes        Class[]
+  attendance     Attendance[]
+}
+
+// ─── Classes / Tuition sessions ───────────────────────────────────────────
+model Class {
+  id          String   @id @default(cuid())
+  name        String
+  programId   String?
+  teacherId   String?
+  dayOfWeek   String?                       // Mon..Sun
+  startTime   String?                       // "08:30"
+  endTime     String?                       // "10:30"
+  room        String?
+  capacity    Int      @default(20)
+  fee         Float    @default(0)
+  active      Boolean  @default(true)
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  program     Program? @relation(fields: [programId], references: [id])
+  teacher     Teacher? @relation(fields: [teacherId], references: [id], onDelete: SetNull)
+  enrollments Enrollment[]
+}
+
+// ─── Enrollment (student <-> program, student <-> class) ──────────────────
+model Enrollment {
+  id         String   @id @default(cuid())
+  studentId  String
+  programId  String?
+  classId    String?
+  enrolledAt DateTime @default(now())
+  status     String   @default("Active")    // Active | Withdrawn
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  student    Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  program    Program? @relation(fields: [programId], references: [id])
+  class      Class?   @relation(fields: [classId], references: [id], onDelete: Cascade)
+}
+
+// ─── Attendance (students via barcode, teachers via fingerprint) ──────────
+model Attendance {
+  id          String   @id @default(cuid())
+  personType  String                          // Student | Teacher
+  personId    String                          // student.id or teacher.id
+  personRef   String                          // studentId / teacherId (denormalized for quick read)
+  date        DateTime @default(now())        // date of record
+  checkIn     DateTime?
+  checkOut    DateTime?
+  method      String   @default("Manual")     // Barcode | Fingerprint | Manual
+  status      String   @default("Present")    // Present | Absent | Late | Leave
+  note        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  student     Student? @relation(fields: [personId], references: [id], onDelete: Cascade)
+  teacher     Teacher? @relation(fields: [personId], references: [id], onDelete: Cascade)
+}
+
+// ─── School Settings ──────────────────────────────────────────────────────
+model Setting {
+  id    String @id
+  key   String @unique
+  value String
+}
