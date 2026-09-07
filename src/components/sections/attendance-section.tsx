@@ -2573,7 +2573,7 @@ function RegisterView() {
             <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
               <div className="flex items-center gap-3">
                 <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-lg ring-1 ring-border">
-                  <img src="/sanomin-logo.jpg" alt={school.shortName} className="h-full w-full object-cover" />
+                  <img src={school.logoUrl} alt={school.shortName} className="h-full w-full object-cover" />
                 </div>
                 <div className="leading-tight">
                   <p className="text-sm font-bold">{school.shortName}</p>

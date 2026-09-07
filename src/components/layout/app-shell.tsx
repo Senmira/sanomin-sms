@@ -25,6 +25,7 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ThemeToggle } from '@/components/theme-toggle'
+import { useSchoolInfo } from '@/lib/school'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import {
   Sheet,
@@ -70,15 +71,18 @@ const NAV: NavItem[] = [
 ]
 
 function Logo() {
+  // Branding (logo + name) follows Settings → School Profile; falls back to
+  // bundled logo while loading and re-renders live when settings are saved.
+  const school = useSchoolInfo()
   return (
     <div className="flex items-center gap-3">
-      <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-xl ring-1 ring-white/20 shadow-md">
-        <img src="/sanomin-logo.jpg" alt="SANOMIN logo" className="h-full w-full object-cover" />
+      <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-xl ring-1 ring-white/20 shadow-md transition-transform duration-300 hover:scale-105">
+        <img src={school.logoUrl} alt={`${school.shortName} logo`} className="h-full w-full object-cover" />
       </div>
       <div className="min-w-0 leading-tight">
-        <p className="truncate text-sm font-bold text-sidebar-foreground">SANOMIN</p>
+        <p className="truncate text-sm font-bold text-sidebar-foreground">{school.shortName}</p>
         <p className="truncate text-[10px] uppercase tracking-wider text-sidebar-foreground/60">
-          International Preschool
+          {school.subtitle}
         </p>
       </div>
     </div>

@@ -1144,7 +1144,7 @@ function PayslipDialog({ row, onClose }: PayslipDialogProps) {
             <div className="flex items-center gap-3">
               <div className="relative h-10 w-10 overflow-hidden rounded-lg ring-1 ring-border">
                 <img
-                  src="/sanomin-logo.jpg"
+                  src={school.logoUrl}
                   alt={school.shortName}
                   className="h-full w-full object-cover"
                 />

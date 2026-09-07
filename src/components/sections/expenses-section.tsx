@@ -18,6 +18,7 @@ import {
   Calculator,
   CreditCard,
   Target,
+  Repeat,
 } from 'lucide-react'
 
 import { api } from '@/lib/api'
@@ -212,6 +213,9 @@ export function ExpensesSection() {
   const [savingBudgets, setSavingBudgets] = useState(false)
   const [budgetsLoaded, setBudgetsLoaded] = useState(false)
 
+  // Recurring monthly expense templates
+  const [recurringOpen, setRecurringOpen] = useState(false)
+
   useEffect(() => {
     let alive = true
     if (budgetsLoaded) return
@@ -384,6 +388,9 @@ export function ExpensesSection() {
         icon={<ReceiptText className="h-5 w-5" />}
         actions={
           <>
+            <Button variant="outline" size="sm" onClick={() => setRecurringOpen(true)} className="gap-2">
+              <Repeat className="h-4 w-4" /> Recurring
+            </Button>
             <Button variant="outline" size="sm" onClick={openBudgetsDialog} className="gap-2">
               <Target className="h-4 w-4" /> Budgets
             </Button>
@@ -612,15 +619,23 @@ export function ExpensesSection() {
                     <TableCell>
                       <Badge
                         variant="outline"
-                        className={`max-w-[170px] truncate font-medium ${categoryBadgeClasses(r.category)}`}
+                        className={`max-w-[170px] font-medium ${categoryBadgeClasses(r.category)}`}
                         title={r.category}
                       >
-                        {r.category}
+                        <span className="min-w-0 truncate">{r.category}</span>
                       </Badge>
                     </TableCell>
                     <TableCell>
                       <div className="min-w-0">
-                        <p className="truncate text-sm font-medium">{r.description}</p>
+                        <p className="flex items-center gap-1.5 truncate text-sm font-medium">
+                          {r.note === 'Recurring template' && (
+                            <Repeat
+                              className="h-3.5 w-3.5 shrink-0 text-primary"
+                              aria-label="Created from a recurring template"
+                            />
+                          )}
+                          {r.description}
+                        </p>
                         {r.vendor && (
                           <p className="truncate text-[11px] text-muted-foreground">
                             {r.vendor}
@@ -792,6 +807,15 @@ export function ExpensesSection() {
         cancelText="Cancel"
         onConfirm={handleDelete}
       />
+
+      {/* Recurring templates dialog */}
+      {recurringOpen && (
+        <RecurringTemplatesDialog
+          month={month}
+          onClose={() => setRecurringOpen(false)}
+          onApplied={fetchExpenses}
+        />
+      )}
     </div>
   )
 }
@@ -902,7 +926,7 @@ function ExpenseDialog({ mode, expense, onClose, onSaved }: ExpenseDialogProps) 
             <div className="flex flex-col gap-1.5">
               <Label>Category *</Label>
               <Select
-                value={form.category || undefined}
+                value={form.category}
                 onValueChange={(v) => setField('category', v)}
               >
                 <SelectTrigger>
@@ -1000,5 +1024,450 @@ function ExpenseDialog({ mode, expense, onClose, onSaved }: ExpenseDialogProps) 
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+// ─── Recurring expense templates dialog ────────────────────────────────────
+// Manage monthly standing expenses (rent, internet, cleaning…) and apply them
+// to the selected month in one click. Applying is idempotent — templates that
+// already produced an expense in the month are reported as skipped.
+
+interface RecurringTemplate {
+  id: string
+  name: string
+  category: string
+  amount: number
+  vendor?: string
+  method: string
+  day: number
+  active: boolean
+}
+
+interface RecurringTemplatesDialogProps {
+  month: string
+  onClose: () => void
+  onApplied: () => void
+}
+
+function RecurringTemplatesDialog({ month, onClose, onApplied }: RecurringTemplatesDialogProps) {
+  const [templates, setTemplates] = useState<RecurringTemplate[]>([])
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [editing, setEditing] = useState<RecurringTemplate | null>(null) // template being edited
+  const [adding, setAdding] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [applying, setApplying] = useState(false)
+
+  const load = useCallback(() => {
+    setLoading(true)
+    setLoadError(null)
+    api<{ templates: RecurringTemplate[] }>('/api/expenses/templates')
+      .then((r) => {
+        setTemplates(r.templates || [])
+        setSelected(new Set((r.templates || []).filter((t) => t.active !== false).map((t) => t.id)))
+      })
+      .catch((e) => setLoadError(e instanceof Error ? e.message : 'Failed to load templates'))
+      .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => {
+    const t = setTimeout(load, 0)
+    return () => clearTimeout(t)
+  }, [load])
+
+  const selectedTotal = useMemo(
+    () => templates.filter((t) => selected.has(t.id)).reduce((s, t) => s + (t.amount || 0), 0),
+    [templates, selected],
+  )
+
+  const toggle = (id: string) =>
+    setSelected((s) => {
+      const next = new Set(s)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+
+  // Persist the current template list, then reload + report
+  const persist = async (list: RecurringTemplate[], successMsg: string) => {
+    setSaving(true)
+    try {
+      const r = await api<{ templates: RecurringTemplate[] }>('/api/expenses/templates', {
+        method: 'PUT',
+        body: JSON.stringify({ templates: list }),
+      })
+      setTemplates(r.templates || [])
+      setSelected(new Set((r.templates || []).filter((t) => t.active !== false).map((t) => t.id)))
+      toast.success(successMsg)
+      return true
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to save templates')
+      return false
+    } finally {
+      setSaving(false)
+      setAdding(false)
+      setEditing(null)
+    }
+  }
+
+  const removeTemplate = (t: RecurringTemplate) => {
+    const list = templates.filter((x) => x.id !== t.id)
+    void persist(list, `"${t.name}" removed from recurring templates`)
+  }
+
+  const applySelected = async () => {
+    setApplying(true)
+    try {
+      const r = await api<{
+        created: number
+        createdTotal: number
+        skipped: { name: string; reason: string }[]
+        message: string
+      }>('/api/expenses/apply-templates', {
+        method: 'POST',
+        body: JSON.stringify({ month, templateIds: Array.from(selected) }),
+      })
+      if (r.created > 0) {
+        toast.success(r.message, {
+          description: `${currency(r.createdTotal)} recorded · ${monthLabel(month)}`,
+        })
+      } else {
+        toast.info(r.message)
+      }
+      if (r.skipped.length > 0) {
+        toast.warning(
+          `${r.skipped.length} skipped (already recorded this month)`,
+          { description: r.skipped.map((s) => s.name).join(', ') },
+        )
+      }
+      onApplied()
+      onClose()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to apply templates')
+    } finally {
+      setApplying(false)
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto scroll-thin sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <Repeat className="h-4 w-4" />
+            </div>
+            Recurring expenses
+          </DialogTitle>
+          <DialogDescription>
+            Set up monthly standing expenses once — rent, internet, cleaning — then apply them to
+            any month with one click. Applying twice never duplicates entries.
+          </DialogDescription>
+        </DialogHeader>
+
+        {loading ? (
+          <div className="space-y-2">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-16 w-full" />
+            ))}
+          </div>
+        ) : loadError ? (
+          <div className="flex flex-col items-center gap-3 py-6">
+            <AlertCircle className="h-8 w-8 text-destructive" />
+            <p className="text-sm text-muted-foreground">{loadError}</p>
+            <Button size="sm" variant="outline" onClick={load}>
+              Retry
+            </Button>
+          </div>
+        ) : (
+          <>
+            {/* Template list */}
+            {templates.length === 0 ? (
+              <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed p-6 text-center">
+                <Repeat className="h-8 w-8 text-muted-foreground/50" />
+                <p className="text-sm font-medium">No recurring templates yet</p>
+                <p className="max-w-xs text-xs text-muted-foreground">
+                  Add the expenses you pay every month and stop typing them over and over.
+                </p>
+              </div>
+            ) : (
+              <div className="max-h-64 space-y-2 overflow-y-auto scroll-thin pr-0.5">
+                {templates.map((t) => {
+                  const isSel = selected.has(t.id)
+                  return (
+                    <div
+                      key={t.id}
+                      className={`group flex items-center gap-3 rounded-xl border p-3 transition-all hover:shadow-sm ${
+                        isSel ? 'border-primary/40 bg-primary/5' : 'bg-card'
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        role="checkbox"
+                        aria-checked={isSel}
+                        aria-label={`Select ${t.name}`}
+                        onClick={() => toggle(t.id)}
+                        className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition-all ${
+                          isSel
+                            ? 'border-primary bg-primary text-primary-foreground'
+                            : 'border-muted-foreground/40 hover:border-primary'
+                        }`}
+                      >
+                        {isSel && <CheckCircle2 className="h-3.5 w-3.5" />}
+                      </button>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium">{t.name}</p>
+                        <div className="mt-0.5 flex items-center gap-2 overflow-hidden whitespace-nowrap">
+                          <Badge
+                            variant="outline"
+                            className={`hidden max-w-[140px] shrink-0 sm:inline-flex ${categoryBadgeClasses(t.category)}`}
+                            title={t.category}
+                          >
+                            <span className="min-w-0 truncate">{t.category}</span>
+                          </Badge>
+                          <span className="truncate text-[11px] text-muted-foreground">
+                            <span className="font-medium text-primary/80">day {t.day}</span>
+                            {' · '}
+                            {/* Mobile: category as text (badge hidden); Desktop: vendor · method */}
+                            <span className="sm:hidden">{t.category}</span>
+                            <span className="hidden sm:inline">
+                              {[t.vendor, t.method].filter(Boolean).join(' · ') || '—'}
+                            </span>
+                          </span>
+                        </div>
+                      </div>
+                      {/* Amount above actions on mobile, side-by-side on desktop */}
+                      <div className="flex shrink-0 flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-3">
+                        <p className="text-sm font-semibold tabular-nums">{currency(t.amount)}</p>
+                        {/* Touch devices have no hover — keep actions visible on mobile */}
+                        <div className="flex gap-0.5 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            aria-label={`Edit ${t.name}`}
+                            onClick={() => {
+                              setAdding(false)
+                              setEditing(t)
+                            }}
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 text-destructive hover:text-destructive"
+                            aria-label={`Delete ${t.name}`}
+                            onClick={() => removeTemplate(t)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
+            {/* Inline add / edit form */}
+            {(adding || editing) && (
+              <TemplateForm
+                initial={editing}
+                onCancel={() => {
+                  setAdding(false)
+                  setEditing(null)
+                }}
+                onSave={(tpl) => {
+                  const exists = editing ? templates.some((x) => x.id === editing.id) : false
+                  const entry: RecurringTemplate = {
+                    ...tpl,
+                    id: exists ? editing!.id : tpl.name.toLowerCase().replace(/\s+/g, '-') + '-' + Date.now().toString(36),
+                  }
+                  const list = exists
+                    ? templates.map((x) => (x.id === entry.id ? entry : x))
+                    : [...templates, entry]
+                  void persist(
+                    list,
+                    exists ? `"${entry.name}" updated` : `"${entry.name}" added to templates`,
+                  )
+                }}
+              />
+            )}
+
+            {/* Selection summary */}
+            {templates.length > 0 && (
+              <div className="flex items-center justify-between gap-3 rounded-lg bg-muted/40 px-3 py-2 text-xs">
+                <span className="text-muted-foreground">
+                  {selected.size} of {templates.length} selected
+                </span>
+                <span className="font-semibold tabular-nums">
+                  ≈ {currency(selectedTotal)} per month
+                </span>
+              </div>
+            )}
+          </>
+        )}
+
+        <DialogFooter className="flex-col gap-2 sm:flex-row">
+          <Button
+            variant="outline"
+            onClick={() => {
+              setEditing(null)
+              setAdding(true)
+            }}
+            disabled={adding || !!editing || saving}
+            className="sm:mr-auto"
+          >
+            <Plus className="mr-2 h-4 w-4" /> Add template
+          </Button>
+          <Button variant="ghost" onClick={onClose}>
+            Close
+          </Button>
+          <Button
+            onClick={applySelected}
+            disabled={applying || saving || loading || selected.size === 0}
+            className="gap-2"
+          >
+            {applying ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <CheckCircle2 className="h-4 w-4" />
+            )}
+            Apply {selected.size > 0 ? selected.size : ''} to {monthLabel(month)}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ─── Inline template add/edit form ─────────────────────────────────────────
+function TemplateForm({
+  initial,
+  onSave,
+  onCancel,
+}: {
+  initial: RecurringTemplate | null
+  onSave: (t: Omit<RecurringTemplate, 'id'>) => void
+  onCancel: () => void
+}) {
+  const [name, setName] = useState(initial?.name ?? '')
+  const [category, setCategory] = useState(initial?.category ?? '')
+  const [amount, setAmount] = useState(initial ? String(initial.amount) : '')
+  const [vendor, setVendor] = useState(initial?.vendor ?? '')
+  const [method, setMethod] = useState(initial?.method ?? 'Cash')
+  const [day, setDay] = useState(initial ? String(initial.day) : '1')
+
+  const amountNum = parseFloat(amount)
+  const dayNum = parseInt(day, 10)
+  const valid =
+    name.trim() !== '' && category !== '' && !isNaN(amountNum) && amountNum > 0 && dayNum >= 1 && dayNum <= 28
+
+  return (
+    <div className="grid gap-3 rounded-xl border border-primary/30 bg-primary/5 p-3">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="flex flex-col gap-1.5">
+          <Label className="text-xs">Description *</Label>
+          <Input
+            autoFocus
+            placeholder="e.g. Building rent"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className="h-8"
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label className="text-xs">Category *</Label>
+          <Select value={category} onValueChange={setCategory}>
+            <SelectTrigger className="h-8">
+              <SelectValue placeholder="Select category" />
+            </SelectTrigger>
+            <SelectContent>
+              {EXPENSE_CATEGORIES.map((c) => (
+                <SelectItem key={c} value={c}>
+                  {c}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="flex flex-col gap-1.5">
+          <Label className="text-xs">Amount (LKR) *</Label>
+          <Input
+            type="number"
+            min={0}
+            step={100}
+            placeholder="0"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            className="h-8"
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label className="text-xs">Day of month</Label>
+          <Input
+            type="number"
+            min={1}
+            max={28}
+            value={day}
+            onChange={(e) => setDay(e.target.value)}
+            className="h-8"
+          />
+        </div>
+        <div className="col-span-2 flex flex-col gap-1.5">
+          <Label className="text-xs">Vendor</Label>
+          <Input
+            placeholder="Optional"
+            value={vendor}
+            onChange={(e) => setVendor(e.target.value)}
+            className="h-8"
+          />
+        </div>
+      </div>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="flex w-40 flex-col gap-1.5">
+          <Label className="text-xs">Method</Label>
+          <Select value={method} onValueChange={setMethod}>
+            <SelectTrigger className="h-8">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {EXPENSE_METHODS.map((m) => (
+                <SelectItem key={m} value={m}>
+                  {m}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="ghost" size="sm" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            disabled={!valid}
+            onClick={() =>
+              onSave({
+                name: name.trim(),
+                category,
+                amount: Math.round(amountNum * 100) / 100,
+                vendor: vendor.trim() || undefined,
+                method,
+                day: dayNum,
+                active: true,
+              })
+            }
+          >
+            {initial ? 'Save changes' : 'Add template'}
+          </Button>
+        </div>
+      </div>
+    </div>
   )
 }

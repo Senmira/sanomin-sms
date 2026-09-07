@@ -1752,7 +1752,7 @@ async function printPayslip(
   <div class="sheet">
     <div class="head">
       <div style="display:flex;align-items:center;gap:12px;">
-        <img src="/sanomin-logo.jpg" alt="${school.shortName}" style="width:40px;height:40px;border-radius:8px;object-fit:cover;border:1px solid rgba(255,255,255,.25);" />
+        <img src="${school.logoUrl}" alt="${school.shortName}" style="width:40px;height:40px;border-radius:8px;object-fit:cover;border:1px solid rgba(255,255,255,.25);" />
         <div class="brand">${school.shortName}<small>${school.subtitle}</small></div>
       </div>
       <div class="slip"><h2>PAYSLIP</h2><p>${payrollMonthLabel(entry.month)}</p><p style="font-size:10px;opacity:.65;text-transform:none;letter-spacing:.2px;">${[school.address, school.phone].filter(Boolean).join(' · ')}</p></div>

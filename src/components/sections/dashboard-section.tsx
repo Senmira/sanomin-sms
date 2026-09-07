@@ -40,8 +40,14 @@ import {
   Loader2,
   ShieldCheck,
   Database,
+  Cake,
+  PartyPopper,
+  Gift,
+  Send,
+  Sparkles,
 } from 'lucide-react'
 import { api } from '@/lib/api'
+import { toast } from 'sonner'
 import { SectionHeader } from '@/components/shared/section-header'
 import { StatCard } from '@/components/shared/stat-card'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -808,6 +814,9 @@ export function DashboardSection() {
 
       {/* Data health audit (records missing phones / EPF / schedules ...) */}
       <DataHealthCard onGoTo={setSection} />
+
+      {/* Upcoming birthdays & work anniversaries */}
+      <CelebrationsCard onGoTo={setSection} />
     </div>
   )
 }
@@ -1246,5 +1255,194 @@ function AtRiskDialog({ open, onOpenChange, onGoToStudents }: AtRiskDialogProps)
         )}
       </DialogContent>
     </Dialog>
+  )
+}
+
+// ─── Celebrations (upcoming birthdays & work anniversaries) ────────────────
+interface Celebration {
+  personType: 'Student' | 'Teacher'
+  ref: string
+  name: string
+  date: string
+  daysUntil: number
+  milestone: number | null
+  kind: 'birthday' | 'anniversary'
+}
+interface CelebrationsData {
+  days: number
+  todayCount: number
+  total: number
+  celebrations: Celebration[]
+}
+
+function daysLabel(n: number): string {
+  if (n === 0) return 'Today 🎉'
+  if (n === 1) return 'Tomorrow'
+  return `in ${n} days`
+}
+
+function CelebrationsCard({ onGoTo }: { onGoTo: (s: 'students' | 'teachers') => void }) {
+  const [data, setData] = useState<CelebrationsData | null>(null)
+  const [posting, setPosting] = useState<string | null>(null) // ref being posted
+
+  useEffect(() => {
+    let alive = true
+    api<CelebrationsData>('/api/celebrations?days=30')
+      .then((d) => {
+        if (alive) setData(d)
+      })
+      .catch(() => {
+        /* widget stays silent if the scan fails */
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  if (!data || data.total === 0) return null
+
+  const postAnnouncement = async (c: Celebration) => {
+    setPosting(c.ref)
+    try {
+      const schoolName = c.kind === 'birthday'
+        ? `Happy Birthday, ${c.name.split(' ')[0]}! 🎂`
+        : `${c.milestone} years with us — thank you, ${c.name.split(' ')[0]}! 🎉`
+      const body = c.kind === 'birthday'
+        ? `${c.name} (${c.ref}) turns ${c.milestone} on ${new Date(c.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'long' })}. Join us in wishing a very happy birthday — families are welcome to send wishes via the class teachers.`
+        : `${c.name} (${c.ref}) completes ${c.milestone} year${c.milestone === 1 ? '' : 's'} with us on ${new Date(c.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'long' })}. Thank you for everything you do for our children!`
+      await api('/api/announcements', {
+        method: 'POST',
+        body: JSON.stringify({
+          title: schoolName,
+          body,
+          category: 'Event',
+          audience: 'All',
+          priority: 'Normal',
+          status: 'Published',
+        }),
+      })
+      toast.success(`Announcement posted for ${c.name}`)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to post announcement')
+    } finally {
+      setPosting(null)
+    }
+  }
+
+  return (
+    <Card className="overflow-hidden border-pink-500/20">
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+        <div className="flex items-center gap-2">
+          <div className="relative flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-pink-500/20 to-amber-500/20 text-pink-600 dark:text-pink-400">
+            <Cake className="h-5 w-5" />
+            {data.todayCount > 0 && (
+              <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-pink-500 text-[9px] font-bold text-white shadow">
+                {data.todayCount}
+              </span>
+            )}
+          </div>
+          <div>
+            <CardTitle className="text-base font-semibold">Celebrations</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Birthdays &amp; work anniversaries in the next {data.days} days
+            </p>
+          </div>
+        </div>
+        {data.todayCount === 0 && (
+          <Badge variant="outline" className="gap-1 border-pink-500/40 text-[10px] text-pink-600 dark:text-pink-400">
+            <Sparkles className="h-3 w-3" /> {data.total} upcoming
+          </Badge>
+        )}
+      </CardHeader>
+      <CardContent>
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {data.celebrations.slice(0, 6).map((c) => {
+            const isToday = c.daysUntil === 0
+            const isBirthday = c.kind === 'birthday'
+            const Icon = isBirthday ? Cake : Gift
+            return (
+              <div
+                key={`${c.personType}-${c.ref}`}
+                className={cn(
+                  'group flex items-center gap-3 rounded-xl border p-3 transition-all hover:shadow-sm',
+                  isToday
+                    ? 'border-pink-500/50 bg-gradient-to-br from-pink-500/10 to-amber-500/10'
+                    : 'border-border bg-muted/20 hover:border-pink-500/40',
+                )}
+              >
+                <div
+                  className={cn(
+                    'flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-bold',
+                    isBirthday
+                      ? 'bg-pink-500/15 text-pink-600 dark:text-pink-400'
+                      : 'bg-violet-500/15 text-violet-600 dark:text-violet-400',
+                  )}
+                >
+                  {initials(c.name)}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium">{c.name}</p>
+                  <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                    <Icon className="h-3 w-3" />
+                    {isBirthday
+                      ? `turns ${c.milestone} · ${daysLabel(c.daysUntil)}`
+                      : `${c.milestone} yr${c.milestone === 1 ? '' : 's'} · ${daysLabel(c.daysUntil)}`}
+                  </p>
+                </div>
+                <div className="flex shrink-0 flex-col items-end gap-1">
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      'hidden text-[9px] sm:inline-flex',
+                      c.personType === 'Student'
+                        ? 'text-muted-foreground'
+                        : 'border-violet-500/40 text-violet-600 dark:text-violet-400',
+                    )}
+                  >
+                    {c.personType === 'Student' ? c.ref : 'Staff'}
+                  </Badge>
+                  {/* Touch devices have no hover — keep actions visible on mobile */}
+                  <div className="flex gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6"
+                      title="Post announcement"
+                      aria-label={`Post announcement for ${c.name}`}
+                      disabled={posting === c.ref}
+                      onClick={() => postAnnouncement(c)}
+                    >
+                      {posting === c.ref ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Send className="h-3 w-3" />
+                      )}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6"
+                      title={c.personType === 'Student' ? 'Open students' : 'Open teachers'}
+                      aria-label={`Go to ${c.personType === 'Student' ? 'students' : 'teachers'}`}
+                      onClick={() =>
+                        onGoTo(c.personType === 'Student' ? 'students' : 'teachers')
+                      }
+                    >
+                      <ArrowRight className="h-3 w-3" />
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+        {data.total > 6 && (
+          <p className="mt-3 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <PartyPopper className="h-3 w-3" />
+            +{data.total - 6} more celebration{data.total - 6 === 1 ? '' : 's'} this month
+          </p>
+        )}
+      </CardContent>
+    </Card>
   )
 }

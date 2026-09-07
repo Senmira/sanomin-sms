@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '@/lib/api'
 import { SectionHeader } from '@/components/shared/section-header'
 import {
@@ -17,7 +17,6 @@ import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
-import { toast } from 'sonner'
 import {
   School,
   ScanLine,
@@ -31,13 +30,20 @@ import {
   Mail,
   MapPin,
   ShieldCheck,
+  ImagePlus,
+  Trash2,
+  ImageIcon,
+  Loader2,
 } from 'lucide-react'
+import { useSchoolInfo, invalidateSchoolInfo, FALLBACK_LOGO } from '@/lib/school'
+import { toast } from 'sonner'
 
 interface Settings {
   school_name: string
   school_address: string
   school_phone: string
   school_email: string
+  school_logo: string
   academic_year: string
   barcode_prefix: string
   barcode_enabled: string
@@ -51,11 +57,39 @@ const DEFAULTS: Settings = {
   school_address: 'Angoda, Colombo, Sri Lanka',
   school_phone: '+94 11 234 5678',
   school_email: 'info@sanomin.lk',
+  school_logo: '',
   academic_year: '2025',
   barcode_prefix: 'SAN',
   barcode_enabled: 'true',
   fingerprint_enabled: 'true',
   checkin_grace_minutes: '15',
+}
+
+// Read an image File and downscale it to a square-friendly ≤256px JPEG data
+// URL so the logo stays small enough to live inside the Setting table.
+async function fileToCompressedDataUrl(file: File, max = 256): Promise<string> {
+  const raw = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result))
+    reader.onerror = () => reject(new Error('Could not read the file'))
+    reader.readAsDataURL(file)
+  })
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const el = new Image()
+    el.onload = () => resolve(el)
+    el.onerror = () => reject(new Error('Not a valid image'))
+    el.src = raw
+  })
+  const scale = Math.min(1, max / Math.max(img.width, img.height))
+  const w = Math.max(1, Math.round(img.width * scale))
+  const h = Math.max(1, Math.round(img.height * scale))
+  const canvas = document.createElement('canvas')
+  canvas.width = w
+  canvas.height = h
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return raw
+  ctx.drawImage(img, 0, 0, w, h)
+  return canvas.toDataURL('image/jpeg', 0.85)
 }
 
 export function SettingsSection() {
@@ -92,11 +126,36 @@ export function SettingsSection() {
     try {
       await api('/api/settings', { method: 'PUT', body: JSON.stringify(settings) })
       setOriginal(settings)
-      toast.success('Settings saved')
+      invalidateSchoolInfo()
+      toast.success('Settings saved — branding updated everywhere')
     } catch (e: any) {
       toast.error(e.message || 'Save failed')
     } finally {
       setSaving(false)
+    }
+  }
+
+  // ─── Logo upload ─────────────────────────────────────────────────────
+  const logoRef = useRef<HTMLInputElement>(null)
+  const [uploadingLogo, setUploadingLogo] = useState(false)
+  const logoPreview = settings.school_logo || FALLBACK_LOGO
+
+  const handleLogoFile = async (file: File | undefined) => {
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      toast.error('Please choose an image file (PNG or JPG)')
+      return
+    }
+    setUploadingLogo(true)
+    try {
+      const dataUrl = await fileToCompressedDataUrl(file)
+      set('school_logo', dataUrl)
+      toast.success('Logo ready — click “Save changes” to apply')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not process the image')
+    } finally {
+      setUploadingLogo(false)
+      if (logoRef.current) logoRef.current.value = ''
     }
   }
 
@@ -166,6 +225,56 @@ export function SettingsSection() {
             </div>
           </CardHeader>
           <CardContent className="grid gap-4">
+            {/* Logo uploader */}
+            <div className="flex flex-wrap items-center gap-4 rounded-xl border bg-muted/30 p-3">
+              <div className="relative h-16 w-16 shrink-0 overflow-hidden rounded-xl ring-1 ring-border shadow-sm">
+                <img src={logoPreview} alt="School logo preview" className="h-full w-full object-cover" />
+                {uploadingLogo && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-background/70">
+                    <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                  </div>
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="flex items-center gap-1.5 text-sm font-medium">
+                  <ImageIcon className="h-3.5 w-3.5 text-muted-foreground" /> School logo
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Shown in the sidebar and printed on receipts, statements, payslips, registers & ID
+                  cards. Square images work best — auto-resized to 256px.
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  ref={logoRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => handleLogoFile(e.target.files?.[0])}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={uploadingLogo}
+                  onClick={() => logoRef.current?.click()}
+                >
+                  <ImagePlus className="mr-2 h-4 w-4" />
+                  {settings.school_logo ? 'Replace' : 'Upload'}
+                </Button>
+                {settings.school_logo && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="text-destructive hover:text-destructive"
+                    onClick={() => set('school_logo', '')}
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" /> Remove
+                  </Button>
+                )}
+              </div>
+            </div>
             <Field label="School name" icon={<School className="h-4 w-4" />}>
               <Input value={settings.school_name} onChange={(e) => set('school_name', e.target.value)} />
             </Field>

@@ -1674,8 +1674,8 @@ function IdCardDialog({
             }}
           >
             <img
-              src="/sanomin-logo.jpg"
-              alt="SANOMIN logo"
+              src={school.logoUrl}
+              alt="School logo"
               className="size-10 rounded-full bg-white object-cover ring-2 ring-white/40"
             />
             <div className="min-w-0">
