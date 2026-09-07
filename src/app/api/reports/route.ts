@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 
-// GET /api/reports?type=attendance|enrollment
+// GET /api/reports?type=attendance|enrollment|heatmap
 //   attendance: ?from=yyyy-mm-dd &to=yyyy-mm-dd → daily aggregates + method/status breakdown + by program
 //   enrollment: → by program, by age group, by gender, by religion, by status, recent admissions
+//   heatmap: ?month=YYYY-MM → daily attendance grid for the month (rate per day)
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
   const type = searchParams.get('type') || 'attendance'
@@ -11,7 +12,131 @@ export async function GET(req: Request) {
   if (type === 'enrollment') {
     return enrollmentReport()
   }
+  if (type === 'heatmap') {
+    return heatmapReport(searchParams)
+  }
   return attendanceReport(searchParams)
+}
+
+// Heatmap: daily attendance rate for a given month (or current month)
+async function heatmapReport(searchParams: URLSearchParams) {
+  const monthStr = searchParams.get('month') // "2026-09"
+  const now = new Date()
+  const year = monthStr ? parseInt(monthStr.split('-')[0], 10) : now.getFullYear()
+  const month = monthStr ? parseInt(monthStr.split('-')[1], 10) - 1 : now.getMonth() // 0-indexed
+
+  const firstDay = new Date(year, month, 1)
+  const lastDay = new Date(year, month + 1, 0, 23, 59, 59, 999)
+  const daysInMonth = lastDay.getDate()
+
+  const records = await db.attendance.findMany({
+    where: { date: { gte: firstDay, lte: lastDay } },
+    select: {
+      date: true, personType: true, status: true,
+    },
+  })
+
+  // Total active students (denominator for rate)
+  const totalStudents = await db.student.count({ where: { status: 'Active' } })
+
+  // Build per-day map
+  const dayMap: Record<number, { present: number; late: number; absent: number; students: number; teachers: number }> = {}
+  for (let d = 1; d <= daysInMonth; d++) {
+    dayMap[d] = { present: 0, late: 0, absent: 0, students: 0, teachers: 0 }
+  }
+  for (const r of records) {
+    const day = r.date.getDate()
+    if (!dayMap[day]) continue
+    if (r.status === 'Present') dayMap[day].present++
+    if (r.status === 'Late') dayMap[day].late++
+    if (r.status === 'Absent') dayMap[day].absent++
+    if (r.personType === 'Student') dayMap[day].students++
+    else dayMap[day].teachers++
+  }
+
+  // Build weeks grid (Mon-first). Compute leading blanks for the first week.
+  // JS getDay: 0=Sun..6=Sat. Convert to Mon-first index: Mon=0..Sun=6
+  const firstDow = (firstDay.getDay() + 6) % 7
+  const cells: Array<{
+    day: number | null
+    present: number
+    late: number
+    absent: number
+    students: number
+    teachers: number
+    rate: number | null // 0-100 student attendance rate
+    isFuture: boolean
+    isToday: boolean
+  }> = []
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  for (let i = 0; i < firstDow; i++) {
+    cells.push({ day: null, present: 0, late: 0, absent: 0, students: 0, teachers: 0, rate: null, isFuture: false, isToday: false })
+  }
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dayData = dayMap[d]
+    const cellDate = new Date(year, month, d)
+    const rate = totalStudents > 0 && dayData.students > 0
+      ? Math.round((dayData.present / totalStudents) * 100)
+      : (dayData.students > 0 ? 0 : null)
+    cells.push({
+      day: d,
+      present: dayData.present,
+      late: dayData.late,
+      absent: dayData.absent,
+      students: dayData.students,
+      teachers: dayData.teachers,
+      rate,
+      isFuture: cellDate > today,
+      isToday: cellDate.getTime() === today.getTime(),
+    })
+  }
+  // Pad trailing to complete the last week
+  while (cells.length % 7 !== 0) {
+    cells.push({ day: null, present: 0, late: 0, absent: 0, students: 0, teachers: 0, rate: null, isFuture: false, isToday: false })
+  }
+
+  // Month summary
+  const monthPresent = records.filter((r) => r.status === 'Present').length
+  const monthLate = records.filter((r) => r.status === 'Late').length
+  const monthAbsent = records.filter((r) => r.status === 'Absent').length
+  const activeDays = Object.values(dayMap).filter((d) => d.students > 0).length
+  const avgRate = activeDays > 0
+    ? Math.round((monthPresent / (activeDays * totalStudents)) * 100)
+    : 0
+
+  return NextResponse.json({
+    month: `${year}-${String(month + 1).padStart(2, '0')}`,
+    monthLabel: new Date(year, month, 1).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' }),
+    totalStudents,
+    daysInMonth,
+    activeDays,
+    cells,
+    summary: {
+      present: monthPresent,
+      late: monthLate,
+      absent: monthAbsent,
+      avgRate,
+      bestDay: (() => {
+        let best: { day: number; rate: number } | null = null
+        for (const c of cells) {
+          if (c.day && c.rate !== null) {
+            if (!best || c.rate > best.rate) best = { day: c.day, rate: c.rate }
+          }
+        }
+        return best
+      })(),
+      worstDay: (() => {
+        let worst: { day: number; rate: number } | null = null
+        for (const c of cells) {
+          if (c.day && c.rate !== null) {
+            if (!worst || c.rate < worst.rate) worst = { day: c.day, rate: c.rate }
+          }
+        }
+        return worst
+      })(),
+    },
+  })
 }
 
 async function attendanceReport(searchParams: URLSearchParams) {
@@ -60,6 +185,7 @@ async function attendanceReport(searchParams: URLSearchParams) {
   for (const r of records) {
     if (r.personType !== 'Student' || !r.student) continue
     for (const e of r.student.enrollments) {
+      if (!e.program) continue // enrollment may not have a program (class-only enrollment)
       const code = e.program.code
       if (!programCount[code])
         programCount[code] = { code, name: e.program.name, color: e.program.color, count: 0 }

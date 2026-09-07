@@ -435,3 +435,50 @@ Task: QA assessment + Classes timetable redesign + Attendance sparklines/time-ag
   - Global quick-search (student/teacher/class/receipt lookup from topbar)
   - Dashboard "live activity" feed with real-time WebSocket updates
 - The 15-min recurring webDevReview cron (job 366041) will continue QA + feature additions autonomously.
+
+---
+Task ID: 10 (webDevReview cron round 4)
+Agent: main (orchestrator) — triggered by 15-min recurring webDevReview cron
+Task: QA assessment + bug fix (reports null crash) + new Attendance Heatmap Calendar feature
+
+## Current project status assessment
+- App had 10 modules (Dashboard, Students, Teachers, Attendance, Classes, Programs, Fees, Announcements, Reports, Settings) after round 3. Dev server running on :3000, lint clean, all sections at 9/10 polish.
+- QA via agent-browser confirmed all 10 sections render error-free. VLM rated Teachers/Programs/Dashboard 8/10. Identified improvement: Reports section could benefit from a visual calendar view of attendance (the #1 recommended next feature from prior rounds).
+
+## Completed modifications & verification
+
+### Bug fix: Reports attendance API crash (CRITICAL)
+- **Root cause**: `GET /api/reports?type=attendance` returned 500 with `TypeError: Cannot read properties of null (reading 'code')` at line 188. The attendance report iterates student enrollments and accessed `e.program.code` directly, but class-only enrollments (added in round 3 via `seed_class_enroll.ts`) have `programId: null` because they link a student to a `Class` not a `Program`. The Prisma `Enrollment.program` relation is optional (`Program?`), so `e.program` is null for those.
+- **Fix**: Added a null guard `if (!e.program) continue` before accessing `e.program.code`. Verified: all 3 report types (attendance/enrollment/heatmap) now return 200.
+
+### New feature: Attendance Heatmap Calendar (Task ID 10-a)
+- **API**: Added `heatmapReport()` to `/api/reports?type=heatmap&month=YYYY-MM`. Returns a month grid (Mon-first, 7-col × 5-row cells) with per-day attendance data: present/late/absent counts, student attendance rate (present/totalActiveStudents × 100), isFuture/isToday flags, plus a summary (avgRate, bestDay, worstDay, activeDays). Handles leading/trailing blanks to complete weeks.
+- **UI**: Added `HeatmapPanel` component to `reports-section.tsx` as a new "Heatmap" tab (between Attendance and Enrollment tabs). Features:
+  - 4 stat cards: Avg Attendance Rate, Present, Late Arrivals, Best Day (with rate + day number)
+  - Month calendar grid with color-coded cells: emerald (≥90%), light emerald (75-89%), amber (50-74%), red (<50%), muted (no data). Each cell shows day number + rate %.
+  - "Today" indicator: pulsing primary dot on the current day + ring highlight
+  - Future days: rendered faded with "—"
+  - Month navigation: prev/next chevron buttons + "Today" quick-jump button (disabled next when on current month)
+  - Legend explaining the color scale
+  - Hover detail: hovering a day shows a detail chip (day, rate %, present/late/absent breakdown)
+  - Best/Worst day insight cards at the bottom (emerald for best, red for worst)
+  - Tooltips on each cell for accessibility
+- **Verified**: 35 calendar cells render (September 2026 = 5 weeks), "September 2026" label correct, month navigation switches to "August 2026" on prev click. VLM-rated 9/10: "calendar grid present with color-coded cells, stat cards displayed, legend defines color scale, navigation buttons work."
+
+### Verification
+- `bun run lint` → 0 errors, 0 warnings (fixed one `react-hooks/set-state-in-effect` in HeatmapPanel by deferring setLoading via Promise.resolve).
+- agent-browser sweep: all 10 sections render with zero runtime/console errors.
+- All 3 report API types return 200.
+- VLM-rated heatmap 9/10.
+- Current September 2026 heatmap shows real data: 7 active days, avg 70% rate, best day 7 (92%), worst day 6 (Sunday, 21% — expected weekend dip).
+
+## Unresolved issues / risks & next-phase recommendations
+- **No critical bugs remaining.** All 10 modules operational + new heatmap feature verified.
+- **Next feature candidates** (not yet implemented):
+  - Export PDF reports (currently CSV only)
+  - Student photo upload / AI avatar generation (would use image-generation skill)
+  - Global quick-search (student/teacher/class/receipt lookup from topbar)
+  - Teachers "Join Date"/"Last Active" column (VLM suggested)
+  - Programs visual icons + filter chips (VLM suggested)
+  - Dashboard chart hover tooltips with drill-down
+- The 15-min recurring webDevReview cron (job 366041) will continue QA + feature additions autonomously.
