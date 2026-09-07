@@ -1,0 +1,1750 @@
+     1→     1→'use client'
+     2→     2→
+     3→     3→import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+     4→     4→import { toast } from 'sonner'
+     5→     5→import {
+     6→     6→  Wallet,
+     7→     7→  Plus,
+     8→     8→  Pencil,
+     9→     9→  Trash2,
+    10→    10→  Download,
+    11→    11→  Receipt as ReceiptIcon,
+    12→    12→  Printer,
+    13→    13→  CheckCircle2,
+    14→    14→  Clock,
+    15→    15→  AlertCircle,
+    16→    16→  IndianRupee,
+    17→    17→  Search,
+    18→    18→  X,
+    19→    19→  MoreVertical,
+    20→    20→  Loader2,
+    21→    21→  Users,
+    22→    22→  Filter,
+    23→    23→  CircleDollarSign,
+    24→    24→  Zap,
+    25→    25→  BellRing,
+    26→    26→} from 'lucide-react'
+    27→    27→
+    28→    28→import { api } from '@/lib/api'
+    29→    29→import {
+    30→    30→  PaymentRow,
+    31→    31→  PaymentSummary,
+    32→    32→  ProgramRow,
+    33→    33→  StudentRow,
+    34→    34→  PAYMENT_STATUSES,
+    35→    35→  PAYMENT_METHODS,
+    36→    36→} from '@/lib/types'
+    37→    37→import { currency, currencyCompact, fmtDate, initials, avatarColor } from '@/lib/format'
+    38→    38→
+    39→    39→import { SectionHeader } from '@/components/shared/section-header'
+    40→    40→import { StatCard } from '@/components/shared/stat-card'
+    41→    41→import { EmptyState } from '@/components/shared/empty-state'
+    42→    42→import { ConfirmDialog } from '@/components/shared/confirm-dialog'
+    43→    43→
+    44→    44→import { Button } from '@/components/ui/button'
+    45→    45→import { Input } from '@/components/ui/input'
+    46→    46→import { Label } from '@/components/ui/label'
+    47→    47→import { Textarea } from '@/components/ui/textarea'
+    48→    48→import { Badge } from '@/components/ui/badge'
+    49→    49→import { Card } from '@/components/ui/card'
+    50→    50→import { Checkbox } from '@/components/ui/checkbox'
+    51→    51→import { Skeleton } from '@/components/ui/skeleton'
+    52→    52→import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+    53→    53→import {
+    54→    54→  Dialog,
+    55→    55→  DialogContent,
+    56→    56→  DialogDescription,
+    57→    57→  DialogFooter,
+    58→    58→  DialogHeader,
+    59→    59→  DialogTitle,
+    60→    60→} from '@/components/ui/dialog'
+    61→    61→import {
+    62→    62→  DropdownMenu,
+    63→    63→  DropdownMenuContent,
+    64→    64→  DropdownMenuItem,
+    65→    65→  DropdownMenuSeparator,
+    66→    66→  DropdownMenuTrigger,
+    67→    67→} from '@/components/ui/dropdown-menu'
+    68→    68→import {
+    69→    69→  Select,
+    70→    70→  SelectContent,
+    71→    71→  SelectItem,
+    72→    72→  SelectTrigger,
+    73→    73→  SelectValue,
+    74→    74→} from '@/components/ui/select'
+    75→    75→import {
+    76→    76→  Table,
+    77→    77→  TableBody,
+    78→    78→  TableCell,
+    79→    79→  TableHead,
+    80→    80→  TableHeader,
+    81→    81→  TableRow,
+    82→    82→} from '@/components/ui/table'
+    83→    83→import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+    84→    84→
+    85→    85→// ─── Helpers ──────────────────────────────────────────────────────────────
+    86→    86→function currentMonth(): string {
+    87→    87→  const d = new Date()
+    88→    88→  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+    89→    89→}
+    90→    90→
+    91→    91→function lastNMonths(n: number): string[] {
+    92→    92→  const out: string[] = []
+    93→    93→  const d = new Date()
+    94→    94→  for (let i = 0; i < n; i++) {
+    95→    95→    const t = new Date(d.getFullYear(), d.getMonth() - i, 1)
+    96→    96→    out.push(`${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}`)
+    97→    97→  }
+    98→    98→  return out
+    99→    99→}
+   100→   100→
+   101→   101→function monthLabel(m: string): string {
+   102→   102→  const [y, mm] = m.split('-').map((n) => parseInt(n, 10))
+   103→   103→  const d = new Date(y, mm - 1, 1)
+   104→   104→  return d.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })
+   105→   105→}
+   106→   106→
+   107→   107→function toIsoDate(d: Date): string {
+   108→   108→  return d.toISOString().slice(0, 10)
+   109→   109→}
+   110→   110→
+   111→   111→function statusBadgeClasses(status: string): string {
+   112→   112→  switch (status) {
+   113→   113→    case 'Paid':
+   114→   114→      return 'border-transparent bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+   115→   115→    case 'Partial':
+   116→   116→      return 'border-transparent bg-amber-500/15 text-amber-700 dark:text-amber-300'
+   117→   117→    case 'Overdue':
+   118→   118→      return 'border-transparent bg-red-500/15 text-red-700 dark:text-red-300'
+   119→   119→    case 'Pending':
+   120→   120→    default:
+   121→   121→      return 'border-transparent bg-slate-500/15 text-slate-700 dark:text-slate-300'
+   122→   122→  }
+   123→   123→}
+   124→   124→
+   125→   125→function methodBadgeClasses(method: string): string {
+   126→   126→  switch (method) {
+   127→   127→    case 'Cash':
+   128→   128→      return 'border-transparent bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+   129→   129→    case 'Card':
+   130→   130→      return 'border-transparent bg-purple-500/10 text-purple-700 dark:text-purple-300'
+   131→   131→    case 'Bank':
+   132→   132→      return 'border-transparent bg-blue-500/10 text-blue-700 dark:text-blue-300'
+   133→   133→    case 'Online':
+   134→   134→      return 'border-transparent bg-amber-500/10 text-amber-700 dark:text-amber-300'
+   135→   135→    default:
+   136→   136→      return 'border-transparent bg-muted text-muted-foreground'
+   137→   137→  }
+   138→   138→}
+   139→   139→
+   140→   140→// ─── Bill line-item helpers ────────────────────────────────────────────────
+   141→   141→type BillProgram = { id: string; code: string; name: string; color: string }
+   142→   142→
+   143→   143→// Distinct programmes on a bill, from its line items (falls back to the
+   144→   144→// legacy single-programme column when items are missing).
+   145→   145→function billPrograms(p: PaymentRow): BillProgram[] {
+   146→   146→  const out: BillProgram[] = []
+   147→   147→  for (const it of p.items ?? []) {
+   148→   148→    const prog = it.program
+   149→   149→    if (prog && !out.some((x) => x.id === prog.id)) out.push(prog)
+   150→   150→  }
+   151→   151→  if (out.length === 0 && p.program) out.push(p.program)
+   152→   152→  return out
+   153→   153→}
+   154→   154→
+   155→   155→interface BillLine {
+   156→   156→  key: string
+   157→   157→  description: string
+   158→   158→  amount: number
+   159→   159→  color: string | null
+   160→   160→}
+   161→   161→
+   162→   162→// One row per bill line item for receipts (falls back to the legacy
+   163→   163→// single-programme amount when items are missing).
+   164→   164→function billLines(p: PaymentRow): BillLine[] {
+   165→   165→  if (p.items && p.items.length > 0) {
+   166→   166→    return p.items.map((it, i) => ({
+   167→   167→      key: it.programId ?? `item-${i}`,
+   168→   168→      description: it.description ?? it.program?.name ?? 'Fee item',
+   169→   169→      amount: it.amount,
+   170→   170→      color: it.program?.color ?? null,
+   171→   171→    }))
+   172→   172→  }
+   173→   173→  return [
+   174→   174→    {
+   175→   175→      key: p.programId ?? 'amount',
+   176→   176→      description: p.program?.name ?? 'Fee',
+   177→   177→      amount: p.amount,
+   178→   178→      color: p.program?.color ?? null,
+   179→   179→    },
+   180→   180→  ]
+   181→   181→}
+   182→   182→
+   183→   183→// ─── Response shapes ──────────────────────────────────────────────────────
+   184→   184→interface PaymentListResponse {
+   185→   185→  data: PaymentRow[]
+   186→   186→  total: number
+   187→   187→  summary: PaymentSummary
+   188→   188→}
+   189→   189→
+   190→   190→// ─── Form state ────────────────────────────────────────────────────────────
+   191→   191→interface FormState {
+   192→   192→  studentId: string
+   193→   193→  programIds: string[]
+   194→   194→  month: string
+   195→   195→  paidAmount: string
+   196→   196→  method: string
+   197→   197→  dueDate: string
+   198→   198→  paidDate: string
+   199→   199→  note: string
+   200→   200→}
+   201→   201→
+   202→   202→function emptyForm(month: string): FormState {
+   203→   203→  const [y, m] = month.split('-').map((n) => parseInt(n, 10))
+   204→   204→  const d = new Date(y, m - 1, 10)
+   205→   205→  return {
+   206→   206→    studentId: '',
+   207→   207→    programIds: [],
+   208→   208→    month,
+   209→   209→    paidAmount: '0',
+   210→   210→    method: 'Cash',
+   211→   211→    dueDate: toIsoDate(d),
+   212→   212→    paidDate: toIsoDate(new Date()),
+   213→   213→    note: '',
+   214→   214→  }
+   215→   215→}
+   216→   216→
+   217→   217→// ─── Main component ────────────────────────────────────────────────────────
+   218→   218→export function FeesSection() {
+   219→   219→  const [month, setMonth] = useState<string>(currentMonth())
+   220→   220→  const [tab, setTab] = useState<'all' | 'outstanding' | 'paid'>('all')
+   221→   221→  const [statusFilter, setStatusFilter] = useState<string>('all')
+   222→   222→  const [programFilter, setProgramFilter] = useState<string>('all')
+   223→   223→  const [methodFilter, setMethodFilter] = useState<string>('all')
+   224→   224→  const [search, setSearch] = useState<string>('')
+   225→   225→  const [debouncedSearch, setDebouncedSearch] = useState<string>('')
+   226→   226→
+   227→   227→  const [rows, setRows] = useState<PaymentRow[]>([])
+   228→   228→  const [total, setTotal] = useState(0)
+   229→   229→  const [summary, setSummary] = useState<PaymentSummary | null>(null)
+   230→   230→  const [loading, setLoading] = useState(true)
+   231→   231→  const [error, setError] = useState<string | null>(null)
+   232→   232→
+   233→   233→  const [programs, setPrograms] = useState<ProgramRow[]>([])
+   234→   234→
+   235→   235→  const [createOpen, setCreateOpen] = useState(false)
+   236→   236→  const [editTarget, setEditTarget] = useState<PaymentRow | null>(null)
+   237→   237→  const [receiptTarget, setReceiptTarget] = useState<PaymentRow | null>(null)
+   238→   238→  const [deleteTarget, setDeleteTarget] = useState<PaymentRow | null>(null)
+   239→   239→  const [generating, setGenerating] = useState(false)
+   240→   240→  const [bulkOpen, setBulkOpen] = useState(false)
+   241→   241→  const [sendingReminder, setSendingReminder] = useState(false)
+   242→   242→
+   243→   243→  // ─── Debounce search input ──────────────────────────────────────────────
+   244→   244→  useEffect(() => {
+   245→   245→    const h = setTimeout(() => setDebouncedSearch(search.trim()), 250)
+   246→   246→    return () => clearTimeout(h)
+   247→   247→  }, [search])
+   248→   248→
+   249→   249→  // ─── Load programs once ────────────────────────────────────────────────
+   250→   250→  useEffect(() => {
+   251→   251→    let alive = true
+   252→   252→    api<{ data: ProgramRow[] }>('/api/programs?active=true')
+   253→   253→      .then((r) => alive && setPrograms(r.data || []))
+   254→   254→      .catch(() => {
+   255→   255→        /* silently ignore — programs select stays empty */
+   256→   256→      })
+   257→   257→    return () => {
+   258→   258→      alive = false
+   259→   259→    }
+   260→   260→  }, [])
+   261→   261→
+   262→   262→  // ─── Build query from filters + tab ────────────────────────────────────
+   263→   263→  const reloadRef = useRef<() => void>(() => {})
+   264→   264→
+   265→   265→  useEffect(() => {
+   266→   266→    let alive = true
+   267→   267→    const params = new URLSearchParams()
+   268→   268→    params.set('month', month)
+   269→   269→    params.set('limit', '200')
+   270→   270→    if (debouncedSearch) params.set('q', debouncedSearch)
+   271→   271→    if (statusFilter !== 'all') params.set('status', statusFilter)
+   272→   272→    if (programFilter !== 'all') params.set('program', programFilter)
+   273→   273→    if (methodFilter !== 'all') params.set('method', methodFilter)
+   274→   274→    const url = `/api/payments?${params.toString()}`
+   275→   275→
+   276→   276→    const run = () => {
+   277→   277→      if (!alive) return
+   278→   278→      setLoading(true)
+   279→   279→      setError(null)
+   280→   280→      api<PaymentListResponse>(url)
+   281→   281→        .then((r) => {
+   282→   282→          if (!alive) return
+   283→   283→          let data = r.data
+   284→   284→          if (tab === 'outstanding') {
+   285→   285→            data = data.filter(
+   286→   286→              (p) => p.status === 'Partial' || p.status === 'Pending' || p.status === 'Overdue',
+   287→   287→            )
+   288→   288→          } else if (tab === 'paid') {
+   289→   289→            data = data.filter((p) => p.status === 'Paid')
+   290→   290→          }
+   291→   291→          setRows(data)
+   292→   292→          setTotal(r.total)
+   293→   293→          setSummary(r.summary)
+   294→   294→        })
+   295→   295→        .catch((e) => {
+   296→   296→          if (!alive) return
+   297→   297→          setError(e instanceof Error ? e.message : 'Failed to load payments')
+   298→   298→        })
+   299→   299→        .finally(() => {
+   300→   300→          if (alive) setLoading(false)
+   301→   301→        })
+   302→   302→    }
+   303→   303→
+   304→   304→    // Expose for action handlers (delete/save) so they can re-fetch on demand
+   305→   305→    reloadRef.current = run
+   306→   306→    // Defer the first invocation so we don't call setState synchronously in the
+   307→   307→    // effect body (satisfies react-hooks/set-state-in-effect lint rule).
+   308→   308→    const t = setTimeout(run, 0)
+   309→   309→    return () => {
+   310→   310→      alive = false
+   311→   311→      clearTimeout(t)
+   312→   312→    }
+   313→   313→  }, [month, debouncedSearch, statusFilter, programFilter, methodFilter, tab])
+   314→   314→
+   315→   315→  const fetchPayments = useCallback(() => reloadRef.current(), [])
+   316→   316→
+   317→   317→  // ─── Bulk-generate payments for the selected month ─────────────────────
+   318→   318→  const handleBulkGenerate = useCallback(
+   319→   319→    async (targetMonth: string, dueDate?: string) => {
+   320→   320→      setGenerating(true)
+   321→   321→      try {
+   322→   322→        const res = await api<{ created: number; skipped: number; total: number; message: string }>(
+   323→   323→          '/api/payments/bulk-generate',
+   324→   324→          {
+   325→   325→            method: 'POST',
+   326→   326→            body: JSON.stringify({ month: targetMonth, dueDate }),
+   327→   327→          },
+   328→   328→        )
+   329→   329→        if (res.created > 0) {
+   330→   330→          toast.success(res.message)
+   331→   331→        } else {
+   332→   332→          toast.info(res.message)
+   333→   333→        }
+   334→   334→        setBulkOpen(false)
+   335→   335→        fetchPayments()
+   336→   336→      } catch (e: any) {
+   337→   337→        toast.error(e.message || 'Bulk generation failed')
+   338→   338→      } finally {
+   339→   339→        setGenerating(false)
+   340→   340→      }
+   341→   341→    },
+   342→   342→    [fetchPayments],
+   343→   343→  )
+   344→   344→
+   345→   345→  // ─── Send fee reminder (auto-create announcement for outstanding fees) ──
+   346→   346→  const handleSendReminder = useCallback(async () => {
+   347→   347→    setSendingReminder(true)
+   348→   348→    try {
+   349→   349→      const res = await api<{
+   350→   350→        announcement: { id: string; title: string } | null
+   351→   351→        outstandingCount: number
+   352→   352→        outstandingAmount: number
+   353→   353→        message: string
+   354→   354→      }>('/api/payments/send-reminder', {
+   355→   355→        method: 'POST',
+   356→   356→        body: JSON.stringify({ month }),
+   357→   357→      })
+   358→   358→      if (res.announcement) {
+   359→   359→        toast.success(res.message, { duration: 6000 })
+   360→   360→      } else {
+   361→   361→        toast.info(res.message)
+   362→   362→      }
+   363→   363→    } catch (e: any) {
+   364→   364→      toast.error(e.message || 'Failed to send reminder')
+   365→   365→    } finally {
+   366→   366→      setSendingReminder(false)
+   367→   367→    }
+   368→   368→  }, [month])
+   369→   369→
+   370→   370→  // ─── CSV export ────────────────────────────────────────────────────────
+   371→   371→  const exportCsv = useCallback(() => {
+   372→   372→    const headers = [
+   373→   373→      'Receipt No',
+   374→   374→      'Student ID',
+   375→   375→      'Student Name',
+   376→   376→      'Program',
+   377→   377→      'Programmes',
+   378→   378→      'Month',
+   379→   379→      'Amount',
+   380→   380→      'Paid',
+   381→   381→      'Balance',
+   382→   382→      'Method',
+   383→   383→      'Status',
+   384→   384→      'Due Date',
+   385→   385→      'Paid Date',
+   386→   386→      'Note',
+   387→   387→    ]
+   388→   388→    const escape = (v: string | number | null | undefined): string => {
+   389→   389→      const s = v === null || v === undefined ? '' : String(v)
+   390→   390→      return `"${s.replace(/"/g, '""')}"`
+   391→   391→    }
+   392→   392→    const lines = [headers.join(',')]
+   393→   393→    for (const r of rows) {
+   394→   394→      const progs = billPrograms(r)
+   395→   395→      lines.push(
+   396→   396→        [
+   397→   397→          escape(r.receiptNo),
+   398→   398→          escape(r.student.studentId),
+   399→   399→          escape(r.student.fullName),
+   400→   400→          escape(progs.map((x) => x.code).join(' + ')),
+   401→   401→          escape(progs.length),
+   402→   402→          escape(r.month),
+   403→   403→          escape(r.amount),
+   404→   404→          escape(r.paidAmount),
+   405→   405→          escape(Math.max(0, r.amount - r.paidAmount)),
+   406→   406→          escape(r.method),
+   407→   407→          escape(r.status),
+   408→   408→          escape(r.dueDate ? fmtDate(r.dueDate) : ''),
+   409→   409→          escape(r.paidDate ? fmtDate(r.paidDate) : ''),
+   410→   410→          escape(r.note ?? ''),
+   411→   411→        ].join(','),
+   412→   412→      )
+   413→   413→    }
+   414→   414→    const csv = lines.join('\n')
+   415→   415→    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+   416→   416→    const url = URL.createObjectURL(blob)
+   417→   417→    const a = document.createElement('a')
+   418→   418→    a.href = url
+   419→   419→    a.download = `sanomin-payments-${month}.csv`
+   420→   420→    document.body.appendChild(a)
+   421→   421→    a.click()
+   422→   422→    document.body.removeChild(a)
+   423→   423→    URL.revokeObjectURL(url)
+   424→   424→    toast.success(`Exported ${rows.length} payments to CSV`)
+   425→   425→  }, [rows, month])
+   426→   426→
+   427→   427→  const clearFilters = useCallback(() => {
+   428→   428→    setStatusFilter('all')
+   429→   429→    setProgramFilter('all')
+   430→   430→    setMethodFilter('all')
+   431→   431→    setSearch('')
+   432→   432→  }, [])
+   433→   433→
+   434→   434→  const hasFilters =
+   435→   435→    statusFilter !== 'all' ||
+   436→   436→    programFilter !== 'all' ||
+   437→   437→    methodFilter !== 'all' ||
+   438→   438→    debouncedSearch !== ''
+   439→   439→
+   440→   440→  // ─── Render ────────────────────────────────────────────────────────────
+   441→   441→  return (
+   442→   442→    <div className="flex flex-col gap-6">
+   443→   443→      <SectionHeader
+   444→   444→        title="Fees & Payments"
+   445→   445→        description="Monthly tuition fee tracking & receipts"
+   446→   446→        icon={<Wallet className="h-5 w-5" />}
+   447→   447→        actions={
+   448→   448→          <>
+   449→   449→            <Button variant="outline" size="sm" onClick={exportCsv} className="gap-2">
+   450→   450→              <Download className="h-4 w-4" /> Export CSV
+   451→   451→            </Button>
+   452→   452→            <Button
+   453→   453→              variant="outline"
+   454→   454→              size="sm"
+   455→   455→              onClick={() => setBulkOpen(true)}
+   456→   456→              className="gap-2 border-primary/30 text-primary hover:bg-primary/5"
+   457→   457→            >
+   458→   458→              <Zap className="h-4 w-4" /> Generate Month
+   459→   459→            </Button>
+   460→   460→            <Button
+   461→   461→              variant="outline"
+   462→   462→              size="sm"
+   463→   463→              onClick={handleSendReminder}
+   464→   464→              disabled={sendingReminder}
+   465→   465→              className="gap-2 border-amber-500/40 text-amber-600 hover:bg-amber-500/5 dark:text-amber-400"
+   466→   466→            >
+   467→   467→              {sendingReminder ? (
+   468→   468→                <Loader2 className="h-4 w-4 animate-spin" />
+   469→   469→              ) : (
+   470→   470→                <BellRing className="h-4 w-4" />
+   471→   471→              )}
+   472→   472→              Send Reminder
+   473→   473→            </Button>
+   474→   474→            <Button
+   475→   475→              size="sm"
+   476→   476→              onClick={() => setCreateOpen(true)}
+   477→   477→              className="gap-2"
+   478→   478→            >
+   479→   479→              <Plus className="h-4 w-4" /> Record Payment
+   480→   480→            </Button>
+   481→   481→          </>
+   482→   482→        }
+   483→   483→      />
+   484→   484→
+   485→   485→      {/* Stats strip */}
+   486→   486→      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+   487→   487→        {summary ? (
+   488→   488→          <>
+   489→   489→            <StatCard
+   490→   490→              label="Total Billed"
+   491→   491→              value={currencyCompact(summary.totalBilled)}
+   492→   492→              icon={CircleDollarSign}
+   493→   493→              hint={`${monthLabel(month)}`}
+   494→   494→              accent="blue"
+   495→   495→            />
+   496→   496→            <StatCard
+   497→   497→              label="Total Collected"
+   498→   498→              value={currencyCompact(summary.totalCollected)}
+   499→   499→              icon={CheckCircle2}
+   500→   500→              hint={
+   501→   501→                summary.totalBilled > 0
+   502→   502→                  ? `${Math.round((summary.totalCollected / summary.totalBilled) * 100)}% collected`
+   503→   503→                  : '—'
+   504→   504→              }
+   505→   505→              accent="green"
+   506→   506→            />
+   507→   507→            <StatCard
+   508→   508→              label="Outstanding"
+   509→   509→              value={currencyCompact(summary.totalOutstanding)}
+   510→   510→              icon={Clock}
+   511→   511→              hint={`${summary.pendingCount} pending`}
+   512→   512→              accent="amber"
+   513→   513→            />
+   514→   514→            <StatCard
+   515→   515→              label="Overdue"
+   516→   516→              value={summary.overdueCount}
+   517→   517→              icon={AlertCircle}
+   518→   518→              hint={`of ${total} payments`}
+   519→   519→              accent="red"
+   520→   520→            />
+   521→   521→          </>
+   522→   522→        ) : (
+   523→   523→          Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-28" />)
+   524→   524→        )}
+   525→   525→      </div>
+   526→   526→
+   527→   527→      {/* Month selector + Filters */}
+   528→   528→      <Card className="p-4">
+   529→   529→        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+   530→   530→          <div className="flex flex-wrap items-end gap-3">
+   531→   531→            <div className="flex flex-col gap-1.5">
+   532→   532→              <Label className="text-xs text-muted-foreground">Billing month</Label>
+   533→   533→              <Select value={month} onValueChange={setMonth}>
+   534→   534→                <SelectTrigger className="w-[180px]">
+   535→   535→                  <SelectValue placeholder="Select month" />
+   536→   536→                </SelectTrigger>
+   537→   537→                <SelectContent>
+   538→   538→                  {lastNMonths(6).map((m) => (
+   539→   539→                    <SelectItem key={m} value={m}>
+   540→   540→                      {monthLabel(m)} ({m})
+   541→   541→                    </SelectItem>
+   542→   542→                  ))}
+   543→   543→                </SelectContent>
+   544→   544→              </Select>
+   545→   545→            </div>
+   546→   546→            <div className="flex flex-col gap-1.5">
+   547→   547→              <Label className="text-xs text-muted-foreground">Status</Label>
+   548→   548→              <Select value={statusFilter} onValueChange={setStatusFilter}>
+   549→   549→                <SelectTrigger className="w-[140px]">
+   550→   550→                  <SelectValue placeholder="All statuses" />
+   551→   551→                </SelectTrigger>
+   552→   552→                <SelectContent>
+   553→   553→                  <SelectItem value="all">All statuses</SelectItem>
+   554→   554→                  {PAYMENT_STATUSES.map((s) => (
+   555→   555→                    <SelectItem key={s} value={s}>
+   556→   556→                      {s}
+   557→   557→                    </SelectItem>
+   558→   558→                  ))}
+   559→   559→                </SelectContent>
+   560→   560→              </Select>
+   561→   561→            </div>
+   562→   562→            <div className="flex flex-col gap-1.5">
+   563→   563→              <Label className="text-xs text-muted-foreground">Program</Label>
+   564→   564→              <Select value={programFilter} onValueChange={setProgramFilter}>
+   565→   565→                <SelectTrigger className="w-[160px]">
+   566→   566→                  <SelectValue placeholder="All programs" />
+   567→   567→                </SelectTrigger>
+   568→   568→                <SelectContent>
+   569→   569→                  <SelectItem value="all">All programs</SelectItem>
+   570→   570→                  {programs.map((p) => (
+   571→   571→                    <SelectItem key={p.id} value={p.code}>
+   572→   572→                      {p.name}
+   573→   573→                    </SelectItem>
+   574→   574→                  ))}
+   575→   575→                </SelectContent>
+   576→   576→              </Select>
+   577→   577→            </div>
+   578→   578→            <div className="flex flex-col gap-1.5">
+   579→   579→              <Label className="text-xs text-muted-foreground">Method</Label>
+   580→   580→              <Select value={methodFilter} onValueChange={setMethodFilter}>
+   581→   581→                <SelectTrigger className="w-[130px]">
+   582→   582→                  <SelectValue placeholder="All methods" />
+   583→   583→                </SelectTrigger>
+   584→   584→                <SelectContent>
+   585→   585→                  <SelectItem value="all">All methods</SelectItem>
+   586→   586→                  {PAYMENT_METHODS.map((m) => (
+   587→   587→                    <SelectItem key={m} value={m}>
+   588→   588→                      {m}
+   589→   589→                    </SelectItem>
+   590→   590→                  ))}
+   591→   591→                </SelectContent>
+   592→   592→              </Select>
+   593→   593→            </div>
+   594→   594→          </div>
+   595→   595→          <div className="flex items-end gap-2">
+   596→   596→            <div className="relative flex-1 lg:w-64">
+   597→   597→              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+   598→   598→              <Input
+   599→   599→                placeholder="Search student / receipt no…"
+   600→   600→                value={search}
+   601→   601→                onChange={(e) => setSearch(e.target.value)}
+   602→   602→                className="pl-9"
+   603→   603→              />
+   604→   604→            </div>
+   605→   605→            {hasFilters && (
+   606→   606→              <Button variant="ghost" size="sm" onClick={clearFilters} className="gap-1.5">
+   607→   607→                <X className="h-4 w-4" /> Clear
+   608→   608→              </Button>
+   609→   609→            )}
+   610→   610→          </div>
+   611→   611→        </div>
+   612→   612→      </Card>
+   613→   613→
+   614→   614→      {/* Tabs + Table */}
+   615→   615→      <Card className="p-0">
+   616→   616→        <div className="flex flex-col gap-3 border-b p-4 sm:flex-row sm:items-center sm:justify-between">
+   617→   617→          <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)}>
+   618→   618→            <TabsList>
+   619→   619→              <TabsTrigger value="all">All Payments</TabsTrigger>
+   620→   620→              <TabsTrigger value="outstanding">Outstanding</TabsTrigger>
+   621→   621→              <TabsTrigger value="paid">Paid</TabsTrigger>
+   622→   622→            </TabsList>
+   623→   623→          </Tabs>
+   624→   624→          <p className="text-xs text-muted-foreground">
+   625→   625→            Showing <span className="font-semibold text-foreground">{rows.length}</span> of {total}{' '}
+   626→   626→            payments
+   627→   627→          </p>
+   628→   628→        </div>
+   629→   629→
+   630→   630→        {error ? (
+   631→   631→          <div className="p-6">
+   632→   632→            <EmptyState
+   633→   633→              icon={AlertCircle}
+   634→   634→              title="Failed to load payments"
+   635→   635→              description={error}
+   636→   636→              action={
+   637→   637→                <Button size="sm" onClick={fetchPayments}>
+   638→   638→                  Retry
+   639→   639→                </Button>
+   640→   640→              }
+   641→   641→            />
+   642→   642→          </div>
+   643→   643→        ) : loading ? (
+   644→   644→          <div className="space-y-2 p-4">
+   645→   645→            {Array.from({ length: 6 }).map((_, i) => (
+   646→   646→              <Skeleton key={i} className="h-14 w-full" />
+   647→   647→            ))}
+   648→   648→          </div>
+   649→   649→        ) : rows.length === 0 ? (
+   650→   650→          <div className="p-6">
+   651→   651→            <EmptyState
+   652→   652→              icon={Wallet}
+   653→   653→              title="No payments found"
+   654→   654→              description={
+   655→   655→                hasFilters
+   656→   656→                  ? `No payments match the current filters for ${monthLabel(month)}.`
+   657→   657→                  : `No payment records for ${monthLabel(month)} yet. Record the first payment to get started.`
+   658→   658→              }
+   659→   659→              action={
+   660→   660→                <Button size="sm" onClick={() => setCreateOpen(true)} className="gap-2">
+   661→   661→                  <Plus className="h-4 w-4" /> Record Payment
+   662→   662→                </Button>
+   663→   663→              }
+   664→   664→            />
+   665→   665→          </div>
+   666→   666→        ) : (
+   667→   667→          <div className="scroll-thin max-h-[60vh] overflow-y-auto">
+   668→   668→            <Table className="table-zebra">
+   669→   669→              <TableHeader className="sticky top-0 z-10 bg-muted/80 backdrop-blur">
+   670→   670→                <TableRow>
+   671→   671→                  <TableHead className="w-[120px]">Receipt No</TableHead>
+   672→   672→                  <TableHead>Student</TableHead>
+   673→   673→                  <TableHead>Programmes</TableHead>
+   674→   674→                  <TableHead className="w-[90px]">Month</TableHead>
+   675→   675→                  <TableHead className="text-right">Billed</TableHead>
+   676→   676→                  <TableHead className="text-right">Paid</TableHead>
+   677→   677→                  <TableHead className="text-right">Balance</TableHead>
+   678→   678→                  <TableHead className="w-[100px]">Method</TableHead>
+   679→   679→                  <TableHead className="w-[110px]">Status</TableHead>
+   680→   680→                  <TableHead className="w-[60px] text-right">Actions</TableHead>
+   681→   681→                </TableRow>
+   682→   682→              </TableHeader>
+   683→   683→              <TableBody>
+   684→   684→                {rows.map((p) => {
+   685→   685→                  const balance = Math.max(0, p.amount - p.paidAmount)
+   686→   686→                  const progs = billPrograms(p)
+   687→   687→                  const shownProgs = progs.slice(0, 3)
+   688→   688→                  const extraProgs = progs.length - shownProgs.length
+   689→   689→                  return (
+   690→   690→                    <TableRow key={p.id} className="hover:bg-muted/40">
+   691→   691→                      <TableCell>
+   692→   692→                        <span className="rounded-md bg-muted px-2 py-0.5 font-mono text-[11px] font-semibold tracking-tight">
+   693→   693→                          {p.receiptNo ?? '—'}
+   694→   694→                        </span>
+   695→   695→                      </TableCell>
+   696→   696→                      <TableCell>
+   697→   697→                        <div className="flex items-center gap-2.5">
+   698→   698→                          <Avatar className="h-8 w-8">
+   699→   699→                            <AvatarFallback className={avatarColor(p.student.fullName)}>
+   700→   700→                              {initials(p.student.fullName)}
+   701→   701→                            </AvatarFallback>
+   702→   702→                          </Avatar>
+   703→   703→                          <div className="min-w-0">
+   704→   704→                            <p className="truncate text-sm font-medium">{p.student.fullName}</p>
+   705→   705→                            <p className="font-mono text-[10px] text-muted-foreground">
+   706→   706→                              {p.student.studentId}
+   707→   707→                            </p>
+   708→   708→                          </div>
+   709→   709→                        </div>
+   710→   710→                      </TableCell>
+   711→   711→                      <TableCell>
+   712→   712→                        {progs.length === 0 ? (
+   713→   713→                          <span className="text-xs text-muted-foreground">—</span>
+   714→   714→                        ) : (
+   715→   715→                          <div className="flex flex-wrap items-center gap-1">
+   716→   716→                            {shownProgs.map((prog) => (
+   717→   717→                              <Badge
+   718→   718→                                key={prog.id}
+   719→   719→                                variant="outline"
+   720→   720→                                className="gap-1.5 border-transparent font-medium"
+   721→   721→                                style={{
+   722→   722→                                  backgroundColor: `${prog.color}1A`,
+   723→   723→                                  color: prog.color,
+   724→   724→                                }}
+   725→   725→                              >
+   726→   726→                                <span
+   727→   727→                                  className="h-2 w-2 rounded-full"
+   728→   728→                                  style={{ backgroundColor: prog.color }}
+   729→   729→                                />
+   730→   730→                                {prog.code}
+   731→   731→                              </Badge>
+   732→   732→                            ))}
+   733→   733→                            {extraProgs > 0 && (
+   734→   734→                              <Badge
+   735→   735→                                variant="outline"
+   736→   736→                                className="border-transparent bg-muted text-muted-foreground"
+   737→   737→                              >
+   738→   738→                                +{extraProgs}
+   739→   739→                              </Badge>
+   740→   740→                            )}
+   741→   741→                          </div>
+   742→   742→                        )}
+   743→   743→                      </TableCell>
+   744→   744→                      <TableCell>
+   745→   745→                        <span className="text-xs tabular-nums text-muted-foreground">
+   746→   746→                          {p.month}
+   747→   747→                        </span>
+   748→   748→                      </TableCell>
+   749→   749→                      <TableCell className="text-right text-sm tabular-nums">
+   750→   750→                        {currency(p.amount)}
+   751→   751→                      </TableCell>
+   752→   752→                      <TableCell className="text-right text-sm tabular-nums">
+   753→   753→                        {currency(p.paidAmount)}
+   754→   754→                      </TableCell>
+   755→   755→                      <TableCell
+   756→   756→                        className={
+   757→   757→                          balance > 0
+   758→   758→                            ? 'text-right text-sm font-semibold tabular-nums text-red-600 dark:text-red-400'
+   759→   759→                            : 'text-right text-sm tabular-nums text-emerald-600 dark:text-emerald-400'
+   760→   760→                        }
+   761→   761→                      >
+   762→   762→                        {currency(balance)}
+   763→   763→                      </TableCell>
+   764→   764→                      <TableCell>
+   765→   765→                        <Badge
+   766→   766→                          variant="outline"
+   767→   767→                          className={`font-medium ${methodBadgeClasses(p.method)}`}
+   768→   768→                        >
+   769→   769→                          {p.method}
+   770→   770→                        </Badge>
+   771→   771→                      </TableCell>
+   772→   772→                      <TableCell>
+   773→   773→                        <Badge
+   774→   774→                          variant="outline"
+   775→   775→                          className={`font-medium ${statusBadgeClasses(p.status)}`}
+   776→   776→                        >
+   777→   777→                          {p.status}
+   778→   778→                        </Badge>
+   779→   779→                      </TableCell>
+   780→   780→                      <TableCell className="text-right">
+   781→   781→                        <DropdownMenu>
+   782→   782→                          <DropdownMenuTrigger asChild>
+   783→   783→                            <Button variant="ghost" size="icon" className="h-8 w-8">
+   784→   784→                              <MoreVertical className="h-4 w-4" />
+   785→   785→                              <span className="sr-only">Open actions</span>
+   786→   786→                            </Button>
+   787→   787→                          </DropdownMenuTrigger>
+   788→   788→                          <DropdownMenuContent align="end" className="w-44">
+   789→   789→                            <DropdownMenuItem
+   790→   790→                              onClick={() => {
+   791→   791→                                setEditTarget(p)
+   792→   792→                              }}
+   793→   793→                            >
+   794→   794→                              <Pencil className="mr-2 h-4 w-4" /> Record / Edit
+   795→   795→                            </DropdownMenuItem>
+   796→   796→                            <DropdownMenuItem onClick={() => setReceiptTarget(p)}>
+   797→   797→                              <ReceiptIcon className="mr-2 h-4 w-4" /> Print Receipt
+   798→   798→                            </DropdownMenuItem>
+   799→   799→                            <DropdownMenuSeparator />
+   800→   800→                            <DropdownMenuItem
+   801→   801→                              onClick={() => setDeleteTarget(p)}
+   802→   802→                              className="text-red-600 focus:text-red-700 dark:text-red-400"
+   803→   803→                            >
+   804→   804→                              <Trash2 className="mr-2 h-4 w-4" /> Delete
+   805→   805→                            </DropdownMenuItem>
+   806→   806→                          </DropdownMenuContent>
+   807→   807→                        </DropdownMenu>
+   808→   808→                      </TableCell>
+   809→   809→                    </TableRow>
+   810→   810→                  )
+   811→   811→                })}
+   812→   812→              </TableBody>
+   813→   813→            </Table>
+   814→   814→          </div>
+   815→   815→        )}
+   816→   816→      </Card>
+   817→   817→
+   818→   818→      {/* Create / Edit dialogs */}
+   819→   819→      {createOpen && (
+   820→   820→        <PaymentDialog
+   821→   821→          mode="create"
+   822→   822→          month={month}
+   823→   823→          programs={programs}
+   824→   824→          onClose={() => setCreateOpen(false)}
+   825→   825→          onSaved={() => {
+   826→   826→            setCreateOpen(false)
+   827→   827→            fetchPayments()
+   828→   828→          }}
+   829→   829→        />
+   830→   830→      )}
+   831→   831→      {editTarget && (
+   832→   832→        <PaymentDialog
+   833→   833→          mode="edit"
+   834→   834→          month={month}
+   835→   835→          programs={programs}
+   836→   836→          payment={editTarget}
+   837→   837→          onClose={() => setEditTarget(null)}
+   838→   838→          onSaved={() => {
+   839→   839→            setEditTarget(null)
+   840→   840→            fetchPayments()
+   841→   841→          }}
+   842→   842→        />
+   843→   843→      )}
+   844→   844→
+   845→   845→      {/* Receipt print dialog */}
+   846→   846→      {receiptTarget && (
+   847→   847→        <ReceiptDialog
+   848→   848→          payment={receiptTarget}
+   849→   849→          onClose={() => setReceiptTarget(null)}
+   850→   850→        />
+   851→   851→      )}
+   852→   852→
+   853→   853→      {/* Delete confirm */}
+   854→   854→      <ConfirmDialog
+   855→   855→        open={!!deleteTarget}
+   856→   856→        onOpenChange={(v) => !v && setDeleteTarget(null)}
+   857→   857→        title="Delete payment record?"
+   858→   858→        description={
+   859→   859→          deleteTarget
+   860→   860→            ? `Receipt ${deleteTarget.receiptNo ?? '—'} for ${deleteTarget.student.fullName} (${monthLabel(
+   861→   861→                deleteTarget.month,
+   862→   862→              )}) will be permanently removed. This cannot be undone.`
+   863→   863→            : ''
+   864→   864→        }
+   865→   865→        confirmText="Delete"
+   866→   866→        cancelText="Cancel"
+   867→   867→        onConfirm={async () => {
+   868→   868→          if (!deleteTarget) return
+   869→   869→          await api(`/api/payments/${deleteTarget.id}`, { method: 'DELETE' })
+   870→   870→          toast.success('Payment deleted')
+   871→   871→          fetchPayments()
+   872→   872→        }}
+   873→   873→      />
+   874→   874→
+   875→   875→      {/* Bulk generate dialog */}
+   876→   876→      <BulkGenerateDialog
+   877→   877→        open={bulkOpen}
+   878→   878→        onOpenChange={setBulkOpen}
+   879→   879→        defaultMonth={month}
+   880→   880→        generating={generating}
+   881→   881→        onConfirm={handleBulkGenerate}
+   882→   882→      />
+   883→   883→    </div>
+   884→   884→  )
+   885→   885→}
+   886→   886→
+   887→   887→// ─── Payment create/edit dialog ────────────────────────────────────────────
+   888→   888→interface PaymentDialogProps {
+   889→   889→  mode: 'create' | 'edit'
+   890→   890→  month: string
+   891→   891→  programs: ProgramRow[]
+   892→   892→  payment?: PaymentRow | null
+   893→   893→  onClose: () => void
+   894→   894→  onSaved: () => void
+   895→   895→}
+   896→   896→
+   897→   897→function PaymentDialog({
+   898→   898→  mode,
+   899→   899→  month,
+   900→   900→  programs,
+   901→   901→  payment,
+   902→   902→  onClose,
+   903→   903→  onSaved,
+   904→   904→}: PaymentDialogProps) {
+   905→   905→  const [students, setStudents] = useState<StudentRow[]>([])
+   906→   906→  const [studentQuery, setStudentQuery] = useState('')
+   907→   907→  const [selectedStudent, setSelectedStudent] = useState<StudentRow | null>(null)
+   908→   908→  const [studentOpen, setStudentOpen] = useState(false)
+   909→   909→  const [saving, setSaving] = useState(false)
+   910→   910→  const [form, setForm] = useState<FormState>(() =>
+   911→   911→    payment
+   912→   912→      ? {
+   913→   913→          studentId: payment.studentId,
+   914→   914→          programIds: Array.from(
+   915→   915→            new Set(
+   916→   916→              [
+   917→   917→                ...(payment.items ?? []).map((it) => it.programId),
+   918→   918→                payment.programId,
+   919→   919→              ].filter((id): id is string => !!id),
+   920→   920→            ),
+   921→   921→          ),
+   922→   922→          month: payment.month,
+   923→   923→          paidAmount: String(payment.paidAmount),
+   924→   924→          method: payment.method,
+   925→   925→          dueDate: payment.dueDate ? toIsoDate(new Date(payment.dueDate)) : '',
+   926→   926→          paidDate: payment.paidDate ? toIsoDate(new Date(payment.paidDate)) : '',
+   927→   927→          note: payment.note ?? '',
+   928→   928→        }
+   929→   929→      : emptyForm(month),
+   930→   930→  )
+   931→   931→
+   932→   932→  const isEdit = mode === 'edit' && !!payment
+   933→   933→
+   934→   934→  // ─── Billable programmes (active list + legacy programmes on the bill) ─
+   935→   935→  const allPrograms = useMemo<ProgramRow[]>(() => {
+   936→   936→    const map = new Map<string, ProgramRow>()
+   937→   937→    for (const p of programs) map.set(p.id, p)
+   938→   938→    if (isEdit && payment) {
+   939→   939→      for (const it of payment.items ?? []) {
+   940→   940→        const prog = it.program
+   941→   941→        if (prog && !map.has(prog.id)) {
+   942→   942→          map.set(prog.id, {
+   943→   943→            id: prog.id,
+   944→   944→            code: prog.code,
+   945→   945→            name: prog.name,
+   946→   946→            description: null,
+   947→   947→            color: prog.color,
+   948→   948→            monthlyFee: prog.monthlyFee ?? it.amount,
+   949→   949→            active: true,
+   950→   950→          })
+   951→   951→        }
+   952→   952→      }
+   953→   953→      if (payment.program && !map.has(payment.program.id)) {
+   954→   954→        map.set(payment.program.id, {
+   955→   955→          id: payment.program.id,
+   956→   956→          code: payment.program.code,
+   957→   957→          name: payment.program.name,
+   958→   958→          description: null,
+   959→   959→          color: payment.program.color,
+   960→   960→          monthlyFee: 0,
+   961→   961→          active: true,
+   962→   962→        })
+   963→   963→      }
+   964→   964→    }
+   965→   965→    return Array.from(map.values())
+   966→   966→  }, [programs, isEdit, payment])
+   967→   967→
+   968→   968→  const selectedPrograms = useMemo(
+   969→   969→    () => allPrograms.filter((p) => form.programIds.includes(p.id)),
+   970→   970→    [allPrograms, form.programIds],
+   971→   971→  )
+   972→   972→
+   973→   973→  // Bill total = Σ selected programme monthly fees (server recomputes the same)
+   974→   974→  const totalAmount = useMemo(
+   975→   975→    () => selectedPrograms.reduce((sum, p) => sum + (p.monthlyFee || 0), 0),
+   976→   976→    [selectedPrograms],
+   977→   977→  )
+   978→   978→
+   979→   979→  // ─── Programme checkbox toggles / quick actions ──────────────────
+   980→   980→  const toggleProgram = useCallback((id: string) => {
+   981→   981→    setForm((f) => ({
+   982→   982→      ...f,
+   983→   983→      programIds: f.programIds.includes(id)
+   984→   984→        ? f.programIds.filter((x) => x !== id)
+   985→   985→        : [...f.programIds, id],
+   986→   986→    }))
+   987→   987→  }, [])
+   988→   988→
+   989→   989→  const selectAllPrograms = useCallback(() => {
+   990→   990→    setForm((f) => ({ ...f, programIds: allPrograms.map((p) => p.id) }))
+   991→   991→  }, [allPrograms])
+   992→   992→
+   993→   993→  const clearPrograms = useCallback(() => {
+   994→   994→    setForm((f) => ({ ...f, programIds: [] }))
+   995→   995→  }, [])
+   996→   996→
+   997→   997→  // ─── Resolve selected student for edit mode ───────────────────────────
+   998→   998→  useEffect(() => {
+   999→   999→    if (!isEdit || !payment) return
+  1000→  1000→    let alive = true
+  1001→  1001→    api<{ data: StudentRow[] }>(
+  1002→  1002→      `/api/students?q=${encodeURIComponent(payment.student.studentId)}&limit=5`,
+  1003→  1003→    )
+  1004→  1004→      .then((r) => {
+  1005→  1005→        if (!alive) return
+  1006→  1006→        const match = (r.data || []).find((s) => s.id === payment.studentId)
+  1007→  1007→        if (match) setSelectedStudent(match)
+  1008→  1008→      })
+  1009→  1009→      .catch(() => {
+  1010→  1010→        /* ignore */
+  1011→  1011→      })
+  1012→  1012→    return () => {
+  1013→  1013→      alive = false
+  1014→  1014→    }
+  1015→  1015→  }, [isEdit, payment])
+  1016→  1016→
+  1017→  1017→  // ─── Debounced student search ────────────────────────────────────────
+  1018→  1018→  useEffect(() => {
+  1019→  1019→    if (studentQuery.trim().length < 2) {
+  1020→  1020→      setStudents([])
+  1021→  1021→      return
+  1022→  1022→    }
+  1023→  1023→    let alive = true
+  1024→  1024→    const h = setTimeout(() => {
+  1025→  1025→      api<{ data: StudentRow[] }>(
+  1026→  1026→        `/api/students?q=${encodeURIComponent(studentQuery)}&limit=10`,
+  1027→  1027→      )
+  1028→  1028→        .then((r) => alive && setStudents(r.data || []))
+  1029→  1029→        .catch(() => alive && setStudents([]))
+  1030→  1030→    }, 250)
+  1031→  1031→    return () => {
+  1032→  1032→      alive = false
+  1033→  1033→      clearTimeout(h)
+  1034→  1034→    }
+  1035→  1035→  }, [studentQuery])
+  1036→  1036→
+  1037→  1037→  // ─── When student changes, auto-check their enrolled programmes ───────
+  1038→  1038→  const handleSelectStudent = useCallback(
+  1039→  1039→    (s: StudentRow) => {
+  1040→  1040→      setSelectedStudent(s)
+  1041→  1041→      setStudentOpen(false)
+  1042→  1042→      setStudentQuery('')
+  1043→  1043→      setForm((f) => {
+  1044→  1044→        const enrolled = (s.enrollments ?? [])
+  1045→  1045→          .map((e) => e.program?.id)
+  1046→  1046→          .filter((id): id is string => !!id)
+  1047→  1047→          .filter((id) => programs.some((p) => p.id === id))
+  1048→  1048→        return {
+  1049→  1049→          ...f,
+  1050→  1050→          studentId: s.id,
+  1051→  1051→          programIds:
+  1052→  1052→            enrolled.length > 0 ? Array.from(new Set(enrolled)) : f.programIds,
+  1053→  1053→        }
+  1054→  1054→      })
+  1055→  1055→    },
+  1056→  1056→    [programs],
+  1057→  1057→  )
+  1058→  1058→
+  1059→  1059→  // ─── Submit ───────────────────────────────────────────────────────────
+  1060→  1060→  const handleSubmit = async () => {
+  1061→  1061→    if (!form.studentId) {
+  1062→  1062→      toast.error('Please select a student')
+  1063→  1063→      return
+  1064→  1064→    }
+  1065→  1065→    if (!/^\d{4}-\d{2}$/.test(form.month)) {
+  1066→  1066→      toast.error('Month must be in YYYY-MM format')
+  1067→  1067→      return
+  1068→  1068→    }
+  1069→  1069→    const programIds = Array.from(new Set(form.programIds))
+  1070→  1070→    if (programIds.length === 0) {
+  1071→  1071→      toast.error('Select at least one programme for this bill')
+  1072→  1072→      return
+  1073→  1073→    }
+  1074→  1074→    const paidAmount = parseFloat(form.paidAmount) || 0
+  1075→  1075→    setSaving(true)
+  1076→  1076→    try {
+  1077→  1077→      const payload = {
+  1078→  1078→        studentId: form.studentId,
+  1079→  1079→        month: form.month,
+  1080→  1080→        programIds,
+  1081→  1081→        paidAmount,
+  1082→  1082→        method: form.method,
+  1083→  1083→        dueDate: form.dueDate || null,
+  1084→  1084→        paidDate: paidAmount > 0 ? form.paidDate || null : null,
+  1085→  1085→        note: form.note.trim() || null,
+  1086→  1086→      }
+  1087→  1087→      if (isEdit && payment) {
+  1088→  1088→        await api(`/api/payments/${payment.id}`, {
+  1089→  1089→          method: 'PUT',
+  1090→  1090→          body: JSON.stringify(payload),
+  1091→  1091→        })
+  1092→  1092→        toast.success('Payment updated')
+  1093→  1093→      } else {
+  1094→  1094→        await api('/api/payments', {
+  1095→  1095→          method: 'POST',
+  1096→  1096→          body: JSON.stringify(payload),
+  1097→  1097→        })
+  1098→  1098→        toast.success('Payment recorded')
+  1099→  1099→      }
+  1100→  1100→      onSaved()
+  1101→  1101→    } catch (e) {
+  1102→  1102→      toast.error(e instanceof Error ? e.message : 'Failed to save payment')
+  1103→  1103→    } finally {
+  1104→  1104→      setSaving(false)
+  1105→  1105→    }
+  1106→  1106→  }
+  1107→  1107→
+  1108→  1108→  const balance = Math.max(0, totalAmount - (parseFloat(form.paidAmount) || 0))
+  1109→  1109→
+  1110→  1110→  return (
+  1111→  1111→    <Dialog open onOpenChange={(v) => !v && onClose()}>
+  1112→  1112→      <DialogContent className="max-w-2xl">
+  1113→  1113→        <DialogHeader>
+  1114→  1114→          <DialogTitle className="flex items-center gap-2">
+  1115→  1115→            <Wallet className="h-5 w-5 text-primary" />
+  1116→  1116→            {isEdit ? 'Edit Payment' : 'Record Payment'}
+  1117→  1117→          </DialogTitle>
+  1118→  1118→          <DialogDescription>
+  1119→  1119→            {isEdit
+  1120→  1120→              ? `Update receipt ${payment?.receiptNo ?? '—'} for ${payment?.student.fullName ?? ''}. Changing the selected programmes recalculates the bill total.`
+  1121→  1121→              : 'One bill per student — tick one or more programmes and the total is computed automatically. Receipt number is auto-generated.'}
+  1122→  1122→          </DialogDescription>
+  1123→  1123→        </DialogHeader>
+  1124→  1124→
+  1125→  1125→        <div className="grid gap-4 py-2">
+  1126→  1126→          {/* Student picker */}
+  1127→  1127→          <div className="flex flex-col gap-1.5">
+  1128→  1128→            <Label>Student *</Label>
+  1129→  1129→            {selectedStudent ? (
+  1130→  1130→              <div className="flex items-center justify-between gap-2 rounded-lg border p-2.5">
+  1131→  1131→                <div className="flex items-center gap-2.5">
+  1132→  1132→                  <Avatar className="h-9 w-9">
+  1133→  1133→                    <AvatarFallback className={avatarColor(selectedStudent.fullName)}>
+  1134→  1134→                      {initials(selectedStudent.fullName)}
+  1135→  1135→                    </AvatarFallback>
+  1136→  1136→                  </Avatar>
+  1137→  1137→                  <div>
+  1138→  1138→                    <p className="text-sm font-medium">{selectedStudent.fullName}</p>
+  1139→  1139→                    <p className="font-mono text-[11px] text-muted-foreground">
+  1140→  1140→                      {selectedStudent.studentId}
+  1141→  1141→                    </p>
+  1142→  1142→                  </div>
+  1143→  1143→                </div>
+  1144→  1144→                <Button
+  1145→  1145→                  variant="ghost"
+  1146→  1146→                  size="sm"
+  1147→  1147→                  onClick={() => {
+  1148→  1148→                    if (!isEdit) {
+  1149→  1149→                      setSelectedStudent(null)
+  1150→  1150→                      setForm((f) => ({ ...f, studentId: '', programIds: [] }))
+  1151→  1151→                    }
+  1152→  1152→                  }}
+  1153→  1153→                  disabled={isEdit}
+  1154→  1154→                >
+  1155→  1155→                  {isEdit ? 'Locked' : 'Change'}
+  1156→  1156→                </Button>
+  1157→  1157→              </div>
+  1158→  1158→            ) : (
+  1159→  1159→              <div className="flex flex-col gap-2">
+  1160→  1160→                <div className="relative">
+  1161→  1161→                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+  1162→  1162→                  <Input
+  1163→  1163→                    placeholder="Type at least 2 chars to search students…"
+  1164→  1164→                    value={studentQuery}
+  1165→  1165→                    onChange={(e) => setStudentQuery(e.target.value)}
+  1166→  1166→                    onFocus={() => setStudentOpen(true)}
+  1167→  1167→                    className="pl-9"
+  1168→  1168→                  />
+  1169→  1169→                </div>
+  1170→  1170→                {studentOpen && students.length > 0 && (
+  1171→  1171→                  <div className="scroll-thin max-h-56 overflow-y-auto rounded-lg border bg-popover">
+  1172→  1172→                    {students.map((s) => (
+  1173→  1173→                      <button
+  1174→  1174→                        key={s.id}
+  1175→  1175→                        type="button"
+  1176→  1176→                        onClick={() => handleSelectStudent(s)}
+  1177→  1177→                        className="flex w-full items-center gap-2.5 border-b border-border/50 p-2.5 text-left transition-colors last:border-0 hover:bg-muted/50"
+  1178→  1178→                      >
+  1179→  1179→                        <Avatar className="h-8 w-8">
+  1180→  1180→                          <AvatarFallback className={avatarColor(s.fullName)}>
+  1181→  1181→                            {initials(s.fullName)}
+  1182→  1182→                          </AvatarFallback>
+  1183→  1183→                        </Avatar>
+  1184→  1184→                        <div className="min-w-0 flex-1">
+  1185→  1185→                          <p className="truncate text-sm font-medium">{s.fullName}</p>
+  1186→  1186→                          <p className="font-mono text-[10px] text-muted-foreground">
+  1187→  1187→                            {s.studentId} · {s.ageGroup ?? '—'}
+  1188→  1188→                          </p>
+  1189→  1189→                        </div>
+  1190→  1190→                        {s.enrollments?.[0]?.program && (
+  1191→  1191→                          <Badge
+  1192→  1192→                            variant="outline"
+  1193→  1193→                            className="shrink-0 text-[10px]"
+  1194→  1194→                            style={{
+  1195→  1195→                              backgroundColor: `${s.enrollments[0].program.color}1A`,
+  1196→  1196→                              color: s.enrollments[0].program.color,
+  1197→  1197→                            }}
+  1198→  1198→                          >
+  1199→  1199→                            {s.enrollments[0].program.code}
+  1200→  1200→                          </Badge>
+  1201→  1201→                        )}
+  1202→  1202→                      </button>
+  1203→  1203→                    ))}
+  1204→  1204→                  </div>
+  1205→  1205→                )}
+  1206→  1206→              </div>
+  1207→  1207→            )}
+  1208→  1208→          </div>
+  1209→  1209→
+  1210→  1210→          {/* Month + Method */}
+  1211→  1211→          <div className="grid gap-4 sm:grid-cols-2">
+  1212→  1212→            <div className="flex flex-col gap-1.5">
+  1213→  1213→              <Label>Month (YYYY-MM) *</Label>
+  1214→  1214→              <Input
+  1215→  1215→                type="month"
+  1216→  1216→                value={form.month}
+  1217→  1217→                onChange={(e) => setForm((f) => ({ ...f, month: e.target.value }))}
+  1218→  1218→              />
+  1219→  1219→            </div>
+  1220→  1220→            <div className="flex flex-col gap-1.5">
+  1221→  1221→              <Label>Method</Label>
+  1222→  1222→              <Select
+  1223→  1223→                value={form.method}
+  1224→  1224→                onValueChange={(v) => setForm((f) => ({ ...f, method: v }))}
+  1225→  1225→              >
+  1226→  1226→                <SelectTrigger>
+  1227→  1227→                  <SelectValue placeholder="Select method" />
+  1228→  1228→                </SelectTrigger>
+  1229→  1229→                <SelectContent>
+  1230→  1230→                  {PAYMENT_METHODS.map((m) => (
+  1231→  1231→                    <SelectItem key={m} value={m}>
+  1232→  1232→                      {m}
+  1233→  1233→                    </SelectItem>
+  1234→  1234→                  ))}
+  1235→  1235→                </SelectContent>
+  1236→  1236→              </Select>
+  1237→  1237→            </div>
+  1238→  1238→          </div>
+  1239→  1239→
+  1240→  1240→          {/* Programmes multi-select (one bill, several programmes) */}
+  1241→  1241→          <div className="flex flex-col gap-1.5">
+  1242→  1242→            <div className="flex items-center justify-between gap-2">
+  1243→  1243→              <Label>Programmes *</Label>
+  1244→  1244→              <div className="flex items-center gap-1">
+  1245→  1245→                <Button
+  1246→  1246→                  type="button"
+  1247→  1247→                  variant="ghost"
+  1248→  1248→                  size="sm"
+  1249→  1249→                  className="h-7 px-2 text-xs"
+  1250→  1250→                  onClick={selectAllPrograms}
+  1251→  1251→                >
+  1252→  1252→                  Select all
+  1253→  1253→                </Button>
+  1254→  1254→                <Button
+  1255→  1255→                  type="button"
+  1256→  1256→                  variant="ghost"
+  1257→  1257→                  size="sm"
+  1258→  1258→                  className="h-7 px-2 text-xs text-muted-foreground"
+  1259→  1259→                  onClick={clearPrograms}
+  1260→  1260→                >
+  1261→  1261→                  Clear
+  1262→  1262→                </Button>
+  1263→  1263→              </div>
+  1264→  1264→            </div>
+  1265→  1265→            <div className="scroll-thin max-h-44 overflow-y-auto rounded-lg border p-1.5">
+  1266→  1266→              {allPrograms.length === 0 ? (
+  1267→  1267→                <p className="p-2 text-xs text-muted-foreground">
+  1268→  1268→                  No active programmes available.
+  1269→  1269→                </p>
+  1270→  1270→              ) : (
+  1271→  1271→                allPrograms.map((p) => {
+  1272→  1272→                  const checked = form.programIds.includes(p.id)
+  1273→  1273→                  return (
+  1274→  1274→                    <div
+  1275→  1275→                      key={p.id}
+  1276→  1276→                      className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 transition-colors hover:bg-muted/50"
+  1277→  1277→                    >
+  1278→  1278→                      <div className="flex min-w-0 items-center gap-2.5">
+  1279→  1279→                        <Checkbox
+  1280→  1280→                          id={`bill-prog-${p.id}`}
+  1281→  1281→                          checked={checked}
+  1282→  1282→                          onCheckedChange={() => toggleProgram(p.id)}
+  1283→  1283→                        />
+  1284→  1284→                        <span
+  1285→  1285→                          className="h-2.5 w-2.5 shrink-0 rounded-full"
+  1286→  1286→                          style={{ backgroundColor: p.color }}
+  1287→  1287→                        />
+  1288→  1288→                        <Label
+  1289→  1289→                          htmlFor={`bill-prog-${p.id}`}
+  1290→  1290→                          className="min-w-0 cursor-pointer font-normal"
+  1291→  1291→                        >
+  1292→  1292→                          <span className="block truncate text-sm font-medium leading-tight">
+  1293→  1293→                            {p.name}
+  1294→  1294→                          </span>
+  1295→  1295→                          <span className="block font-mono text-[10px] leading-tight text-muted-foreground">
+  1296→  1296→                            {p.code}
+  1297→  1297→                          </span>
+  1298→  1298→                        </Label>
+  1299→  1299→                      </div>
+  1300→  1300→                      <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+  1301→  1301→                        {currency(p.monthlyFee)}/mo
+  1302→  1302→                      </span>
+  1303→  1303→                    </div>
+  1304→  1304→                  )
+  1305→  1305→                })
+  1306→  1306→              )}
+  1307→  1307→            </div>
+  1308→  1308→          </div>
+  1309→  1309→
+  1310→  1310→          {/* Bill summary */}
+  1311→  1311→          <div className="rounded-lg border bg-muted/30 p-3">
+  1312→  1312→            <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+  1313→  1313→              Bill summary
+  1314→  1314→            </p>
+  1315→  1315→            {selectedPrograms.length === 0 ? (
+  1316→  1316→              <p className="text-xs text-muted-foreground">
+  1317→  1317→                No programmes selected yet — tick one or more above.
+  1318→  1318→              </p>
+  1319→  1319→            ) : (
+  1320→  1320→              <div className="space-y-1.5">
+  1321→  1321→                {selectedPrograms.map((p) => (
+  1322→  1322→                  <div key={p.id} className="flex items-center justify-between gap-2 text-sm">
+  1323→  1323→                    <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+  1324→  1324→                      <span
+  1325→  1325→                        className="h-2 w-2 shrink-0 rounded-full"
+  1326→  1326→                        style={{ backgroundColor: p.color }}
+  1327→  1327→                      />
+  1328→  1328→                      <span className="truncate">{p.name}</span>
+  1329→  1329→                    </span>
+  1330→  1330→                    <span className="shrink-0 font-medium tabular-nums">
+  1331→  1331→                      {currency(p.monthlyFee)}
+  1332→  1332→                    </span>
+  1333→  1333→                  </div>
+  1334→  1334→                ))}
+  1335→  1335→                <div className="flex items-center justify-between gap-2 border-t pt-2">
+  1336→  1336→                  <span className="text-sm font-semibold">Total billed</span>
+  1337→  1337→                  <span className="text-base font-bold tabular-nums text-primary">
+  1338→  1338→                    {currency(totalAmount)}
+  1339→  1339→                  </span>
+  1340→  1340→                </div>
+  1341→  1341→              </div>
+  1342→  1342→            )}
+  1343→  1343→          </div>
+  1344→  1344→
+  1345→  1345→          {/* Paid amount + dates */}
+  1346→  1346→          <div className="grid gap-4 sm:grid-cols-3">
+  1347→  1347→            <div className="flex flex-col gap-1.5">
+  1348→  1348→              <div className="flex items-center justify-between gap-2">
+  1349→  1349→                <Label>Paid amount (LKR)</Label>
+  1350→  1350→                {totalAmount > 0 && (
+  1351→  1351→                  <button
+  1352→  1352→                    type="button"
+  1353→  1353→                    onClick={() =>
+  1354→  1354→                      setForm((f) => ({ ...f, paidAmount: String(totalAmount) }))
+  1355→  1355→                    }
+  1356→  1356→                    className="text-[11px] font-medium text-primary hover:underline"
+  1357→  1357→                  >
+  1358→  1358→                    Pay full
+  1359→  1359→                  </button>
+  1360→  1360→                )}
+  1361→  1361→              </div>
+  1362→  1362→              <Input
+  1363→  1363→                type="number"
+  1364→  1364→                min={0}
+  1365→  1365→                value={form.paidAmount}
+  1366→  1366→                onChange={(e) => setForm((f) => ({ ...f, paidAmount: e.target.value }))}
+  1367→  1367→              />
+  1368→  1368→            </div>
+  1369→  1369→            <div className="flex flex-col gap-1.5">
+  1370→  1370→              <Label>Due date</Label>
+  1371→  1371→              <Input
+  1372→  1372→                type="date"
+  1373→  1373→                value={form.dueDate}
+  1374→  1374→                onChange={(e) => setForm((f) => ({ ...f, dueDate: e.target.value }))}
+  1375→  1375→              />
+  1376→  1376→            </div>
+  1377→  1377→            <div className="flex flex-col gap-1.5">
+  1378→  1378→              <Label>Paid date</Label>
+  1379→  1379→              <Input
+  1380→  1380→                type="date"
+  1381→  1381→                value={form.paidDate}
+  1382→  1382→                disabled={parseFloat(form.paidAmount) <= 0}
+  1383→  1383→                onChange={(e) => setForm((f) => ({ ...f, paidDate: e.target.value }))}
+  1384→  1384→              />
+  1385→  1385→            </div>
+  1386→  1386→          </div>
+  1387→  1387→
+  1388→  1388→          {/* Balance hint */}
+  1389→  1389→          {balance > 0 ? (
+  1390→  1390→            <div className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+  1391→  1391→              Outstanding balance: <span className="font-semibold">{currency(balance)}</span>{' '}
+  1392→  1392→              {parseFloat(form.paidAmount) > 0
+  1393→  1393→                ? '· status will be set to Partial'
+  1394→  1394→                : '· status will be set to Pending'}
+  1395→  1395→            </div>
+  1396→  1396→          ) : totalAmount > 0 ? (
+  1397→  1397→            <div className="rounded-lg bg-emerald-500/10 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-300">
+  1398→  1398→              Fully paid · status will be set to <span className="font-semibold">Paid</span>
+  1399→  1399→            </div>
+  1400→  1400→          ) : null}
+  1401→  1401→
+  1402→  1402→          {/* Note */}
+  1403→  1403→          <div className="flex flex-col gap-1.5">
+  1404→  1404→            <Label>Note</Label>
+  1405→  1405→            <Textarea
+  1406→  1406→              placeholder="Optional note / remarks"
+  1407→  1407→              value={form.note}
+  1408→  1408→              rows={2}
+  1409→  1409→              onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))}
+  1410→  1410→            />
+  1411→  1411→          </div>
+  1412→  1412→        </div>
+  1413→  1413→
+  1414→  1414→        <DialogFooter>
+  1415→  1415→          <Button variant="outline" onClick={onClose} disabled={saving}>
+  1416→  1416→            Cancel
+  1417→  1417→          </Button>
+  1418→  1418→          <Button onClick={handleSubmit} disabled={saving} className="gap-2">
+  1419→  1419→            {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+  1420→  1420→            {isEdit ? 'Save changes' : 'Record payment'}
+  1421→  1421→          </Button>
+  1422→  1422→        </DialogFooter>
+  1423→  1423→      </DialogContent>
+  1424→  1424→    </Dialog>
+  1425→  1425→  )
+  1426→  1426→}
+  1427→  1427→
+  1428→  1428→// ─── Receipt print dialog ──────────────────────────────────────────────────
+  1429→  1429→interface ReceiptDialogProps {
+  1430→  1430→  payment: PaymentRow
+  1431→  1431→  onClose: () => void
+  1432→  1432→}
+  1433→  1433→
+  1434→  1434→function ReceiptDialog({ payment, onClose }: ReceiptDialogProps) {
+  1435→  1435→  const receiptRef = useRef<HTMLDivElement>(null)
+  1436→  1436→  const balance = Math.max(0, payment.amount - payment.paidAmount)
+  1437→  1437→  const isPaid = payment.status === 'Paid'
+  1438→  1438→
+  1439→  1439→  const handlePrint = useCallback(() => {
+  1440→  1440→    if (typeof window !== 'undefined') {
+  1441→  1441→      window.print()
+  1442→  1442→    }
+  1443→  1443→  }, [])
+  1444→  1444→
+  1445→  1445→  return (
+  1446→  1446→    <Dialog open onOpenChange={(v) => !v && onClose()}>
+  1447→  1447→      <DialogContent className="max-w-md p-0">
+  1448→  1448→        <DialogHeader className="sr-only">
+  1449→  1449→          <DialogTitle>Receipt {payment.receiptNo}</DialogTitle>
+  1450→  1450→          <DialogDescription>Printable receipt for the selected payment.</DialogDescription>
+  1451→  1451→        </DialogHeader>
+  1452→  1452→
+  1453→  1453→        <div ref={receiptRef} className="receipt-print">
+  1454→  1454→          <div className="flex items-center justify-between gap-3 border-b p-4">
+  1455→  1455→            <div className="flex items-center gap-3">
+  1456→  1456→              <div className="relative h-10 w-10 overflow-hidden rounded-lg ring-1 ring-border">
+  1457→  1457→                <img
+  1458→  1458→                  src="/sanomin-logo.jpg"
+  1459→  1459→                  alt="SANOMIN"
+  1460→  1460→                  className="h-full w-full object-cover"
+  1461→  1461→                />
+  1462→  1462→              </div>
+  1463→  1463→              <div className="leading-tight">
+  1464→  1464→                <p className="text-sm font-bold">SANOMIN</p>
+  1465→  1465→                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+  1466→  1466→                  International Preschool
+  1467→  1467→                </p>
+  1468→  1468→              </div>
+  1469→  1469→            </div>
+  1470→  1470→            <Badge variant="outline" className="text-[10px]">
+  1471→  1471→              Payment Receipt
+  1472→  1472→            </Badge>
+  1473→  1473→          </div>
+  1474→  1474→
+  1475→  1475→          <div className="space-y-4 p-4">
+  1476→  1476→            {/* Receipt meta */}
+  1477→  1477→            <div className="flex items-center justify-between">
+  1478→  1478→              <div>
+  1479→  1479→                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+  1480→  1480→                  Receipt No
+  1481→  1481→                </p>
+  1482→  1482→                <p className="font-mono text-sm font-bold">{payment.receiptNo ?? '—'}</p>
+  1483→  1483→              </div>
+  1484→  1484→              <div className="text-right">
+  1485→  1485→                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+  1486→  1486→                  Billed month
+  1487→  1487→                </p>
+  1488→  1488→                <p className="text-sm font-semibold">{monthLabel(payment.month)}</p>
+  1489→  1489→              </div>
+  1490→  1490→            </div>
+  1491→  1491→
+  1492→  1492→            {/* Student */}
+  1493→  1493→            <div className="rounded-lg bg-muted/40 p-3">
+  1494→  1494→              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+  1495→  1495→                Student
+  1496→  1496→              </p>
+  1497→  1497→              <div className="mt-1 flex items-center gap-2.5">
+  1498→  1498→                <Avatar className="h-8 w-8">
+  1499→  1499→                  <AvatarFallback className={avatarColor(payment.student.fullName)}>
+  1500→  1500→                    {initials(payment.student.fullName)}
+  1501→  1501→                  </AvatarFallback>
+  1502→  1502→                </Avatar>
+  1503→  1503→                <div>
+  1504→  1504→                  <p className="text-sm font-semibold">{payment.student.fullName}</p>
+  1505→  1505→                  <p className="font-mono text-[10px] text-muted-foreground">
+  1506→  1506→                    {payment.student.studentId}
+  1507→  1507→                  </p>
+  1508→  1508→                </div>
+  1509→  1509→              </div>
+  1510→  1510→            </div>
+  1511→  1511→
+  1512→  1512→            {/* Line items */}
+  1513→  1513→            <div className="space-y-1.5 border-y py-3 text-sm">
+  1514→  1514→              {billLines(payment).map((item, i) => (
+  1515→  1515→                <div key={`${item.key}-${i}`} className="flex justify-between gap-2">
+  1516→  1516→                  <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+  1517→  1517→                    {item.color && (
+  1518→  1518→                      <span
+  1519→  1519→                        className="h-2 w-2 shrink-0 rounded-full"
+  1520→  1520→                        style={{ backgroundColor: item.color }}
+  1521→  1521→                      />
+  1522→  1522→                    )}
+  1523→  1523→                    <span className="truncate">{item.description}</span>
+  1524→  1524→                  </span>
+  1525→  1525→                  <span className="shrink-0 font-medium tabular-nums">
+  1526→  1526→                    {currency(item.amount)}
+  1527→  1527→                  </span>
+  1528→  1528→                </div>
+  1529→  1529→              ))}
+  1530→  1530→              <div className="flex justify-between border-t pt-1.5">
+  1531→  1531→                <span className="text-muted-foreground">Total billed</span>
+  1532→  1532→                <span className="font-semibold tabular-nums">{currency(payment.amount)}</span>
+  1533→  1533→              </div>
+  1534→  1534→              <div className="flex justify-between">
+  1535→  1535→                <span className="text-muted-foreground">Amount paid</span>
+  1536→  1536→                <span className="font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
+  1537→  1537→                  {currency(payment.paidAmount)}
+  1538→  1538→                </span>
+  1539→  1539→              </div>
+  1540→  1540→              <div className="flex justify-between">
+  1541→  1541→                <span className="text-muted-foreground">Balance</span>
+  1542→  1542→                <span
+  1543→  1543→                  className={`font-semibold tabular-nums ${
+  1544→  1544→                    balance > 0
+  1545→  1545→                      ? 'text-red-600 dark:text-red-400'
+  1546→  1546→                      : 'text-emerald-600 dark:text-emerald-400'
+  1547→  1547→                  }`}
+  1548→  1548→                >
+  1549→  1549→                  {currency(balance)}
+  1550→  1550→                </span>
+  1551→  1551→              </div>
+  1552→  1552→              <div className="flex justify-between">
+  1553→  1553→                <span className="text-muted-foreground">Method</span>
+  1554→  1554→                <span className="font-medium">{payment.method}</span>
+  1555→  1555→              </div>
+  1556→  1556→              <div className="flex justify-between">
+  1557→  1557→                <span className="text-muted-foreground">Paid date</span>
+  1558→  1558→                <span className="font-medium tabular-nums">
+  1559→  1559→                  {payment.paidDate ? fmtDate(payment.paidDate) : '—'}
+  1560→  1560→                </span>
+  1561→  1561→              </div>
+  1562→  1562→              <div className="flex justify-between">
+  1563→  1563→                <span className="text-muted-foreground">Due date</span>
+  1564→  1564→                <span className="font-medium tabular-nums">
+  1565→  1565→                  {payment.dueDate ? fmtDate(payment.dueDate) : '—'}
+  1566→  1566→                </span>
+  1567→  1567→              </div>
+  1568→  1568→            </div>
+  1569→  1569→
+  1570→  1570→            {/* Status + PAID stamp */}
+  1571→  1571→            <div className="flex items-center justify-between">
+  1572→  1572→              <Badge
+  1573→  1573→                variant="outline"
+  1574→  1574→                className={`px-3 py-1 text-xs font-semibold ${statusBadgeClasses(payment.status)}`}
+  1575→  1575→              >
+  1576→  1576→                {payment.status}
+  1577→  1577→              </Badge>
+  1578→  1578→              {isPaid && (
+  1579→  1579→                <div className="rotate-[-12deg] rounded-md border-2 border-emerald-500 px-3 py-1 text-lg font-extrabold uppercase tracking-widest text-emerald-500">
+  1580→  1580→                  Paid
+  1581→  1581→                </div>
+  1582→  1582→              )}
+  1583→  1583→            </div>
+  1584→  1584→
+  1585→  1585→            {payment.note && (
+  1586→  1586→              <div className="rounded-lg bg-muted/40 p-2 text-xs">
+  1587→  1587→                <span className="text-muted-foreground">Note:</span> {payment.note}
+  1588→  1588→              </div>
+  1589→  1589→            )}
+  1590→  1590→
+  1591→  1591→            <p className="text-center text-[10px] text-muted-foreground">
+  1592→  1592→              This is a computer-generated receipt. Generated{' '}
+  1593→  1593→              {new Date().toLocaleString('en-GB', {
+  1594→  1594→                day: '2-digit',
+  1595→  1595→                month: 'short',
+  1596→  1596→                year: 'numeric',
+  1597→  1597→                hour: '2-digit',
+  1598→  1598→                minute: '2-digit',
+  1599→  1599→              })}
+  1600→  1600→            </p>
+  1601→  1601→          </div>
+  1602→  1602→        </div>
+  1603→  1603→
+  1604→  1604→        <div className="flex items-center justify-end gap-2 border-t p-3">
+  1605→  1605→          <Button variant="outline" onClick={onClose}>
+  1606→  1606→            Close
+  1607→  1607→          </Button>
+  1608→  1608→          <Button onClick={handlePrint} className="gap-2">
+  1609→  1609→            <Printer className="h-4 w-4" /> Print
+  1610→  1610→          </Button>
+  1611→  1611→        </div>
+  1612→  1612→
+  1613→  1613→        <style jsx global>{`
+  1614→  1614→          @media print {
+  1615→  1615→            body * {
+  1616→  1616→              visibility: hidden;
+  1617→  1617→            }
+  1618→  1618→            .receipt-print,
+  1619→  1619→            .receipt-print * {
+  1620→  1620→              visibility: visible;
+  1621→  1621→            }
+  1622→  1622→            .receipt-print {
+  1623→  1623→              position: absolute;
+  1624→  1624→              left: 0;
+  1625→  1625→              top: 0;
+  1626→  1626→              width: 100%;
+  1627→  1627→              max-width: 100%;
+  1628→  1628→              padding: 0;
+  1629→  1629→              margin: 0;
+  1630→  1630→            }
+  1631→  1631→          }
+  1632→  1632→        `}</style>
+  1633→  1633→      </DialogContent>
+  1634→  1634→    </Dialog>
+  1635→  1635→  )
+  1636→  1636→}
+  1637→  1637→
+  1638→  1638→// ─── Bulk Generate Dialog ──────────────────────────────────────────────────
+  1639→  1639→interface BulkGenerateDialogProps {
+  1640→  1640→  open: boolean
+  1641→  1641→  onOpenChange: (v: boolean) => void
+  1642→  1642→  defaultMonth: string
+  1643→  1643→  generating: boolean
+  1644→  1644→  onConfirm: (month: string, dueDate?: string) => void
+  1645→  1645→}
+  1646→  1646→
+  1647→  1647→function BulkGenerateDialog({
+  1648→  1648→  open,
+  1649→  1649→  onOpenChange,
+  1650→  1650→  defaultMonth,
+  1651→  1651→  generating,
+  1652→  1652→  onConfirm,
+  1653→  1653→}: BulkGenerateDialogProps) {
+  1654→  1654→  const [targetMonth, setTargetMonth] = useState(defaultMonth)
+  1655→  1655→  const [dueDate, setDueDate] = useState('')
+  1656→  1656→
+  1657→  1657→  useEffect(() => {
+  1658→  1658→    if (!open) return
+  1659→  1659→    const [y, m] = defaultMonth.split('-').map(Number)
+  1660→  1660→    const dd = `${y}-${String(m).padStart(2, '0')}-10`
+  1661→  1661→    // Defer to avoid synchronous setState in effect body
+  1662→  1662→    Promise.resolve().then(() => {
+  1663→  1663→      setTargetMonth(defaultMonth)
+  1664→  1664→      setDueDate(dd)
+  1665→  1665→    })
+  1666→  1666→  }, [open, defaultMonth])
+  1667→  1667→
+  1668→  1668→  return (
+  1669→  1669→    <Dialog open={open} onOpenChange={onOpenChange}>
+  1670→  1670→      <DialogContent className="max-w-md">
+  1671→  1671→        <DialogHeader>
+  1672→  1672→          <DialogTitle className="flex items-center gap-2">
+  1673→  1673→            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+  1674→  1674→              <Zap className="h-4 w-4" />
+  1675→  1675→            </div>
+  1676→  1676→            Generate Monthly Fees
+  1677→  1677→          </DialogTitle>
+  1678→  1678→          <DialogDescription>
+  1679→  1679→            Creates <span className="font-medium">one bill per student</span> for the selected
+  1680→  1680→            month. Every programme the student is enrolled in becomes a line item on that single
+  1681→  1681→            bill — the student&rsquo;s name appears once, no matter how many programmes they take.
+  1682→  1682→          </DialogDescription>
+  1683→  1683→        </DialogHeader>
+  1684→  1684→
+  1685→  1685→        <div className="grid gap-4 py-2">
+  1686→  1686→          <div className="grid gap-1.5">
+  1687→  1687→            <Label htmlFor="bulk-month">Target month *</Label>
+  1688→  1688→            <Input
+  1689→  1689→              id="bulk-month"
+  1690→  1690→              type="month"
+  1691→  1691→              value={targetMonth}
+  1692→  1692→              onChange={(e) => setTargetMonth(e.target.value)}
+  1693→  1693→            />
+  1694→  1694→            <p className="text-xs text-muted-foreground">
+  1695→  1695→              Bills will be created with status &ldquo;Pending&rdquo; and one line item per
+  1696→  1696→              enrolled programme.
+  1697→  1697→            </p>
+  1698→  1698→          </div>
+  1699→  1699→
+  1700→  1700→          <div className="grid gap-1.5">
+  1701→  1701→            <Label htmlFor="bulk-due">Due date (optional)</Label>
+  1702→  1702→            <Input
+  1703→  1703→              id="bulk-due"
+  1704→  1704→              type="date"
+  1705→  1705→              value={dueDate}
+  1706→  1706→              onChange={(e) => setDueDate(e.target.value)}
+  1707→  1707→            />
+  1708→  1708→            <p className="text-xs text-muted-foreground">
+  1709→  1709→              When payment is due. Defaults to the 10th of the month.
+  1710→  1710→            </p>
+  1711→  1711→          </div>
+  1712→  1712→
+  1713→  1713→          <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
+  1714→  1714→            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+  1715→  1715→            <div className="text-amber-700 dark:text-amber-300">
+  1716→  1716→              <p className="font-medium">Students already billed are skipped</p>
+  1717→  1717→              <p className="mt-0.5 text-amber-600/80 dark:text-amber-400/80">
+  1718→  1718→                If a student already has a bill for this month, no duplicate will be created.
+  1719→  1719→              </p>
+  1720→  1720→            </div>
+  1721→  1721→          </div>
+  1722→  1722→        </div>
+  1723→  1723→
+  1724→  1724→        <DialogFooter>
+  1725→  1725→          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={generating}>
+  1726→  1726→            Cancel
+  1727→  1727→          </Button>
+  1728→  1728→          <Button
+  1729→  1729→            onClick={() => onConfirm(targetMonth, dueDate || undefined)}
+  1730→  1730→            disabled={generating || !targetMonth}
+  1731→  1731→            className="gap-2"
+  1732→  1732→          >
+  1733→  1733→            {generating ? (
+  1734→  1734→              <>
+  1735→  1735→                <Loader2 className="h-4 w-4 animate-spin" />
+  1736→  1736→                Generating…
+  1737→  1737→              </>
+  1738→  1738→            ) : (
+  1739→  1739→              <>
+  1740→  1740→                <Zap className="h-4 w-4" />
+  1741→  1741→                Generate
+  1742→  1742→              </>
+  1743→  1743→            )}
+  1744→  1744→          </Button>
+  1745→  1745→        </DialogFooter>
+  1746→  1746→      </DialogContent>
+  1747→  1747→    </Dialog>
+  1748→  1748→  )
+  1749→  1749→}
+  1750→  1750→

@@ -4,6 +4,7 @@ export type SectionKey =
   | 'dashboard'
   | 'students'
   | 'teachers'
+  | 'payroll'
   | 'attendance'
   | 'classes'
   | 'programs'
@@ -196,6 +197,47 @@ export interface PaymentSummary {
   pendingCount: number
   overdueCount: number
 }
+
+export interface PayrollRow {
+  teacher: {
+    id: string
+    teacherId: string
+    fullName: string
+    type: string
+    epfNo: string | null
+    classes: number
+  }
+  month: string // "YYYY-MM"
+  basicSalary: number
+  allowances: number
+  gross: number
+  epfEmployee: number
+  netSalary: number
+  epfEmployer: number
+  etfEmployer: number
+  employerCost: number
+  status: string // Paid | Pending
+  method: string | null // Cash | Bank | Cheque
+  paidDate: string | null
+  note: string | null
+  recordId: string | null
+}
+
+export interface PayrollSummary {
+  teachers: number
+  totalGross: number
+  totalEpfEmployee: number
+  totalNet: number
+  totalEpfEmployer: number
+  totalEtfEmployer: number
+  totalEmployerCost: number
+  paidCount: number
+  pendingCount: number
+  totalPaid: number
+  totalPending: number
+}
+
+export const PAYROLL_METHODS = ['Cash', 'Bank', 'Cheque'] as const
 
 export interface AnnouncementRow {
   id: string

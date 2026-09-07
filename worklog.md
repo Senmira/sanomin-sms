@@ -113,3 +113,58 @@ Stage Summary:
   3. Classes: teacher-pays-institute % (default 25) with live institute/teacher split + institute income stat.
   4. Manual attendance sheet: whole roster at once with per-row status + check-in/check-out, default times apply-to-all, mark-all-present, bulk save via POST /api/attendance/bulk.
 - Known pre-existing tsc strictness errors remain in untouched files (documented above); no runtime impact.
+
+---
+Task ID: 3-b
+Agent: main (Z.ai Code)
+Task: Payroll module backend — PayrollRecord model + /api/payroll GET register & POST mark-paid
+
+Work Log:
+- prisma/schema.prisma: added PayrollRecord model (teacherId+month unique; snapshots basicSalary/allowances/gross/epfEmployee/netSalary/epfEmployer/etfEmployer/employerCost at mark-paid time; status Pending|Paid; method Cash|Bank|Cheque; paidDate, note). Teacher.payrollRecords relation added. db:push OK.
+- NEW src/app/api/payroll/route.ts:
+  - GET ?month=YYYY-MM&q=&status= → register row per ACTIVE teacher merging live salary figures with persisted Paid snapshots; rate-only External teachers (no basic, monthlyRate>0) fall back to monthlyRate with ZERO statutory deductions; summary totals (totalGross/totalEpfEmployee/totalNet/totalEpfEmployer/totalEtfEmployer/totalEmployerCost, paidCount/pendingCount, totalPaid/totalPending — all round2).
+  - POST { month, entries:[{teacherId,status:'Paid'|'Pending',method?,note?,paidDate?}] } → upsert PayrollRecord per teacherId+month with salary snapshot; 200-row cap; row-level errors array. FIXED during QA: rate-only externals had netSalary wrongly EPF-deducted in snapshot (netSalary now = gross when no deductions).
+- Verified: GET 2026-09 → 7 active teachers, net 27,000, all pending; externals 8000/10000/9000 via rate fallback. POST mark-paid (Bank) → snapshot net 8000, epf 0, paidDate set. Test record reset to Pending.
+- Wiring: SectionKey 'payroll' (src/lib/types.ts), NAV entry Operations group w/ Banknote icon (src/components/layout/app-shell.tsx), page.tsx renders PayrollSection; stub payroll-section.tsx created to unblock compile.
+- src/lib/types.ts: added PayrollRow, PayrollSummary, PAYROLL_METHODS.
+
+Stage Summary:
+- API contract for the Payroll section UI (Task 3-d):
+  - GET /api/payroll?month=YYYY-MM → { month, data: PayrollRow[], summary: PayrollSummary } (types in src/lib/types.ts). PayrollRow = { teacher:{id,teacherId,fullName,type,epfNo,classes}, month, basicSalary, allowances, gross, epfEmployee, netSalary, epfEmployer, etfEmployer, employerCost, status 'Paid'|'Pending', method, paidDate, note, recordId }.
+  - POST /api/payroll { month, entries:[{teacherId,status:'Paid'|'Pending',method:'Cash'|'Bank'|'Cheque',note?,paidDate?}] } → { marked, failed, errors, message }.
+  - Rates: EPF employee 8% + employer 12% + ETF 3% ON BASIC ONLY (salaryBreakdown helper exists in types.ts); rate-only externals = no contributions.
+
+---
+Task ID: 3-d
+Agent: full-stack-developer
+Task: Replace payroll-section stub with complete Payroll UI (register table, stats, mark-paid flow, payslips)
+Work Log:
+- Only file touched: src/components/sections/fees… src/components/sections/payroll-section.tsx (single 'use client' file, ~1030 lines), following fees-section/teachers-section conventions exactly (SectionHeader/StatCard/EmptyState/ConfirmDialog shared components, api() + sonner toast, alive-flag useEffect with reloadRef + deferred setTimeout(run,0), lastNMonths/monthLabel/toIsoDate helpers, table-zebra + animate-row-in + scroll-thin classes).
+- Header: SectionHeader "Payroll" ("Monthly teacher salaries · EPF/ETF & payslips", Banknote icon) with Export CSV (outline, 17-column register export incl. EPF/ETF splits) + primary "Pay selected (N)" button (disabled until ≥1 pending row selected).
+- Filter card: Billing month Select (last 6 months), Status Select (All/Paid/Pending — passed server-side as &status=), client-side search Input on name/teacherId (no debounce, small dataset) + Clear button, plus "as of {monthLabel}" hint explaining pending=live figures vs paid=snapshot.
+- Stats strip (grid-cols-2 lg:grid-cols-4, 4 Skeleton h-28 while loading): Net payable = currencyCompact(summary.totalNet) w/ "N/M paid" hint (Banknote, blue); EPF + ETF (employer) = totalEpfEmployer+totalEtfEmployer (Landmark, amber, "12% + 3% of basic"); Total institute cost = totalEmployerCost (TrendingUp, purple); Paid this month = totalPaid (CheckCircle2, green, "{compact totalPending} outstanding"). All values use currencyCompact so nothing truncates.
+- Register table (Card p-0, max-h-[62vh] scroll, min-w-[900px], sticky header + sticky totals footer): columns = select checkbox (disabled on Paid rows; header checkbox w/ indeterminate selects all visible pending), Teacher (avatar initials/avatarColor, name w/ note StickyNote title tooltip, teacherId mono, Internal (primary) / External (purple) badge, emerald "EPF #…" badge, class count), Basic, Allowances, Gross, EPF −8% (muted, "—" when 0), Net salary (semibold, emerald when Paid), Emp. EPF+ETF (muted small), Status badge (Paid emerald-500/15 / Pending amber-500/15), Paid via (method + fmtDate, "—" when pending), Actions dropdown (Print payslip; Mark paid on pending rows / Mark pending on paid rows). Selected rows get bg-primary/5 (utilities layer overrides zebra). Totals footer: Basic/Allowances summed from visible rows, Gross/EPF/Net/Employer from summary.
+- Pay flow: per-row "Mark paid" + "Pay selected" open PayDialog (list of teachers w/ net amounts, "N teachers · total net payable" total in emerald, method Select Cash/Bank/Cheque default Cash, paid date Input[type=date] default today, optional note Textarea) → POST /api/payroll { month, entries:[{teacherId,status:'Paid',method,note?,paidDate?}] } → toast(res.message) (toast.warning + first 3 row errors when failed>0), reload, selection cleared. "Mark pending" per-row → ConfirmDialog (non-destructive) → POST status:'Pending' → toast + reload (snapshot cleared server-side).
+- PayslipDialog per teacher (max-w-md p-0, .payslip-print wrapper structured for separate print CSS): logo block (/sanomin-logo.jpg) + PAYSLIP title + month, status badge, employee block (name, ID, type, EPF no), earnings/deductions (Basic, Allowances, Gross, EPF −8%, bold emerald NET PAY), employer contributions panel w/ "paid by institute" badge (EPF 12%, ETF 3%, total cost), method + paid date, note, "____ Teacher / ____ Authorised" border-t signature lines, generated timestamp, Close + window.print() Print button.
+- States: error EmptyState w/ Retry, 6 skeleton table rows, empty "No teachers on payroll" (filter-aware description).
+- Verification: bun run lint clean; bunx tsc --noEmit → 0 payroll-section errors. agent-browser QA on http://localhost:3000: 7 rows (3 rate-only externals 8k/10k/9k with epfEmployee 0, 4 internals), all 4 stats + footer totals correct, checkbox select → "Pay selected (1)" → dialog (total LKR 8,000, Cash default, today's date) → method Bank + note → Confirm → toast "Payroll updated for 1 teacher.", row flips to Paid + "Bank · 07 Sept 2026" + emerald net, stats 1/7 paid & LKR 8.0K paid. Paid-row payslip verified (all blocks + signatures). Then reverted via "Mark pending" ConfirmDialog → back to Pending, paidCount 0 (DB clean, verified via API). Search ("ravi"→1 row), select-all (7 checked), status filter (Pending→7), mobile 375px (2-col stats, table h-scrolls) all pass; no console errors.
+Stage Summary:
+- Payroll section is feature-complete against the Task 3-b API contract: 6-month register with live/snapshot figures, EPF/ETF breakdown columns + totals footer, client-side search & status filter, 4 currencyCompact stat cards, per-row + bulk mark-paid dialog (method/date/note, snapshot server-side), mark-pending reversal via ConfirmDialog, printable payslip per teacher, CSV export, loading/empty/error states.
+- End-to-end browser-verified including full pay → revert cycle with clean data restored (0 paid / 7 pending / net LKR 27,000 for 2026-09). No API routes or other files touched.
+
+---
+Task ID: 3-e
+Agent: main (Z.ai Code)
+Task: Styling polish + final QA for payroll round
+
+Work Log:
+- src/app/globals.css: added real @media print rules — body * visibility:hidden; .receipt-print/.payslip-print subtrees revealed and pinned to page origin full-width; dialog chrome neutralised (static positioning, no max-height/scroll); buttons hidden; forces light colors in dark mode so printed receipts/payslips are clean black-on-white. This fixes a real defect: printing previously dumped the entire app page.
+- src/components/sections/teachers-section.tsx: "Monthly payroll" StatCard value switched currency() → currencyCompact() (fixed value truncation "LKR 27,00…" at lg grid width) + currencyCompact import.
+- Browser QA: all 9 sections render with no error states; Payroll section verified in light AND dark mode (stat cards, register table 7 rows, totals footer); payslip dialog renders correctly (rate-only external: Basic 8,000 / EPF 0 / NET PAY 8,000 / employer block "paid by institute" all LKR 0 / signature lines); Pay selected flow previously verified by Task 3-d agent (mark paid → stats update → revert to Pending; data left clean 0/7 paid).
+- bun run lint clean; bunx tsc scoped grep for payroll/teachers-section → 0 errors; dev.log clean (no errors after compile).
+
+Stage Summary:
+- NEW: Payroll section (sidebar → Operations → "Payroll") with monthly register, EPF/ETF breakdowns, mark-paid snapshots, bulk pay, CSV export, printable payslips.
+- NEW: print stylesheet making receipt & payslip printing produce clean sheets only.
+- Data state: 7 active teachers all Pending for 2026-09 (net LKR 27,000); no test rows left.
+- Risks/next: pre-existing tsc strictness errors in untouched files remain (documented in Task 3); payroll snapshot semantics mean editing a teacher's salary won't rewrite past Paid months (intentional); consider Payslip PDF export & salary history chart next round.

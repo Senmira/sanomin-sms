@@ -6,6 +6,7 @@ import { AppShell } from '@/components/layout/app-shell'
 import { DashboardSection } from '@/components/sections/dashboard-section'
 import { StudentsSection } from '@/components/sections/students-section'
 import { TeachersSection } from '@/components/sections/teachers-section'
+import { PayrollSection } from '@/components/sections/payroll-section'
 import { AttendanceSection } from '@/components/sections/attendance-section'
 import { ClassesSection } from '@/components/sections/classes-section'
 import { ProgramsSection } from '@/components/sections/programs-section'
@@ -34,6 +35,7 @@ export default function Home() {
       {section === 'dashboard' && <DashboardSection />}
       {section === 'students' && <StudentsSection />}
       {section === 'teachers' && <TeachersSection />}
+      {section === 'payroll' && <PayrollSection />}
       {section === 'attendance' && <AttendanceSection />}
       {section === 'classes' && <ClassesSection />}
       {section === 'programs' && <ProgramsSection />}

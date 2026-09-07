@@ -53,6 +53,7 @@ import {
   fmtDateTime,
   timeAgo,
   currency,
+  currencyCompact,
 } from '@/lib/format'
 
 import { SectionHeader } from '@/components/shared/section-header'
@@ -410,7 +411,7 @@ export function TeachersSection() {
         />
         <StatCard
           label="Monthly payroll"
-          value={currency(monthlyPayroll)}
+          value={currencyCompact(monthlyPayroll)}
           icon={Wallet}
           accent="green"
           hint="Net take-home · incl. EPF"

@@ -214,3 +214,58 @@
     box-shadow: 0 8px 24px -8px oklch(0.45 0.18 264 / 0.18);
   }
 }
+
+/* ─── Print: output ONLY the active receipt / payslip sheet ─────────────── */
+@media print {
+  /* Hide the entire app, then reveal only the sheet subtree */
+  body * {
+    visibility: hidden !important;
+  }
+  .receipt-print,
+  .receipt-print *,
+  .payslip-print,
+  .payslip-print * {
+    visibility: visible !important;
+  }
+  /* Pin the sheet to the page origin and give it the full width */
+  .receipt-print,
+  .payslip-print {
+    position: absolute !important;
+    inset: 0 auto auto 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
+  /* Neutralise dialog chrome around the sheet */
+  [data-slot="dialog-overlay"],
+  [data-slot="dialog-content"] {
+    position: static !important;
+    overflow: visible !important;
+    max-height: none !important;
+    border: 0 !important;
+    background: transparent !important;
+    padding: 0 !important;
+    width: auto !important;
+    max-width: none !important;
+    transform: none !important;
+    animation: none !important;
+  }
+  /* Never print interactive chrome */
+  button,
+  [role="dialog"] button {
+    display: none !important;
+  }
+  /* Print with light colors even in dark mode */
+  html,
+  body {
+    background: #fff !important;
+  }
+  .receipt-print *,
+  .payslip-print * {
+    color: #0f172a !important;
+    background-color: transparent !important;
+    border-color: #cbd5e1 !important;
+  }
+}

@@ -103,6 +103,34 @@ model Teacher {
 
   classes        Class[]
   attendance     Attendance[]
+  payrollRecords PayrollRecord[]
+}
+
+// ─── Payroll (monthly salary register for teachers) ────────────────────
+// One row per teacher per month. Amounts are SNAPSHOTTED when the salary is
+// marked paid so later edits to the teacher's salary don't rewrite history.
+model PayrollRecord {
+  id           String    @id @default(cuid())
+  teacherId    String
+  month        String                       // "YYYY-MM" the salary is FOR
+  basicSalary  Float     @default(0)
+  allowances   Float     @default(0)
+  gross        Float     @default(0)        // basic + allowances
+  epfEmployee  Float     @default(0)        // 8% of basic (deducted from staff)
+  netSalary    Float     @default(0)        // gross − epfEmployee
+  epfEmployer  Float     @default(0)        // 12% of basic
+  etfEmployer  Float     @default(0)        // 3% of basic
+  employerCost Float     @default(0)        // gross + epfEmployer + etfEmployer
+  status       String    @default("Pending") // Pending | Paid
+  method       String    @default("Cash")    // Cash | Bank | Cheque
+  paidDate     DateTime?
+  note         String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  teacher      Teacher   @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+
+  @@unique([teacherId, month])
 }
 
 // ─── Classes / Tuition sessions ───────────────────────────────────────────
