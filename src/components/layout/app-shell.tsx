@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, type ReactNode } from 'react'
+import { useState, useEffect, type ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/lib/store'
 import type { SectionKey } from '@/lib/types'
@@ -131,37 +131,209 @@ function CommandPalette({
   onOpenChange: (v: boolean) => void
 }) {
   const { setSection } = useAppStore()
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState<{
+    students: any[]
+    teachers: any[]
+    payments: any[]
+    announcements: any[]
+  } | null>(null)
+
+  // Debounced unified search
+  useEffect(() => {
+    const q = query.trim()
+    if (q.length < 2) {
+      // Defer to avoid synchronous setState in effect body
+      const t = setTimeout(() => setResults(null), 0)
+      return () => clearTimeout(t)
+    }
+    const timer = setTimeout(() => {
+      fetch(`/api/search?q=${encodeURIComponent(q)}`)
+        .then((r) => r.json())
+        .then((d) => setResults(d))
+        .catch(() => setResults(null))
+    }, 250)
+    return () => clearTimeout(timer)
+  }, [query])
+
+  const hasResults =
+    results &&
+    (results.students.length > 0 ||
+      results.teachers.length > 0 ||
+      results.payments.length > 0 ||
+      results.announcements.length > 0)
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="overflow-hidden p-0">
         <DialogHeader className="sr-only">
-          <DialogTitle>Quick navigation</DialogTitle>
+          <DialogTitle>Quick navigation & search</DialogTitle>
         </DialogHeader>
-        <Command className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group]]:px-2 [&_[cmdk-input-wrapper]_svg]:h-5 [&_[cmdk-input-wrapper]_svg]:w-5 [&_[cmdk-input]]:h-12 [&_[cmdk-item]]:px-2 [&_[cmdk-item]]:py-3 [&_[cmdk-item]_svg]:h-5 [&_[cmdk-item]_svg]:w-5">
-          <CommandInput placeholder="Search modules & jump to..." />
-          <CommandList>
-            <CommandEmpty>No results found.</CommandEmpty>
-            <CommandGroup heading="Modules">
+        <Command
+          shouldFilter={false}
+          className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group]]:px-2 [&_[cmdk-input-wrapper]_svg]:h-5 [&_[cmdk-input-wrapper]_svg]:w-5 [&_[cmdk-input]]:h-12 [&_[cmdk-item]]:px-2 [&_[cmdk-item]]:py-2.5 [&_[cmdk-item]_svg]:h-4 [&_[cmdk-item]_svg]:w-4"
+        >
+          <CommandInput
+            placeholder="Search students, teachers, payments, announcements… or jump to a module"
+            onValueChange={(v) => setQuery(v)}
+          />
+          <CommandList className="max-h-[60vh]">
+            <CommandEmpty>
+              {query.trim().length >= 2 ? 'No matches found.' : 'Type to search across records…'}
+            </CommandEmpty>
+
+            {/* Module navigation (always shown, but lower when searching) */}
+            <CommandGroup heading={query.trim().length >= 2 ? 'Modules' : 'Jump to module'}>
               {NAV.map((item) => {
                 const Icon = item.icon
                 return (
                   <CommandItem
                     key={item.key}
+                    value={`nav-${item.label}`}
                     onSelect={() => {
                       setSection(item.key)
                       onOpenChange(false)
+                      setQuery('')
                     }}
                     className="gap-3"
                   >
-                    <Icon className="h-5 w-5 text-muted-foreground" />
+                    <Icon className="h-4 w-4 text-muted-foreground" />
                     <div className="flex flex-col">
-                      <span>{item.label}</span>
+                      <span className="text-sm">{item.label}</span>
                       <span className="text-xs text-muted-foreground">{item.description}</span>
                     </div>
                   </CommandItem>
                 )
               })}
             </CommandGroup>
+
+            {/* Unified search results */}
+            {results && results.students.length > 0 && (
+              <CommandGroup heading="Students">
+                {results.students.map((s) => (
+                  <CommandItem
+                    key={`stu-${s.id}`}
+                    value={`student ${s.fullName} ${s.studentId}`}
+                    onSelect={() => {
+                      setSection('students')
+                      onOpenChange(false)
+                      setQuery('')
+                    }}
+                    className="gap-3"
+                  >
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-500/15 text-xs font-bold text-blue-600 dark:text-blue-400">
+                      {s.fullName.split(' ').map((p: string) => p[0]).slice(0, 2).join('').toUpperCase()}
+                    </div>
+                    <div className="flex min-w-0 flex-1 flex-col">
+                      <span className="truncate text-sm font-medium">{s.fullName}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {s.studentId} · {s.gender} · {s.ageGroup ?? '—'} · {s.status}
+                      </span>
+                    </div>
+                    <Users className="h-3.5 w-3.5 text-muted-foreground" />
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            )}
+
+            {results && results.teachers.length > 0 && (
+              <CommandGroup heading="Teachers">
+                {results.teachers.map((t) => (
+                  <CommandItem
+                    key={`tea-${t.id}`}
+                    value={`teacher ${t.fullName} ${t.teacherId}`}
+                    onSelect={() => {
+                      setSection('teachers')
+                      onOpenChange(false)
+                      setQuery('')
+                    }}
+                    className="gap-3"
+                  >
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-purple-500/15 text-xs font-bold text-purple-600 dark:text-purple-400">
+                      {t.fullName.split(' ').map((p: string) => p[0]).slice(0, 2).join('').toUpperCase()}
+                    </div>
+                    <div className="flex min-w-0 flex-1 flex-col">
+                      <span className="truncate text-sm font-medium">{t.fullName}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {t.teacherId} · {t.type} · {t.specialization ?? '—'}
+                      </span>
+                    </div>
+                    <GraduationCap className="h-3.5 w-3.5 text-muted-foreground" />
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            )}
+
+            {results && results.payments.length > 0 && (
+              <CommandGroup heading="Payments">
+                {results.payments.map((p) => (
+                  <CommandItem
+                    key={`pay-${p.id}`}
+                    value={`payment ${p.receiptNo} ${p.studentName}`}
+                    onSelect={() => {
+                      setSection('fees')
+                      onOpenChange(false)
+                      setQuery('')
+                    }}
+                    className="gap-3"
+                  >
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">
+                      <Wallet className="h-4 w-4" />
+                    </div>
+                    <div className="flex min-w-0 flex-1 flex-col">
+                      <span className="truncate text-sm font-medium">
+                        {p.receiptNo} · {p.studentName}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {p.month} · LKR {p.paidAmount.toLocaleString()}/{p.amount.toLocaleString()} · {p.status}
+                      </span>
+                    </div>
+                    {p.programColor && (
+                      <span
+                        className="h-2.5 w-2.5 shrink-0 rounded-full"
+                        style={{ background: p.programColor }}
+                        title={p.programCode ?? ''}
+                      />
+                    )}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            )}
+
+            {results && results.announcements.length > 0 && (
+              <CommandGroup heading="Announcements">
+                {results.announcements.map((a) => (
+                  <CommandItem
+                    key={`ann-${a.id}`}
+                    value={`announcement ${a.title}`}
+                    onSelect={() => {
+                      setSection('announcements')
+                      onOpenChange(false)
+                      setQuery('')
+                    }}
+                    className="gap-3"
+                  >
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-teal-500/15 text-teal-600 dark:text-teal-400">
+                      <Megaphone className="h-4 w-4" />
+                    </div>
+                    <div className="flex min-w-0 flex-1 flex-col">
+                      <span className="truncate text-sm font-medium">
+                        {a.pinned && '📌 '}{a.title}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {a.category} · {a.audience} · {a.priority}
+                      </span>
+                    </div>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            )}
+
+            {query.trim().length >= 2 && !hasResults && results !== null && (
+              <div className="px-4 py-6 text-center text-xs text-muted-foreground">
+                No records matched &ldquo;{query}&rdquo;. Try a different name, ID, or receipt number.
+              </div>
+            )}
           </CommandList>
         </Command>
       </DialogContent>

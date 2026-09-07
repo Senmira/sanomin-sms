@@ -386,7 +386,7 @@ export function StudentsSection() {
         />
         <StatCard
           label="Showing"
-          value={stats.filteredCount}
+          value={`${stats.filteredCount} / ${stats.totalStudents}`}
           icon={Filter}
           accent="amber"
           hint={hasFilters ? 'Filtered results' : 'No filters applied'}

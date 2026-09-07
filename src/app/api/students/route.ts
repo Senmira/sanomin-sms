@@ -102,7 +102,14 @@ export async function GET(req: Request) {
       }),
       db.student.count(), // unfiltered total
       db.student.count({ where: { status: 'Active' } }),
-      db.student.count({ where: { createdAt: { gte: monthStart } } }),
+      db.student.count({
+        where: {
+          OR: [
+            { admissionDate: { gte: monthStart } },
+            { admissionDate: null, createdAt: { gte: monthStart } },
+          ],
+        },
+      }),
     ])
 
   return NextResponse.json({

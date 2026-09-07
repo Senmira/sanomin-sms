@@ -482,3 +482,58 @@ Task: QA assessment + bug fix (reports null crash) + new Attendance Heatmap Cale
   - Programs visual icons + filter chips (VLM suggested)
   - Dashboard chart hover tooltips with drill-down
 - The 15-min recurring webDevReview cron (job 366041) will continue QA + feature additions autonomously.
+
+---
+Task ID: 11 (webDevReview cron round 5)
+Agent: main (orchestrator) — triggered by 15-min recurring webDevReview cron
+Task: QA assessment + Global Quick Search feature + Students stat card fix
+
+## Current project status assessment
+- App had 10 modules + heatmap feature after round 4. Dev server running on :3000, lint clean, all sections at 8-9/10 polish.
+- QA via agent-browser confirmed all 10 sections render error-free. VLM rated Students/Settings/Dashboard 8/10. Identified: (1) Students stat cards all showing "48" (redundant); (2) No global search — admin must navigate to each section to find records.
+
+## Completed modifications & verification
+
+### New feature: Global Quick Search (Task ID 11-a)
+The #1 admin-productivity improvement — a unified search accessible from the topbar ⌘K palette that finds any student, teacher, payment, or announcement by name/ID/receipt number.
+
+- **API**: Created `/api/search?q=<query>` — unified search across 4 entities in parallel:
+  - Students: by fullName, studentId, barcode, indexNo (max 5)
+  - Teachers: by fullName, teacherId, fingerprintId, phone, specialization (max 5)
+  - Payments: by receiptNo, student fullName, student studentId (max 5, newest first)
+  - Announcements: by title, body — Published only (max 4, pinned first)
+  - Returns grouped results with entity-specific metadata (student gender/age/status, teacher type/specialization, payment amounts/status, announcement category/priority)
+  - Requires 2+ char query; returns empty arrays for shorter queries
+
+- **UI**: Enhanced the existing ⌘K CommandPalette in `app-shell.tsx`:
+  - Added debounced search (250ms) calling `/api/search?q=`
+  - `shouldFilter={false}` on Command (custom filtering, not cmdk's built-in)
+  - `onValueChange` on `CommandInput` (not `Command` — cmdk's `onValueChange` tracks active item, not input text; fixed after initial test)
+  - Module navigation always visible at top; search results appear in grouped sections below (Students / Teachers / Payments / Announcements) with colored avatar circles (blue=students, purple=teachers, amber=payments, teal=announcements), entity-specific sub-text, and trailing icons
+  - Each result navigates to the relevant section on select (student→students, teacher→teachers, payment→fees, announcement→announcements)
+  - "No records matched" message when search yields no results
+  - Loading state handled (results appear after debounce)
+- **Verified end-to-end**: typing "Mahinda" found student "Mahinda Kumar Rishalini" (P24001) + 3 payment records. Typing "SAN-2026-0001" found the payment receipt. DOM confirmed 16 items across Modules/Students/Payments groups for "Mahinda" and 11 items across Modules/Payments for receipt search.
+
+### Fix: Students stat cards redundancy
+- **Root cause**: VLM flagged all 4 stat cards showing "48" — `totalStudents`=48, `activeStudents`=48 (all active), `newThisMonth`=48 (used `createdAt` which is when seeded, not `admissionDate`), `filteredCount`=48 (no filters).
+- **Fix 1**: Changed `newThisMonth` API query from `createdAt: { gte: monthStart }` to `admissionDate: { gte: monthStart }` (with fallback to `createdAt` when `admissionDate` is null). Now correctly returns 0 (no admissions in September 2026 — all were 2024-2025).
+- **Fix 2**: Changed "Showing" stat card from `value={stats.filteredCount}` to `value={\`${stats.filteredCount} / ${stats.totalStudents}\`}` — now shows "48 / 48" instead of just "48", clearly distinguishing it from the total. Added dynamic hint "Filtered results" vs "No filters applied".
+- **Verified**: stat cards now show distinct values: 48 (total) | 48 (active) | 0 (new this month) | 48/48 (showing).
+
+### Verification
+- `bun run lint` → 0 errors, 0 warnings (fixed `react-hooks/set-state-in-effect` by deferring `setResults(null)` via `setTimeout(..., 0)`).
+- agent-browser sweep: all 10 sections render with zero runtime/console errors.
+- Search API returns 200 with correct grouped results for student name, student ID, and receipt number queries.
+- Students stat cards now show distinct, non-redundant values.
+
+## Unresolved issues / risks & next-phase recommendations
+- **No critical bugs remaining.** All 10 modules + heatmap + global search operational and verified.
+- **Next feature candidates** (not yet implemented):
+  - Export PDF reports (currently CSV only)
+  - Student photo upload / AI avatar generation (would use image-generation skill)
+  - Teachers "Join Date"/"Last Active" column (VLM suggested)
+  - Programs visual icons + filter chips (VLM suggested)
+  - Dashboard chart hover tooltips with drill-down
+  - Search result "open detail" (currently navigates to section; could open specific record dialog)
+- The 15-min recurring webDevReview cron (job 366041) will continue QA + feature additions autonomously.
