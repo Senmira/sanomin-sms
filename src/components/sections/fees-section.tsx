@@ -25,6 +25,7 @@ import {
   BellRing,
   FileText,
   MessageCircle,
+  MessageCircleMore,
   Copy,
   ExternalLink,
   UserRound,
@@ -246,6 +247,7 @@ export function FeesSection() {
   const [deleteTarget, setDeleteTarget] = useState<PaymentRow | null>(null)
   const [generating, setGenerating] = useState(false)
   const [bulkOpen, setBulkOpen] = useState(false)
+  const [blastOpen, setBlastOpen] = useState(false)
   const [sendingReminder, setSendingReminder] = useState(false)
 
   // ─── Debounce search input ──────────────────────────────────────────────
@@ -478,6 +480,15 @@ export function FeesSection() {
                 <BellRing className="h-4 w-4" />
               )}
               Send Reminder
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setBlastOpen(true)}
+              className="gap-2 border-emerald-500/40 text-emerald-600 hover:bg-emerald-500/5 dark:text-emerald-400"
+            >
+              <MessageCircleMore className="h-4 w-4" />
+              WhatsApp Blast
             </Button>
             <Button
               size="sm"
@@ -876,6 +887,11 @@ export function FeesSection() {
       {/* WhatsApp reminder / receipt share */}
       {whatsappTarget && (
         <WhatsAppDialog payment={whatsappTarget} onClose={() => setWhatsappTarget(null)} />
+      )}
+
+      {/* Bulk WhatsApp blast to all outstanding guardians */}
+      {blastOpen && (
+        <BulkWhatsAppDialog month={month} onClose={() => setBlastOpen(false)} />
       )}
 
       {/* Delete confirm */}
@@ -1665,6 +1681,376 @@ function WhatsAppDialog({ payment, onClose }: { payment: PaymentRow; onClose: ()
             <Button disabled className="gap-2">
               <MessageCircle className="h-4 w-4" />
               {guardian ? 'Invalid phone number' : 'No guardian phone'}
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ─── Bulk WhatsApp blast (all outstanding guardians for the month) ─────────
+// Server groups every outstanding bill per guardian phone; the admin walks the
+// queue row by row: copy the combined message or open wa.me per family. Rows
+// already contacted get a "Contacted" tick so nothing is sent twice.
+interface BlastBill {
+  id: string
+  receiptNo: string | null
+  month: string
+  total: number
+  paid: number
+  balance: number
+  dueDate: string | null
+  status: string
+  lines: { description: string; amount: number }[]
+}
+interface BlastStudent {
+  studentId: string
+  studentRef: string
+  studentName: string
+  bills: BlastBill[]
+  balance: number
+}
+interface BlastGuardian {
+  phone: string
+  displayPhone: string
+  guardianName: string
+  isPrimary: boolean
+  students: BlastStudent[]
+  billCount: number
+  totalBalance: number
+}
+interface BlastData {
+  month: string
+  totals: { guardians: number; bills: number; outstanding: number; unreachable: number }
+  guardians: BlastGuardian[]
+  unreachable: Array<{
+    studentRef: string
+    studentName: string
+    guardianName: string | null
+    balance: number
+    reason: string
+  }>
+}
+
+function blastMessage(
+  g: BlastGuardian,
+  schoolName: string,
+  schoolPhone: string,
+  month: string,
+): string {
+  const lines: string[] = [
+    `Dear ${g.guardianName || 'Parent'},`,
+    ``,
+    `Friendly reminder from ${schoolName}: the following fees are due for ${monthLabel(month)}.`,
+  ]
+  for (const s of g.students) {
+    lines.push(``, `*${s.studentName}* (${s.studentRef})`)
+    for (const b of s.bills) {
+      if (b.lines.length > 1 || (b.lines[0] && b.lines[0].description !== 'Tuition fee')) {
+        for (const l of b.lines) lines.push(`• ${l.description}: LKR ${l.amount.toLocaleString()}`)
+      }
+      lines.push(
+        `• Bill ${b.receiptNo ?? ''} — balance: *LKR ${b.balance.toLocaleString()}*`,
+      )
+    }
+  }
+  lines.push(
+    ``,
+    `*Total balance due: LKR ${g.totalBalance.toLocaleString()}*`,
+    ``,
+    `Kindly settle at your earliest convenience. Payments accepted via Cash, Card or Bank transfer.`,
+    ``,
+    `Thank you!`,
+    `— ${schoolName}${schoolPhone ? ` (${schoolPhone})` : ''}`,
+  )
+  return lines.join('\n')
+}
+
+function BulkWhatsAppDialog({ month, onClose }: { month: string; onClose: () => void }) {
+  const school = useSchoolInfo()
+  const [data, setData] = useState<BlastData | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [sent, setSent] = useState<Set<string>>(new Set())
+  const [refetchTick, setRefetchTick] = useState(0)
+
+  useEffect(() => {
+    let alive = true
+    // Async-only state setup — satisfies react-hooks/set-state-in-effect
+    Promise.resolve().then(() => {
+      if (!alive) return
+      setLoading(true)
+      setError(null)
+    })
+    api<BlastData>(`/api/payments/outstanding-guardians?month=${month}`)
+      .then((d) => {
+        if (!alive) return
+        setData(d)
+      })
+      .catch((e) => alive && setError(e instanceof Error ? e.message : 'Failed to load queue'))
+      .finally(() => alive && setLoading(false))
+    return () => {
+      alive = false
+    }
+  }, [month, refetchTick])
+
+  const markSent = (phone: string) =>
+    setSent((prev) => {
+      const next = new Set(prev)
+      next.add(phone)
+      return next
+    })
+
+  const openChat = (g: BlastGuardian) => {
+    const msg = blastMessage(g, school.name, school.phone, month)
+    window.open(`https://wa.me/${g.phone}?text=${encodeURIComponent(msg)}`, '_blank', 'noopener')
+    markSent(g.phone)
+  }
+
+  const copyOne = async (g: BlastGuardian) => {
+    try {
+      await navigator.clipboard.writeText(blastMessage(g, school.name, school.phone, month))
+      toast.success(`Message for ${g.guardianName || g.displayPhone} copied`)
+    } catch {
+      toast.error('Could not copy — please try again')
+    }
+  }
+
+  // First un-contacted guardian — powers the "Open next" queue button
+  const nextGuardian = data?.guardians.find((g) => !sent.has(g.phone)) ?? null
+  const contacted = sent.size
+  const queueTotal = data?.guardians.length ?? 0
+
+  const openNext = () => {
+    if (!nextGuardian) return
+    openChat(nextGuardian)
+  }
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="flex max-h-[88vh] flex-col overflow-hidden sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+              <MessageCircleMore className="h-4 w-4" />
+            </span>
+            WhatsApp blast — outstanding fees
+          </DialogTitle>
+          <DialogDescription>
+            One message per family, combining every outstanding bill for {monthLabel(month)}.
+          </DialogDescription>
+        </DialogHeader>
+
+        {loading ? (
+          <div className="grid gap-2 py-2">
+            {[0, 1, 2, 3].map((i) => (
+              <Skeleton key={i} className="h-16 w-full" />
+            ))}
+          </div>
+        ) : error ? (
+          <div className="flex flex-col items-start gap-3 rounded-lg border border-red-500/30 bg-red-500/5 p-4">
+            <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+            <Button variant="outline" size="sm" onClick={() => setRefetchTick((t) => t + 1)}>
+              Retry
+            </Button>
+          </div>
+        ) : !data || data.guardians.length === 0 ? (
+          <div className="flex flex-col items-center gap-2 py-10 text-center">
+            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+              <CheckCircle2 className="h-6 w-6" />
+            </span>
+            <p className="text-sm font-semibold">Nothing to chase 🎉</p>
+            <p className="text-xs text-muted-foreground">
+              Every bill for {monthLabel(month)} is fully settled — no reminders needed.
+            </p>
+          </div>
+        ) : (
+          <>
+            {/* Queue summary + progress */}
+            <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-muted/30 p-3">
+              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+                <span className="font-semibold text-foreground">{queueTotal} families</span>
+                <span className="text-muted-foreground">{data.totals.bills} bills</span>
+                <span className="font-semibold text-red-600 dark:text-red-400">
+                  {currency(data.totals.outstanding)} outstanding
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="h-1.5 w-24 overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full bg-emerald-500 transition-all duration-500"
+                    style={{ width: `${queueTotal ? (contacted / queueTotal) * 100 : 0}%` }}
+                  />
+                </div>
+                <span className="font-mono text-[10px] text-muted-foreground">
+                  {contacted}/{queueTotal} contacted
+                </span>
+              </div>
+            </div>
+
+            {/* Guardian queue */}
+            <div className="scroll-thin -mx-1 flex-1 space-y-2 overflow-y-auto px-1">
+              {data.guardians.map((g) => {
+                const isSent = sent.has(g.phone)
+                return (
+                  <div
+                    key={g.phone}
+                    className={`card-lift rounded-xl border p-3 transition-colors ${
+                      isSent
+                        ? 'border-emerald-500/40 bg-emerald-500/5'
+                        : 'bg-card hover:border-emerald-500/30'
+                    }`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <span
+                        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
+                          isSent
+                            ? 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300'
+                            : 'bg-primary/10 text-primary'
+                        }`}
+                      >
+                        {isSent ? <CheckCircle2 className="h-4 w-4" /> : initials(g.guardianName || '?')}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                          <p className="truncate text-sm font-semibold">
+                            {g.guardianName || 'Unknown guardian'}
+                          </p>
+                          {/* Balance shown inline on mobile (right column hidden) */}
+                          <span className="text-sm font-bold tabular-nums text-red-600 dark:text-red-400 sm:hidden">
+                            {currency(g.totalBalance)}
+                          </span>
+                          {g.isPrimary && (
+                            <Badge
+                              variant="outline"
+                              className="h-4 border-emerald-500/30 bg-emerald-500/10 px-1 text-[9px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-300"
+                            >
+                              primary
+                            </Badge>
+                          )}
+                          {isSent && (
+                            <Badge className="h-4 bg-emerald-600 px-1 text-[9px] font-semibold uppercase tracking-wide">
+                              contacted
+                            </Badge>
+                          )}
+                        </div>
+                        <p className="font-mono text-[11px] text-muted-foreground">
+                          +{g.phone} · {g.billCount} bill{g.billCount > 1 ? 's' : ''}
+                        </p>
+                        {/* Students + balances */}
+                        <div className="mt-1.5 flex flex-wrap gap-1">
+                          {g.students.map((s) => (
+                            <span
+                              key={s.studentId}
+                              className="inline-flex max-w-full items-center gap-1 rounded-full bg-muted/70 px-2 py-0.5 text-[10px] font-medium"
+                            >
+                              <span className="max-w-44 truncate sm:max-w-56">{s.studentName}</span>
+                              <span className="shrink-0 font-semibold text-red-600 dark:text-red-400">
+                                {currency(s.balance)}
+                              </span>
+                            </span>
+                          ))}
+                        </div>
+                        {/* Mobile actions row (desktop keeps its right column) */}
+                        <div className="mt-2 flex gap-1.5 sm:hidden">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 flex-1 gap-1 text-[11px]"
+                            onClick={() => copyOne(g)}
+                          >
+                            <Copy className="h-3 w-3" /> Copy
+                          </Button>
+                          <Button
+                            size="sm"
+                            className="h-7 flex-1 gap-1 bg-emerald-600 text-[11px] hover:bg-emerald-700"
+                            onClick={() => openChat(g)}
+                          >
+                            <ExternalLink className="h-3 w-3" />
+                            {isSent ? 'Reopen chat' : 'Open chat'}
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="hidden shrink-0 flex-col items-end gap-1.5 sm:flex">
+                        <span className="text-sm font-bold tabular-nums text-red-600 dark:text-red-400">
+                          {currency(g.totalBalance)}
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 gap-1 px-2 text-[11px]"
+                            onClick={() => copyOne(g)}
+                          >
+                            <Copy className="h-3 w-3" /> Copy
+                          </Button>
+                          <Button
+                            size="sm"
+                            className="h-7 gap-1 bg-emerald-600 px-2.5 text-[11px] hover:bg-emerald-700"
+                            onClick={() => openChat(g)}
+                          >
+                            <ExternalLink className="h-3 w-3" />
+                            {isSent ? 'Reopen' : 'Open'}
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+
+              {/* Unreachable — data-quality follow-up */}
+              {data.unreachable.length > 0 && (
+                <div className="rounded-xl border border-dashed border-amber-500/40 bg-amber-500/5 p-3">
+                  <p className="flex items-center gap-1.5 text-xs font-semibold text-amber-700 dark:text-amber-300">
+                    <AlertCircle className="h-3.5 w-3.5" />
+                    {data.unreachable.length} bill{data.unreachable.length > 1 ? 's' : ''} unreachable
+                    on WhatsApp
+                  </p>
+                  <div className="mt-2 space-y-1">
+                    {data.unreachable.map((u, i) => (
+                      <div
+                        key={`${u.studentRef}-${i}`}
+                        className="flex items-center justify-between gap-2 text-[11px]"
+                      >
+                        <span className="truncate">
+                          <span className="font-medium">{u.studentName}</span>{' '}
+                          <span className="text-muted-foreground">
+                            ({u.studentRef}) · {u.reason}
+                          </span>
+                        </span>
+                        <span className="shrink-0 font-semibold tabular-nums">
+                          {currency(u.balance)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="mt-2 text-[10px] text-amber-700/80 dark:text-amber-300/80">
+                    Fix these guardian phone numbers in the Students section, then reopen the blast.
+                  </p>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        <DialogFooter className="items-center gap-2 sm:justify-between">
+          <Button variant="outline" onClick={onClose}>
+            Close
+          </Button>
+          {nextGuardian ? (
+            <Button
+              className="gap-2 bg-emerald-600 hover:bg-emerald-700"
+              onClick={openNext}
+            >
+              <MessageCircle className="h-4 w-4" />
+              Open next ({contacted + 1}/{queueTotal})
+            </Button>
+          ) : (
+            <Button disabled className="gap-2 bg-emerald-600">
+              <CheckCircle2 className="h-4 w-4" />
+              All contacted
             </Button>
           )}
         </DialogFooter>

@@ -48,6 +48,7 @@ import {
   ReceiptText,
   Briefcase,
   AlertCircle,
+  UserCheck,
 } from 'lucide-react'
 import { EmptyState } from '@/components/shared/empty-state'
 import {
@@ -77,6 +78,19 @@ interface AttendanceReport {
   programCount: { code: string; name: string; color: string; count: number }[]
   teacherTypeCount: { Internal: number; External: number }
   topAttendees: { name: string; ref: string; type: string; count: number }[]
+  teacherStats: Array<{
+    id: string
+    ref: string
+    name: string
+    type: string
+    specialization: string | null
+    present: number
+    late: number
+    absent: number
+    leave: number
+    total: number
+    rate: number | null
+  }>
 }
 
 interface EnrollmentReport {
@@ -308,6 +322,19 @@ function AttendanceReportPanel() {
     const rows = [
       ['Date', 'Students', 'Teachers', 'Present', 'Late'],
       ...data.daily.map((d) => [d.date, d.students, d.teachers, d.present, d.late]),
+      [],
+      ['Teacher', 'Ref', 'Type', 'Present', 'Late', 'Absent', 'Leave', 'Records', 'Rate %'],
+      ...data.teacherStats.map((t) => [
+        t.name,
+        t.ref,
+        t.type,
+        t.present,
+        t.late,
+        t.absent,
+        t.leave,
+        t.total,
+        t.rate ?? '',
+      ]),
     ]
     downloadCsv('attendance_report.csv', rows)
   }
@@ -470,6 +497,130 @@ function AttendanceReportPanel() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Per-teacher attendance breakdown */}
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-violet-500/15 text-violet-600 dark:text-violet-400">
+                <UserCheck className="h-3.5 w-3.5" />
+              </span>
+              Teacher Attendance Breakdown
+            </CardTitle>
+            <span className="text-[11px] text-muted-foreground">
+              {fmtDate(data.range.from)} → {fmtDate(data.range.to)} · ranked by present rate
+            </span>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="scroll-thin max-h-96 space-y-2 overflow-y-auto pr-1">
+            {data.teacherStats.map((t, i) => {
+              const noData = t.rate === null
+              const rateColor =
+                t.rate === null
+                  ? 'bg-muted text-muted-foreground'
+                  : t.rate >= 90
+                    ? 'bg-emerald-500'
+                    : t.rate >= 75
+                      ? 'bg-amber-500'
+                      : 'bg-red-500'
+              const badgeCls =
+                t.rate === null
+                  ? 'bg-muted text-muted-foreground'
+                  : t.rate >= 90
+                    ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                    : t.rate >= 75
+                      ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                      : 'bg-red-500/15 text-red-700 dark:text-red-300'
+              return (
+                <div
+                  key={t.id}
+                  className="card-lift flex items-center gap-3 rounded-xl border p-2.5"
+                >
+                  <span className="w-5 shrink-0 text-center text-xs font-bold text-muted-foreground">
+                    {i + 1}
+                  </span>
+                  <Avatar className="h-9 w-9 shrink-0">
+                    <AvatarFallback className={avatarColor(t.name)}>
+                      {initials(t.name)}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                      <p className="truncate text-sm font-semibold">{t.name}</p>
+                      <Badge
+                        variant="outline"
+                        className={`h-4 px-1 text-[9px] font-semibold uppercase tracking-wide ${
+                          t.type === 'Internal'
+                            ? 'border-blue-500/30 text-blue-700 dark:text-blue-300'
+                            : 'border-violet-500/30 text-violet-700 dark:text-violet-300'
+                        }`}
+                      >
+                        {t.type}
+                      </Badge>
+                      {t.specialization && (
+                        <span className="hidden truncate text-[10px] text-muted-foreground sm:inline">
+                          {t.specialization}
+                        </span>
+                      )}
+                    </div>
+                    {/* Rate bar */}
+                    <div className="mt-1.5 flex items-center gap-2">
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                        <div
+                          className={`animate-bar-in h-full rounded-full transition-all duration-700 ${rateColor}`}
+                          style={{ width: `${noData ? 0 : Math.max(3, t.rate!)}%` }}
+                        />
+                      </div>
+                      <span
+                        className={`shrink-0 rounded px-1.5 py-px text-[10px] font-bold tabular-nums ${badgeCls}`}
+                      >
+                        {noData ? 'no records' : `${t.rate}%`}
+                      </span>
+                    </div>
+                  </div>
+                  {/* P/L/A/Leave mini counts */}
+                  <div className="hidden shrink-0 items-center gap-1 sm:flex">
+                    {(
+                      [
+                        ['P', t.present, 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'],
+                        ['L', t.late, 'bg-amber-500/15 text-amber-700 dark:text-amber-300'],
+                        ['A', t.absent, 'bg-red-500/15 text-red-700 dark:text-red-300'],
+                        ['V', t.leave, 'bg-teal-500/15 text-teal-700 dark:text-teal-300'],
+                      ] as const
+                    ).map(([label, n, cls]) => (
+                      <span
+                        key={label}
+                        className={`flex h-6 min-w-6 flex-col items-center justify-center rounded-md px-1 text-[9px] font-bold leading-none ${cls}`}
+                        title={label === 'P' ? 'Present' : label === 'L' ? 'Late' : label === 'A' ? 'Absent' : 'Leave'}
+                      >
+                        {n}
+                        <span className="text-[7px] font-semibold opacity-70">{label}</span>
+                      </span>
+                    ))}
+                    <span className="ml-1 w-10 text-right text-xs font-semibold tabular-nums text-muted-foreground">
+                      {t.total} rec
+                    </span>
+                  </div>
+                  <span className="shrink-0 text-sm font-bold tabular-nums text-primary sm:hidden">
+                    {t.total}
+                  </span>
+                </div>
+              )
+            })}
+            {data.teacherStats.length === 0 && (
+              <p className="py-6 text-center text-xs text-muted-foreground">
+                No working teachers on file.
+              </p>
+            )}
+          </div>
+          <p className="mt-3 border-t pt-2 text-[11px] text-muted-foreground">
+            Rate = present ÷ records in range. Late and absent reduce the rate; approved leave is
+            tracked separately. Teachers without records in the range are listed at the bottom.
+          </p>
+        </CardContent>
+      </Card>
     </div>
   )
 }

@@ -521,6 +521,54 @@ async function attendanceReport(searchParams: URLSearchParams) {
     if (r.teacher.type in teacherTypeCount) (teacherTypeCount as any)[r.teacher.type]++
   }
 
+  // ── Per-teacher attendance (every working teacher, even with 0 records) ──
+  const workingTeachers = await db.teacher.findMany({
+    where: { status: { not: 'Inactive' } },
+    select: { id: true, teacherId: true, fullName: true, type: true, specialization: true },
+    orderBy: { fullName: 'asc' },
+  })
+  const teacherAgg = new Map<
+    string,
+    { present: number; late: number; absent: number; leave: number; total: number }
+  >()
+  for (const t of workingTeachers) {
+    teacherAgg.set(t.id, { present: 0, late: 0, absent: 0, leave: 0, total: 0 })
+  }
+  for (const r of records) {
+    if (r.personType !== 'Teacher') continue
+    const agg = teacherAgg.get(r.personId)
+    if (!agg) continue
+    agg.total++
+    if (r.status === 'Present') agg.present++
+    else if (r.status === 'Late') agg.late++
+    else if (r.status === 'Absent') agg.absent++
+    else if (r.status === 'Leave') agg.leave++
+  }
+  const teacherStats = workingTeachers
+    .map((t) => {
+      const a = teacherAgg.get(t.id)!
+      const rate = a.total > 0 ? Math.round((a.present / a.total) * 100) : null
+      return {
+        id: t.id,
+        ref: t.teacherId,
+        name: t.fullName,
+        type: t.type,
+        specialization: t.specialization,
+        present: a.present,
+        late: a.late,
+        absent: a.absent,
+        leave: a.leave,
+        total: a.total,
+        rate,
+      }
+    })
+    .sort((a, b) => {
+      if (a.rate === null && b.rate === null) return a.name.localeCompare(b.name)
+      if (a.rate === null) return 1 // no-data teachers sink to the bottom
+      if (b.rate === null) return -1
+      return b.rate - a.rate || b.total - a.total
+    })
+
   return NextResponse.json({
     range: { from: from.toISOString(), to: to.toISOString() },
     totals: {
@@ -537,6 +585,7 @@ async function attendanceReport(searchParams: URLSearchParams) {
     programCount: Object.values(programCount),
     teacherTypeCount,
     topAttendees,
+    teacherStats,
   })
 }
 
@@ -573,7 +622,7 @@ async function enrollmentReport() {
     .map((s) => ({
       studentId: s.studentId, fullName: s.fullName, gender: s.gender,
       admissionDate: s.admissionDate?.toISOString() ?? null,
-      programs: s.enrollments.map((e) => e.program.code),
+      programs: s.enrollments.map((e) => e.program?.code ?? ''),
     }))
 
   return NextResponse.json({

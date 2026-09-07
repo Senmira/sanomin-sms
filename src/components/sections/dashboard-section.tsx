@@ -38,6 +38,8 @@ import {
   Phone,
   X,
   Loader2,
+  ShieldCheck,
+  Database,
 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { SectionHeader } from '@/components/shared/section-header'
@@ -803,7 +805,251 @@ export function DashboardSection() {
 
       {/* At-risk student detail dialog */}
       <AtRiskDialog open={atRiskOpen} onOpenChange={setAtRiskOpen} onGoToStudents={() => setSection('students')} />
+
+      {/* Data health audit (records missing phones / EPF / schedules ...) */}
+      <DataHealthCard onGoTo={setSection} />
     </div>
+  )
+}
+
+// ─── Data Health (record completeness audit) ───────────────────────────────
+interface DQGroup {
+  key: string
+  label: string
+  scope: 'students' | 'teachers' | 'classes'
+  severity: 'high' | 'medium' | 'low'
+  hint: string
+  count: number
+  items: Array<{ ref: string; name: string; detail: string }>
+}
+interface DQData {
+  checkedAt: string
+  counts: { students: number; teachers: number; classes: number; totalIssues: number; highIssues: number }
+  groups: DQGroup[]
+}
+
+const DQ_SEVERITY = {
+  high: {
+    chip: 'border-red-500/30 bg-red-500/5 hover:border-red-500/60',
+    icon: 'text-red-600 dark:text-red-400',
+    dot: 'bg-red-500',
+  },
+  medium: {
+    chip: 'border-amber-500/30 bg-amber-500/5 hover:border-amber-500/60',
+    icon: 'text-amber-600 dark:text-amber-400',
+    dot: 'bg-amber-500',
+  },
+  low: {
+    chip: 'border-slate-400/30 bg-slate-500/5 hover:border-slate-400/60',
+    icon: 'text-slate-500 dark:text-slate-400',
+    dot: 'bg-slate-400',
+  },
+} as const
+
+function DataHealthCard({
+  onGoTo,
+}: {
+  onGoTo: (s: 'students' | 'teachers' | 'classes') => void
+}) {
+  const [data, setData] = useState<DQData | null>(null)
+  const [dialogOpen, setDialogOpen] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    api<DQData>('/api/data-quality')
+      .then((d) => alive && setData(d))
+      .catch(() => {
+        /* widget stays silent if the audit fails */
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  if (!data) return null
+
+  const issues = data.groups.filter((g) => g.count > 0)
+  const clean = data.counts.totalIssues === 0
+
+  return (
+    <>
+      <Card className="overflow-hidden">
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+          <div className="flex items-center gap-2">
+            <div
+              className={cn(
+                'flex h-9 w-9 items-center justify-center rounded-lg',
+                clean
+                  ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                  : 'bg-violet-500/15 text-violet-600 dark:text-violet-400',
+              )}
+            >
+              <ShieldCheck className="h-5 w-5" />
+            </div>
+            <div>
+              <CardTitle className="text-base font-semibold">Data Health</CardTitle>
+              <p className="text-xs text-muted-foreground">
+                {data.counts.students} students · {data.counts.teachers} staff ·{' '}
+                {data.counts.classes} classes audited
+              </p>
+            </div>
+          </div>
+          {!clean && (
+            <Button variant="outline" size="sm" onClick={() => setDialogOpen(true)}>
+              Fix records <ArrowRight className="ml-1 h-3 w-3" />
+            </Button>
+          )}
+        </CardHeader>
+        <CardContent>
+          {clean ? (
+            <div className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm text-emerald-700 dark:text-emerald-300">
+              <CheckCircle2 className="h-4 w-4 shrink-0" />
+              All records are complete — phones, EPF numbers, NICs, schedules and capacities all
+              look good.
+            </div>
+          ) : (
+            <>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {issues.map((g) => {
+                  const sev = DQ_SEVERITY[g.severity]
+                  return (
+                    <button
+                      key={g.key}
+                      onClick={() => setDialogOpen(true)}
+                      className={cn(
+                        'card-lift flex items-center gap-3 rounded-xl border p-3 text-left transition-all',
+                        sev.chip,
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          'flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold',
+                          sev.icon,
+                          'bg-background/60',
+                        )}
+                      >
+                        {g.count}
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block truncate text-xs font-semibold">{g.label}</span>
+                        <span className="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground">
+                          <span className={cn('h-1.5 w-1.5 rounded-full', sev.dot)} />
+                          {g.severity} priority · {g.scope}
+                        </span>
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+              <p className="mt-3 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                <Database className="h-3 w-3" />
+                {data.counts.totalIssues} issues across {issues.length} check
+                {issues.length > 1 ? 's' : ''}
+                {data.counts.highIssues > 0 &&
+                  ` · ${data.counts.highIssues} block reminders or payroll`}
+              </p>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      <DataQualityDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        data={data}
+        onGoTo={onGoTo}
+      />
+    </>
+  )
+}
+
+function DataQualityDialog({
+  open,
+  onOpenChange,
+  data,
+  onGoTo,
+}: {
+  open: boolean
+  onOpenChange: (v: boolean) => void
+  data: DQData | null
+  onGoTo: (s: 'students' | 'teachers' | 'classes') => void
+}) {
+  if (!data) return null
+  const issues = data.groups.filter((g) => g.count > 0)
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[85vh] flex-col overflow-hidden sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-500/15 text-violet-600 dark:text-violet-400">
+              <ShieldCheck className="h-4 w-4" />
+            </span>
+            Data health — {data.counts.totalIssues} issue
+            {data.counts.totalIssues !== 1 ? 's' : ''}
+          </DialogTitle>
+          <DialogDescription>
+            Complete these records so reminders, payroll and registers never hit missing data.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="scroll-thin -mx-1 flex-1 space-y-4 overflow-y-auto px-1">
+          {issues.map((g) => {
+            const sev = DQ_SEVERITY[g.severity]
+            return (
+              <div key={g.key} className="rounded-xl border p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="flex items-center gap-1.5 text-xs font-semibold">
+                      <span className={cn('h-2 w-2 rounded-full', sev.dot)} />
+                      {g.label}
+                      <Badge variant="outline" className="ml-1 h-4 px-1 text-[9px] font-semibold uppercase tracking-wide">
+                        {g.severity}
+                      </Badge>
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">{g.hint}</p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 shrink-0 gap-1 px-2 text-[11px]"
+                    onClick={() => {
+                      onGoTo(g.scope)
+                      onOpenChange(false)
+                    }}
+                  >
+                    Go to {g.scope} <ArrowRight className="h-3 w-3" />
+                  </Button>
+                </div>
+                <div className="scroll-thin mt-2 max-h-36 space-y-1 overflow-y-auto pr-1">
+                  {g.items.map((it, i) => (
+                    <div
+                      key={`${it.ref}-${i}`}
+                      className="flex flex-col gap-0.5 rounded-lg bg-muted/40 px-2.5 py-1.5 text-[11px] sm:flex-row sm:items-center sm:justify-between sm:gap-2"
+                    >
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className="shrink-0 rounded bg-background px-1 py-px font-mono text-[10px] text-muted-foreground">
+                          {it.ref}
+                        </span>
+                        <span className="truncate font-medium">{it.name}</span>
+                      </span>
+                      <span className="text-muted-foreground sm:shrink-0 sm:text-right">
+                        {it.detail}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          })}
+          {issues.length === 0 && (
+            <div className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm text-emerald-700 dark:text-emerald-300">
+              <CheckCircle2 className="h-4 w-4" /> Everything checks out.
+            </div>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
