@@ -186,7 +186,12 @@ export interface PaymentRow {
   receiptNo: string | null
   createdAt: string
   updatedAt: string
-  student: { id: string; studentId: string; fullName: string }
+  student: {
+    id: string
+    studentId: string
+    fullName: string
+    guardians: { name: string; phone: string; relationship: string; isPrimary: boolean }[]
+  }
   program: { id: string; code: string; name: string; color: string } | null
   items: PaymentItemRow[]
 }

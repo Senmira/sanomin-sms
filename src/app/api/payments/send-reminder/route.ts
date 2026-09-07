@@ -45,6 +45,14 @@ export async function POST(req: Request) {
   const monthLabel = new Date(month + '-01').toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
   const title = `Fee Payment Reminder — ${monthLabel}`
 
+  // School signature from settings (falls back to SANOMIN default)
+  const settingsRows = await db.setting.findMany({
+    where: { key: { in: ['school_name', 'school_phone'] } },
+  })
+  const settingsMap = Object.fromEntries(settingsRows.map((r) => [r.key, r.value]))
+  const schoolName = settingsMap.school_name?.trim() || 'SANOMIN International Preschool'
+  const schoolPhone = settingsMap.school_phone?.trim()
+
   const body_text = [
     `Dear Parents,`,
     ``,
@@ -58,9 +66,9 @@ export async function POST(req: Request) {
     ``,
     `Please settle your child's tuition fees at your earliest convenience. Payments can be made via Cash, Card, Bank Transfer, or Online at the accounts desk. If you have already paid, please share the receipt number so our records can be updated.`,
     ``,
-    `For any queries regarding your fee statement, please contact the school office. Thank you for your cooperation.`,
+    `For any queries regarding your fee statement, please contact the school office${schoolPhone ? ` (${schoolPhone})` : ''}. Thank you for your cooperation.`,
     ``,
-    `— SANOMIN International Preschool Administration`,
+    `— ${schoolName} Administration`,
   ].filter(Boolean).join('\n')
 
   // Create the announcement

@@ -24,6 +24,10 @@ import {
   Zap,
   BellRing,
   FileText,
+  MessageCircle,
+  Copy,
+  ExternalLink,
+  UserRound,
 } from 'lucide-react'
 
 import { api } from '@/lib/api'
@@ -36,6 +40,7 @@ import {
   PAYMENT_METHODS,
 } from '@/lib/types'
 import { currency, currencyCompact, fmtDate, initials, avatarColor } from '@/lib/format'
+import { useSchoolInfo, toWaPhone } from '@/lib/school'
 
 import { SectionHeader } from '@/components/shared/section-header'
 import { StatCard } from '@/components/shared/stat-card'
@@ -237,6 +242,7 @@ export function FeesSection() {
   const [editTarget, setEditTarget] = useState<PaymentRow | null>(null)
   const [receiptTarget, setReceiptTarget] = useState<PaymentRow | null>(null)
   const [statementTarget, setStatementTarget] = useState<PaymentRow | null>(null)
+  const [whatsappTarget, setWhatsappTarget] = useState<PaymentRow | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<PaymentRow | null>(null)
   const [generating, setGenerating] = useState(false)
   const [bulkOpen, setBulkOpen] = useState(false)
@@ -801,6 +807,10 @@ export function FeesSection() {
                             <DropdownMenuItem onClick={() => setStatementTarget(p)}>
                               <FileText className="mr-2 h-4 w-4" /> Fee Statement
                             </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => setWhatsappTarget(p)}>
+                              <MessageCircle className="mr-2 h-4 w-4" /> WhatsApp
+                              {balance > 0 ? ' reminder' : ' receipt'}
+                            </DropdownMenuItem>
                             <DropdownMenuSeparator />
                             <DropdownMenuItem
                               onClick={() => setDeleteTarget(p)}
@@ -861,6 +871,11 @@ export function FeesSection() {
           studentId={statementTarget.student.id}
           onClose={() => setStatementTarget(null)}
         />
+      )}
+
+      {/* WhatsApp reminder / receipt share */}
+      {whatsappTarget && (
+        <WhatsAppDialog payment={whatsappTarget} onClose={() => setWhatsappTarget(null)} />
       )}
 
       {/* Delete confirm */}
@@ -1438,6 +1453,226 @@ function PaymentDialog({
   )
 }
 
+// ─── WhatsApp reminder / receipt share dialog ─────────────────────────────
+function WhatsAppDialog({ payment, onClose }: { payment: PaymentRow; onClose: () => void }) {
+  const school = useSchoolInfo()
+  const balance = Math.max(0, payment.amount - payment.paidAmount)
+  const hasBalance = balance > 0
+
+  const guardians = payment.student.guardians ?? []
+  const [guardianIdx, setGuardianIdx] = useState(0)
+  const guardian = guardians[guardianIdx] ?? null
+
+  const defaultMessage = useMemo(() => {
+    const month = monthLabel(payment.month)
+    const lines: string[] = []
+    if (hasBalance) {
+      lines.push(
+        `Dear ${guardian?.name || 'Parent'},`,
+        ``,
+        `Friendly reminder from ${school.name}: the tuition fee for *${payment.student.fullName}* (${payment.student.studentId}) is due for ${month}.`,
+        ``,
+        `*Bill ${payment.receiptNo ?? ''}*`,
+      )
+      for (const l of billLines(payment)) {
+        lines.push(`• ${l.description}: LKR ${l.amount.toLocaleString()}`)
+      }
+      lines.push(
+        `Total: LKR ${payment.amount.toLocaleString()}`,
+        `Paid: LKR ${payment.paidAmount.toLocaleString()}`,
+        `*Balance due: LKR ${balance.toLocaleString()}*`,
+        ``,
+        `Kindly settle the balance at your earliest convenience. Payments accepted via Cash, Card or Bank transfer.`,
+        ``,
+        `Thank you!`,
+        `— ${school.name}${school.phone ? ` (${school.phone})` : ''}`,
+      )
+    } else {
+      lines.push(
+        `Dear ${guardian?.name || 'Parent'},`,
+        ``,
+        `Thank you for settling the fees for *${payment.student.fullName}* (${payment.student.studentId}) — ${month}.`,
+        ``,
+        `*Receipt ${payment.receiptNo ?? ''}*`,
+      )
+      for (const l of billLines(payment)) {
+        lines.push(`• ${l.description}: LKR ${l.amount.toLocaleString()}`)
+      }
+      lines.push(
+        `Total paid: LKR ${payment.paidAmount.toLocaleString()} (${payment.method})`,
+        ``,
+        `We appreciate your prompt payment!`,
+        `— ${school.name}${school.phone ? ` (${school.phone})` : ''}`,
+      )
+    }
+    return lines.join('\n')
+  }, [payment, hasBalance, balance, guardian?.name, school.name, school.phone])
+
+  const [message, setMessage] = useState(defaultMessage)
+  // Re-prefill when the selected guardian changes
+  useEffect(() => {
+    setMessage(defaultMessage)
+  }, [defaultMessage])
+
+  const waPhone = toWaPhone(guardian?.phone)
+  const waHref = waPhone
+    ? `https://wa.me/${waPhone}?text=${encodeURIComponent(message)}`
+    : null
+
+  const copyMessage = async () => {
+    try {
+      await navigator.clipboard.writeText(message)
+      toast.success('Message copied to clipboard')
+    } catch {
+      toast.error('Could not copy — please select the text manually')
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="flex max-h-[85vh] flex-col overflow-hidden sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+              <MessageCircle className="h-4 w-4" />
+            </span>
+            {hasBalance ? 'WhatsApp reminder' : 'WhatsApp receipt'}
+          </DialogTitle>
+          <DialogDescription>
+            {payment.student.fullName} · {monthLabel(payment.month)} ·{' '}
+            {hasBalance ? (
+              <span className="font-semibold text-red-600 dark:text-red-400">
+                balance {currency(balance)}
+              </span>
+            ) : (
+              <span className="font-semibold text-emerald-600 dark:text-emerald-400">fully paid</span>
+            )}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="scroll-thin -mx-1 flex-1 space-y-4 overflow-y-auto px-1">
+          {/* Guardian picker */}
+          {guardians.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-300">
+              No guardian phone numbers on file for this student. Add a guardian with a phone
+              number in the Students section to send WhatsApp messages.
+            </div>
+          ) : guardians.length > 1 ? (
+            <div className="grid gap-1.5">
+              <Label className="text-xs text-muted-foreground">Send to</Label>
+              <div className="grid gap-1.5 sm:grid-cols-2">
+                {guardians.map((g, i) => {
+                  const active = i === guardianIdx
+                  return (
+                    <button
+                      key={`${g.name}-${i}`}
+                      type="button"
+                      onClick={() => setGuardianIdx(i)}
+                      className={`flex items-center gap-2.5 rounded-lg border p-2.5 text-left transition-colors ${
+                        active
+                          ? 'border-emerald-500/60 bg-emerald-500/10'
+                          : 'bg-muted/30 hover:bg-muted/60'
+                      }`}
+                    >
+                      <span
+                        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
+                          active
+                            ? 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300'
+                            : 'bg-muted text-muted-foreground'
+                        }`}
+                      >
+                        {initials(g.name)}
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block truncate text-xs font-medium">
+                          {g.name}
+                          {g.isPrimary && (
+                            <span className="ml-1 rounded bg-primary/10 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-primary">
+                              primary
+                            </span>
+                          )}
+                        </span>
+                        <span className="block truncate font-mono text-[10px] text-muted-foreground">
+                          {g.phone}
+                        </span>
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          ) : guardian ? (
+            <div className="flex items-center gap-2.5 rounded-lg border bg-muted/30 p-2.5">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
+                <UserRound className="h-4 w-4" />
+              </span>
+              <div className="min-w-0">
+                <p className="truncate text-xs font-medium">
+                  {guardian.name}
+                  {guardian.relationship ? ` · ${guardian.relationship}` : ''}
+                </p>
+                <p className="font-mono text-[10px] text-muted-foreground">{guardian.phone}</p>
+              </div>
+              {waPhone && (
+                <Badge
+                  variant="outline"
+                  className="ml-auto shrink-0 border-emerald-500/30 bg-emerald-500/10 text-[10px] text-emerald-700 dark:text-emerald-300"
+                >
+                  WhatsApp ready
+                </Badge>
+              )}
+            </div>
+          ) : null}
+
+          {/* Editable message */}
+          <div className="grid gap-1.5">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs text-muted-foreground">Message</Label>
+              <button
+                type="button"
+                onClick={copyMessage}
+                className="flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
+              >
+                <Copy className="h-3 w-3" /> Copy
+              </button>
+            </div>
+            <Textarea
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              rows={12}
+              className="min-h-[180px] resize-y bg-muted/30 font-medium leading-relaxed"
+            />
+            <p className="text-[11px] text-muted-foreground">
+              *asterisks* render as <span className="font-bold">bold</span> in WhatsApp. Edit the
+              text above before sending if needed.
+            </p>
+          </div>
+        </div>
+
+        <DialogFooter className="items-center gap-2 sm:justify-between">
+          <Button variant="outline" onClick={onClose}>
+            Close
+          </Button>
+          {waHref ? (
+            <Button
+              className="gap-2 bg-emerald-600 hover:bg-emerald-700"
+              onClick={() => window.open(waHref, '_blank', 'noopener')}
+            >
+              <ExternalLink className="h-4 w-4" />
+              Open WhatsApp
+            </Button>
+          ) : (
+            <Button disabled className="gap-2">
+              <MessageCircle className="h-4 w-4" />
+              {guardian ? 'Invalid phone number' : 'No guardian phone'}
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 // ─── Receipt print dialog ──────────────────────────────────────────────────
 interface ReceiptDialogProps {
   payment: PaymentRow
@@ -1446,6 +1681,7 @@ interface ReceiptDialogProps {
 
 function ReceiptDialog({ payment, onClose }: ReceiptDialogProps) {
   const receiptRef = useRef<HTMLDivElement>(null)
+  const school = useSchoolInfo()
   const balance = Math.max(0, payment.amount - payment.paidAmount)
   const isPaid = payment.status === 'Paid'
 
@@ -1469,14 +1705,17 @@ function ReceiptDialog({ payment, onClose }: ReceiptDialogProps) {
               <div className="relative h-10 w-10 overflow-hidden rounded-lg ring-1 ring-border">
                 <img
                   src="/sanomin-logo.jpg"
-                  alt="SANOMIN"
+                  alt={school.shortName}
                   className="h-full w-full object-cover"
                 />
               </div>
               <div className="leading-tight">
-                <p className="text-sm font-bold">SANOMIN</p>
+                <p className="text-sm font-bold">{school.shortName}</p>
                 <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                  International Preschool
+                  {school.subtitle}
+                </p>
+                <p className="text-[9px] text-muted-foreground">
+                  {[school.address, school.phone].filter(Boolean).join(' · ')}
                 </p>
               </div>
             </div>
@@ -1817,6 +2056,7 @@ function StudentStatementDialog({
 }) {
   const [data, setData] = useState<StatementResponse | null>(null)
   const [error, setError] = useState(false)
+  const school = useSchoolInfo()
 
   useEffect(() => {
     let alive = true
@@ -1867,12 +2107,15 @@ function StudentStatementDialog({
               <div className="flex items-center justify-between gap-3 border-b p-4">
                 <div className="flex items-center gap-3">
                   <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-lg ring-1 ring-border">
-                    <img src="/sanomin-logo.jpg" alt="SANOMIN" className="h-full w-full object-cover" />
+                    <img src="/sanomin-logo.jpg" alt={school.shortName} className="h-full w-full object-cover" />
                   </div>
                   <div className="leading-tight">
-                    <p className="text-sm font-bold">SANOMIN</p>
+                    <p className="text-sm font-bold">{school.shortName}</p>
                     <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                      International Preschool
+                      {school.subtitle}
+                    </p>
+                    <p className="text-[9px] text-muted-foreground">
+                      {[school.address, school.phone].filter(Boolean).join(' · ')}
                     </p>
                   </div>
                 </div>

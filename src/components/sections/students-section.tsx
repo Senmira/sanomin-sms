@@ -29,6 +29,7 @@ import {
 } from 'lucide-react'
 
 import { api } from '@/lib/api'
+import { useSchoolInfo } from '@/lib/school'
 import {
   StudentRow,
   GENDERS,
@@ -1626,6 +1627,7 @@ function IdCardDialog({
   student: StudentRow
   onClose: () => void
 }) {
+  const school = useSchoolInfo()
   const primaryGuardian =
     student.guardians.find((g) => g.isPrimary) || student.guardians[0]
 
@@ -1678,10 +1680,10 @@ function IdCardDialog({
             />
             <div className="min-w-0">
               <p className="text-sm font-bold leading-tight">
-                SANOMIN International
+                {school.shortName} {school.subtitle.split(' ')[0] || ''}
               </p>
               <p className="text-xs opacity-90 leading-tight">
-                Preschool & Daycare
+                {school.subtitle.split(' ').slice(1).join(' ') || school.subtitle}
               </p>
             </div>
           </div>

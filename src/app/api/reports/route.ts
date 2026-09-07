@@ -70,6 +70,80 @@ async function financialReport(searchParams: URLSearchParams) {
   const billed = round2(payments.reduce((s, p) => s + p.amount, 0))
   const collected = round2(payments.reduce((s, p) => s + p.paidAmount, 0))
 
+  // ── 2b. Revenue by programme (from bill line items) ──────────────────────
+  // Aggregates every bill's line items per programme for the month.
+  // Legacy bills without items fall back to their single programme column.
+  const revPayments = await db.payment.findMany({
+    where: { month: monthKey },
+    select: {
+      id: true,
+      studentId: true,
+      amount: true,
+      program: { select: { code: true, name: true, color: true } },
+      items: {
+        select: {
+          amount: true,
+          program: { select: { code: true, name: true, color: true } },
+        },
+      },
+    },
+  })
+  const revMap: Record<string, {
+    code: string; name: string; color: string
+    billed: number; billIds: Set<string>; studentIds: Set<string>
+  }> = {}
+  const addRev = (
+    key: string,
+    name: string,
+    color: string,
+    amount: number,
+    paymentId: string,
+    studentId: string,
+  ) => {
+    if (!revMap[key]) {
+      revMap[key] = { code: key, name, color, billed: 0, billIds: new Set(), studentIds: new Set() }
+    }
+    revMap[key].billed += amount
+    revMap[key].billIds.add(paymentId)
+    revMap[key].studentIds.add(studentId)
+  }
+  for (const p of revPayments) {
+    if (p.items.length > 0) {
+      for (const it of p.items) {
+        const prog = it.program
+        addRev(
+          prog?.code || 'OTHER',
+          prog?.name || 'Other charges',
+          prog?.color || '#94a3b8',
+          it.amount,
+          p.id,
+          p.studentId,
+        )
+      }
+    } else {
+      // legacy single-programme bill without line items
+      addRev(
+        p.program?.code || 'OTHER',
+        p.program?.name || 'Other charges',
+        p.program?.color || '#94a3b8',
+        p.amount,
+        p.id,
+        p.studentId,
+      )
+    }
+  }
+  const programRevenue = Object.values(revMap)
+    .map((r) => ({
+      code: r.code,
+      name: r.name,
+      color: r.color,
+      billed: round2(r.billed),
+      bills: r.billIds.size,
+      students: r.studentIds.size,
+      sharePct: billed > 0 ? round2((r.billed / billed) * 100) : 0,
+    }))
+    .sort((a, b) => b.billed - a.billed)
+
   // ── 3. Payroll (live register semantics: snapshot record overrides live) ──
   const activeTeachers = await db.teacher.findMany({
     where: { status: 'Active' },
@@ -218,6 +292,10 @@ async function financialReport(searchParams: URLSearchParams) {
       collected,
       outstanding: round2(billed - collected),
       billCount: payments.length,
+    },
+    programRevenue: {
+      total: billed,
+      programs: programRevenue,
     },
     expenses: {
       total: expenseTotal,

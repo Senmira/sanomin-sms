@@ -5,7 +5,12 @@ import { db } from '@/lib/db'
 // ─── Serializer: Payment (with line items) → PaymentRow JSON ───────────────
 type PaymentWithRelations = Prisma.PaymentGetPayload<{
   include: {
-    student: { select: { id: true; studentId: true; fullName: true } }
+    student: {
+      select: {
+        id: true; studentId: true; fullName: true
+        guardians: { select: { name: true; phone: true; relationship: true; isPrimary: true } }
+      }
+    }
     program: { select: { id: true; code: true; name: true; color: true } }
     items: {
       orderBy: { createdAt: 'asc' }
@@ -37,6 +42,12 @@ function serialize(p: PaymentWithRelations) {
       id: p.student.id,
       studentId: p.student.studentId,
       fullName: p.student.fullName,
+      guardians: p.student.guardians.map((g) => ({
+        name: g.name,
+        phone: g.phone,
+        relationship: g.relationship,
+        isPrimary: g.isPrimary,
+      })),
     },
     program: p.program
       ? {
@@ -69,7 +80,14 @@ const ALLOWED_STATUSES = new Set(['Pending', 'Partial', 'Paid', 'Overdue'])
 const ALLOWED_METHODS = new Set(['Cash', 'Card', 'Bank', 'Online'])
 
 const PAYMENT_INCLUDE = {
-  student: { select: { id: true, studentId: true, fullName: true } },
+  student: {
+    select: {
+      id: true,
+      studentId: true,
+      fullName: true,
+      guardians: { select: { name: true, phone: true, relationship: true, isPrimary: true } },
+    },
+  },
   program: { select: { id: true, code: true, name: true, color: true } },
   items: {
     orderBy: { createdAt: 'asc' as const },

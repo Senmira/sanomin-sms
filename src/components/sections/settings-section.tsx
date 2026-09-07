@@ -158,7 +158,10 @@ export function SettingsSection() {
               <School className="h-5 w-5 text-primary" />
               <div>
                 <CardTitle className="text-base">School Profile</CardTitle>
-                <CardDescription>Identity & contact details shown across the system</CardDescription>
+                <CardDescription>
+                  Identity & contact details shown across the system — receipts, fee statements,
+                  payslips, attendance registers and reminder messages all use these values
+                </CardDescription>
               </div>
             </div>
           </CardHeader>

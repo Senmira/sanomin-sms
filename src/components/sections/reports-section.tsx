@@ -122,6 +122,18 @@ interface FinancialReport {
   month: string
   monthLabel: string
   fees: { billed: number; collected: number; outstanding: number; billCount: number }
+  programRevenue: {
+    total: number
+    programs: {
+      code: string
+      name: string
+      color: string
+      billed: number
+      bills: number
+      students: number
+      sharePct: number
+    }[]
+  }
   expenses: {
     total: number
     count: number
@@ -913,6 +925,9 @@ function FinancialReportPanel() {
         t.teacherAmount,
       ]),
       [],
+      ['Programme', 'Bills', 'Students', 'Billed (LKR)', 'Share %'],
+      ...data.programRevenue.programs.map((p) => [p.name, p.bills, p.students, p.billed, p.sharePct]),
+      [],
       ['Expense category', 'Entries', 'Amount (LKR)'],
       ...data.expenses.byCategory.map((c) => [c.category, c.count, c.total]),
     ]
@@ -1115,6 +1130,70 @@ function FinancialReportPanel() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Revenue by programme (from bill line items) */}
+      <Card className="min-w-0 p-0">
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0 pb-3 pt-4">
+          <div>
+            <CardTitle className="text-base">Revenue by programme</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Billed amounts grouped from every bill&apos;s line items
+            </p>
+          </div>
+          <Badge variant="outline" className="border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">
+            <Banknote className="h-3 w-3" />
+            {currencyCompact(data.programRevenue.total)} billed
+          </Badge>
+        </CardHeader>
+        {data.programRevenue.programs.length === 0 ? (
+          <CardContent className="pb-6 pt-0">
+            <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+              No bills recorded for {data.monthLabel} yet.
+            </p>
+          </CardContent>
+        ) : (
+          <CardContent className="grid gap-2.5 pb-4 pt-0">
+            {data.programRevenue.programs.map((p, i) => (
+              <div key={p.code} className="group grid gap-1.5">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span
+                      className="size-2.5 shrink-0 rounded-full ring-2 ring-background"
+                      style={{ backgroundColor: p.color, boxShadow: `0 0 0 1px ${p.color}55` }}
+                    />
+                    <span className="truncate text-sm font-medium">{p.name}</span>
+                    <span className="hidden shrink-0 text-[11px] text-muted-foreground sm:inline">
+                      · {p.bills} bill{p.bills === 1 ? '' : 's'} · {p.students} student{p.students === 1 ? '' : 's'}
+                    </span>
+                  </span>
+                  <span className="flex shrink-0 items-center gap-2">
+                    <span className="text-sm font-semibold tabular-nums">{currency(p.billed)}</span>
+                    <Badge variant="outline" className="w-14 justify-center tabular-nums">
+                      {Math.round(p.sharePct)}%
+                    </Badge>
+                  </span>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-muted/60">
+                  <div
+                    className="h-full rounded-full transition-[width] duration-700 ease-out animate-bar-in"
+                    style={{
+                      width: `${Math.max(2, Math.min(100, p.sharePct))}%`,
+                      backgroundColor: p.color,
+                      opacity: 1 - i * 0.08,
+                    }}
+                  />
+                </div>
+              </div>
+            ))}
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              {data.programRevenue.programs.length} programme{data.programRevenue.programs.length === 1 ? '' : 's'} billed
+              {data.programRevenue.programs.some((p) => p.code === 'OTHER')
+                ? ' · “Other charges” = custom bill lines without a programme'
+                : ''}
+            </p>
+          </CardContent>
+        )}
+      </Card>
 
       {/* Per-teacher share table */}
       <Card className="p-0">

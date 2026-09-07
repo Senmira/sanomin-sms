@@ -26,6 +26,7 @@ import { api } from '@/lib/api'
 import { useAppStore } from '@/lib/store'
 import { PayrollRow, PayrollSummary, PAYROLL_METHODS, salaryBreakdown } from '@/lib/types'
 import { currency, currencyCompact, fmtDate, initials, avatarColor } from '@/lib/format'
+import { useSchoolInfo } from '@/lib/school'
 
 import { SectionHeader } from '@/components/shared/section-header'
 import { StatCard } from '@/components/shared/stat-card'
@@ -1120,6 +1121,7 @@ interface PayslipDialogProps {
 }
 
 function PayslipDialog({ row, onClose }: PayslipDialogProps) {
+  const school = useSchoolInfo()
   const handlePrint = useCallback(() => {
     if (typeof window !== 'undefined') {
       window.print()
@@ -1143,14 +1145,17 @@ function PayslipDialog({ row, onClose }: PayslipDialogProps) {
               <div className="relative h-10 w-10 overflow-hidden rounded-lg ring-1 ring-border">
                 <img
                   src="/sanomin-logo.jpg"
-                  alt="SANOMIN"
+                  alt={school.shortName}
                   className="h-full w-full object-cover"
                 />
               </div>
               <div className="leading-tight">
-                <p className="text-sm font-bold">SANOMIN</p>
+                <p className="text-sm font-bold">{school.shortName}</p>
                 <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                  International Preschool
+                  {school.subtitle}
+                </p>
+                <p className="text-[9px] text-muted-foreground">
+                  {[school.address, school.phone].filter(Boolean).join(' · ')}
                 </p>
               </div>
             </div>

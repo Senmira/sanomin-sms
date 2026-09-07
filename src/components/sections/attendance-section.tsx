@@ -43,6 +43,7 @@ import {
   ClassRow,
 } from '@/lib/types'
 import { initials, avatarColor, fmtDate, fmtTime, fmtDateTime, timeAgo } from '@/lib/format'
+import { useSchoolInfo } from '@/lib/school'
 
 import { SectionHeader } from '@/components/shared/section-header'
 import { StatCard } from '@/components/shared/stat-card'
@@ -2363,6 +2364,7 @@ function registerCellDisplay(status: string | null, day: RegisterDay): { text: s
 }
 
 function RegisterView() {
+  const school = useSchoolInfo()
   const monthOptions = useMemo(() => registerMonthOptions(), [])
   const [classId, setClassId] = useState('')
   const [month, setMonth] = useState(monthOptions[0])
@@ -2571,12 +2573,15 @@ function RegisterView() {
             <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
               <div className="flex items-center gap-3">
                 <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-lg ring-1 ring-border">
-                  <img src="/sanomin-logo.jpg" alt="SANOMIN" className="h-full w-full object-cover" />
+                  <img src="/sanomin-logo.jpg" alt={school.shortName} className="h-full w-full object-cover" />
                 </div>
                 <div className="leading-tight">
-                  <p className="text-sm font-bold">SANOMIN</p>
+                  <p className="text-sm font-bold">{school.shortName}</p>
                   <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                    International Preschool
+                    {school.subtitle}
+                  </p>
+                  <p className="text-[9px] text-muted-foreground">
+                    {[school.address, school.phone].filter(Boolean).join(' · ')}
                   </p>
                 </div>
               </div>

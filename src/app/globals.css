@@ -219,6 +219,21 @@
     }
   }
 
+  /* Horizontal bar grow-in (report progress bars) */
+  @keyframes bar-in {
+    from { transform: scaleX(0); }
+    to { transform: scaleX(1); }
+  }
+  .animate-bar-in {
+    transform-origin: left center;
+    animation: bar-in 600ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .animate-bar-in {
+      animation: none;
+    }
+  }
+
   /* Cards inside grid/flex rows must be allowed to shrink below their
      content's intrinsic width (recharts SVGs, min-w tables) or they force
      horizontal page overflow on small screens. */

@@ -25,6 +25,14 @@ const accentMap = {
   amber: 'from-amber-500/15 to-amber-500/0 text-amber-600 dark:text-amber-400',
 }
 
+const accentBar: Record<string, string> = {
+  blue: 'bg-gradient-to-r from-blue-500/70 to-blue-400/0',
+  purple: 'bg-gradient-to-r from-purple-500/70 to-purple-400/0',
+  red: 'bg-gradient-to-r from-red-500/70 to-red-400/0',
+  green: 'bg-gradient-to-r from-emerald-500/70 to-emerald-400/0',
+  amber: 'bg-gradient-to-r from-amber-500/70 to-amber-400/0',
+}
+
 const accentColor: Record<string, string> = {
   blue: '#1e40af',
   purple: '#7c3aed',
@@ -44,17 +52,37 @@ export function StatCard({
   footer,
 }: StatCardProps) {
   return (
-    <Card className={cn('relative overflow-hidden p-5', className)}>
+    <Card
+      className={cn(
+        // Hover micro-interaction: lift + shadow + accent ring
+        'card-lift group relative overflow-hidden p-5 hover:shadow-md hover:ring-1',
+        'hover:ring-primary/10',
+        className,
+      )}
+    >
       <div
         className={cn(
-          'pointer-events-none absolute inset-0 bg-gradient-to-br opacity-90',
+          'pointer-events-none absolute inset-0 bg-gradient-to-br opacity-90 transition-opacity duration-200 group-hover:opacity-100',
           accentMap[accent],
         )}
+      />
+      {/* Accent strip along the top edge — deepens on hover */}
+      <div
+        className={cn(
+          'pointer-events-none absolute inset-x-0 top-0 h-[3px] opacity-60 transition-opacity duration-200 group-hover:opacity-100',
+          accentBar[accent],
+        )}
+      />
+      {/* Oversized watermark icon bleeding off the bottom-right corner */}
+      <Icon
+        className="pointer-events-none absolute -bottom-4 -right-3 h-24 w-24 rotate-[-8deg] text-foreground/[0.035] transition-transform duration-300 group-hover:scale-110 dark:text-white/[0.05]"
+        strokeWidth={1.2}
+        aria-hidden
       />
       <div className="relative flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-muted-foreground">{label}</p>
-          <p className="mt-1 text-3xl font-bold tracking-tight">{value}</p>
+          <p className="mt-1 text-3xl font-bold tracking-tight tabular-nums">{value}</p>
           {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
           {typeof trend === 'number' && (
             <div
@@ -77,7 +105,7 @@ export function StatCard({
         </div>
         <div
           className={cn(
-            'flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-background/70 shadow-sm ring-1 ring-border',
+            'flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-background/70 shadow-sm ring-1 ring-border transition-transform duration-200 group-hover:scale-105 group-hover:-rotate-3',
             accentMap[accent].split(' ').pop(),
           )}
         >
@@ -89,4 +117,3 @@ export function StatCard({
 }
 
 export { accentColor as STAT_ACCENT_COLOR }
-
