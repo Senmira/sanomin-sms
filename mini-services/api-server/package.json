@@ -1,0 +1,20 @@
+{
+  "name": "sanomin-api-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MERN backend — Express + Mongoose + MongoDB for SANOMIN Institute Management System",
+  "scripts": {
+    "dev": "bun --hot index.ts",
+    "start": "bun index.ts",
+    "seed": "bun seed.ts"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^4.21.2",
+    "mongoose": "^8.20.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^4.17.23"
+  }
+}
