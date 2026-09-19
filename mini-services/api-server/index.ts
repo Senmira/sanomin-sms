@@ -55,10 +55,9 @@ mongoose
   .connect(MONGODB_URI)
   .then(() => {
     console.log(`[api] MongoDB connected → ${MONGODB_URI}`)
-    app.listen(PORT, () => {
-      console.log(`[api] SANOMIN API server listening on http://127.0.0.1:${PORT}`)
-    })
-  })
+    app.listen(PORT, '0.0.0.0', () => {
+  console.log(`[api] SANOMIN API server listening on http://0.0.0.0:${PORT}`)
+})  })
   .catch((e) => {
     console.error('[api] MongoDB connection failed:', e.message)
     process.exit(1)
