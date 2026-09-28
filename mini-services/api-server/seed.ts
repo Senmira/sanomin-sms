@@ -1,6 +1,13 @@
 // ─── Seed script — realistic SANOMIN sample data for MongoDB ───────────────
 // Fulfils the CW deliverable "Database with sample data".
 // Run: bun run seed
+//
+// ID scheme (mirrors routes/people.ts):
+//   Student:  <PREFIX><YY><NNN>
+//     PREFIX = P (Preschool) > D (Daycare) > T (Tution/Elocution) > I (IT) > X (other)
+//     YY    = year of admission
+//     NNN   = sequential within (PREFIX, YY)
+//   Teacher:  IT<NNN> (Internal)  |  ET<NNN> (External)
 import mongoose from 'mongoose'
 import {
   Program, Student, Guardian, Teacher, Class, Enrollment,
@@ -15,12 +22,23 @@ const pick = <T>(arr: T[], n: number): T[] => {
   const shuffled = [...arr].sort(() => Math.random() - 0.5)
   return shuffled.slice(0, n)
 }
+const round2 = (n: number) => Math.round(n * 100) / 100
+
+// ─── ID helpers ─────────────────────────────────────────────────────────────
+function pickPrefix(programCodes: string[]): string {
+  const set = new Set(programCodes.map((c) => c.toUpperCase()))
+  if (set.has('PRESCHOOL')) return 'P'
+  if (set.has('DAYCARE')) return 'D'
+  if (set.has('ELOCUTION') || set.has('TUTION') || set.has('TUITION')) return 'T'
+  if (set.has('IT')) return 'I'
+  return 'X'
+}
 
 async function main() {
   await mongoose.connect(MONGODB_URI)
   console.log('[seed] connected to', MONGODB_URI)
 
-  // wipe
+  // ── Wipe ─────────────────────────────────────────────────────────────────
   await Promise.all([
     Program.deleteMany({}), Student.deleteMany({}), Guardian.deleteMany({}),
     Teacher.deleteMany({}), Class.deleteMany({}), Enrollment.deleteMany({}),
@@ -81,117 +99,108 @@ async function main() {
   }
   const teachers = await Teacher.insertMany(teacherDocs)
   const T = (i: number) => teachers[i]._id.toString()
-  console.log('[seed] teachers:', teachers.length)
+  console.log('[seed] teachers:', teachers.length, '(IT001/IT002/…, ET001/ET002/…)')
 
-  // ── Students + guardians ─────────────────────────────────────────────────
+  // ── Students — first decide programmes, then derive IDs ──────────────────
   const firstNames = ['Ayesha', 'Dimuthu', 'Thisara', 'Nethmi', 'Sahan', 'Rashmi', 'Kavindu', 'Amaya', 'Ravindu', 'Sewmi', 'Dinuka', 'Hasini', 'Tharindu', 'Nethra', 'Sanula', 'Yenuli', 'Vihanga', 'Methuli', 'Ranithu', 'Oneli', 'Minula', 'Thinudi', 'Aesha', 'Kavya', 'Lihini', 'Sandev', 'Resandi', 'Tanudi', 'Vinudi', 'Mahith', 'Anula', 'Pamudu', 'Nadun', 'Rithma', 'Senith', 'Hiruni', 'Janith', 'Methara', 'Nuvin', 'Thehara', 'Ashen', 'Disna', 'Rukshan', 'Sayuru']
   const lastNames = ['Perera', 'Fernando', 'Silva', 'Jayasuriya', 'Wickramasinghe', 'Bandara', 'Rathnayake', 'Gunawardena', 'Edirisinghe', 'Dissanayake', 'Herath', 'Weerasinghe']
   const ageGroups = ['2-3', '3-4', '4-5', '5-6']
 
-  const studentDocs: any[] = []
-  // Decide programs BEFORE assigning IDs so the prefix can be derived
-type Draft = {
-  fullName: string
-  gender: string
-  ageGroup: string
-  dob: Date
-  admissionDate: Date
-  religion: string
-  status: string
-  medicalNotes: string | null
-  programCodes: string[]
-}
-
-const drafts: Draft[] = []
-for (let i = 0; i < 44; i++) {
-  const gender = i % 2 === 0 ? 'Female' : 'Male'
-  const ageGroup = rand(ageGroups)
-  const dobYear = 2026 - (parseInt(ageGroup[0]) + 1)
-
-  // Same distribution logic as before
-  const codes: string[] = ['PRESCHOOL']
-  const r = Math.random()
-  if (r < 0.25) codes.push('DAYCARE')
-  else if (r < 0.45) { codes.push('IT'); codes.push('ELOCUTION') }
-  else if (r < 0.6) codes.push('ELOCUTION')
-  else if (r < 0.72) codes.push('DANCING')
-  else if (r < 0.8) { codes.push('IT'); codes.push('DANCING') }
-
-  // A handful of daycare-only / tution-only students to demonstrate the new prefix logic
-  if (i === 5 || i === 12 || i === 20) {
-    codes.length = 0
-    codes.push('DAYCARE')
-  }
-  if (i === 8 || i === 15) {
-    codes.length = 0
-    codes.push('ELOCUTION')
-  }
-  if (i === 22) {
-    codes.length = 0
-    codes.push('IT')
+  type Draft = {
+    fullName: string
+    gender: string
+    ageGroup: string
+    dob: Date
+    admissionDate: Date
+    religion: string
+    status: string
+    medicalNotes: string | null
+    programCodes: string[]
   }
 
-  drafts.push({
-    fullName: `${rand(firstNames)} ${rand(lastNames)}`,
-    gender,
-    ageGroup,
-    dob: new Date(dobYear, randInt(0, 11), randInt(1, 28)),
-    admissionDate: new Date(2024, randInt(0, 11), randInt(1, 28)),
-    religion: rand(['Buddhist', 'Catholic', 'Hindu', 'Muslim', 'Christian']),
-    status: i < 40 ? 'Active' : rand(['Inactive', 'Graduated']),
-    medicalNotes: i % 11 === 0 ? 'Mild asthma — inhaler in office' : null,
-    programCodes: codes,
+  const drafts: Draft[] = []
+  for (let i = 0; i < 44; i++) {
+    const gender = i % 2 === 0 ? 'Female' : 'Male'
+    const ageGroup = rand(ageGroups)
+    const dobYear = 2026 - (parseInt(ageGroup[0]) + 1)
+
+    // Distribution: most students have Preschool; a handful demonstrate the
+    // other prefixes (D, T, I) so the ID scheme is visible in sample data.
+    const codes: string[] = ['PRESCHOOL']
+    const r = Math.random()
+    if (r < 0.25) codes.push('DAYCARE')
+    else if (r < 0.45) { codes.push('IT'); codes.push('ELOCUTION') }
+    else if (r < 0.6) codes.push('ELOCUTION')
+    else if (r < 0.72) codes.push('DANCING')
+    else if (r < 0.8) { codes.push('IT'); codes.push('DANCING') }
+
+    // Specials: Daycare-only → D-prefix, Elocution-only → T-prefix, IT-only → I-prefix
+    if (i === 5 || i === 12 || i === 20) { codes.length = 0; codes.push('DAYCARE') }
+    if (i === 8 || i === 15) { codes.length = 0; codes.push('ELOCUTION') }
+    if (i === 22) { codes.length = 0; codes.push('IT') }
+
+    drafts.push({
+      fullName: `${rand(firstNames)} ${rand(lastNames)}`,
+      gender,
+      ageGroup,
+      dob: new Date(dobYear, randInt(0, 11), randInt(1, 28)),
+      admissionDate: new Date(2024, randInt(0, 11), randInt(1, 28)),
+      religion: rand(['Buddhist', 'Catholic', 'Hindu', 'Muslim', 'Christian']),
+      status: i < 40 ? 'Active' : rand(['Inactive', 'Graduated']),
+      medicalNotes: i % 11 === 0 ? 'Mild asthma — inhaler in office' : null,
+      programCodes: codes,
+    })
+  }
+  // Birthday-in-next-10-days for the celebrations card
+  for (let k = 0; k < 3; k++) {
+    const soon = new Date()
+    soon.setDate(soon.getDate() + k * 3 + 1)
+    drafts[k].dob = new Date(soon.getFullYear() - randInt(3, 5), soon.getMonth(), soon.getDate())
+  }
+
+  // Assign IDs with the new prefix scheme, using per-(prefix, year) counters
+  const counters = new Map<string, number>()
+  const nextIdFor = (codes: string[], admissionDate: Date): string => {
+    const prefix = pickPrefix(codes)
+    const yy = String(admissionDate.getFullYear()).slice(-2)
+    const key = `${prefix}${yy}`
+    const next = (counters.get(key) ?? 0) + 1
+    counters.set(key, next)
+    return `${key}${String(next).padStart(3, '0')}`
+  }
+
+  const studentDocs: any[] = drafts.map((d) => {
+    const studentId = nextIdFor(d.programCodes, d.admissionDate)
+    return {
+      studentId,
+      indexNo: studentId.slice(1),      // numeric part only, e.g. "24001"
+      barcode: `SAN${studentId}`,       // e.g. "SANP24001"
+      fullName: d.fullName,
+      gender: d.gender,
+      dob: d.dob,
+      ageGroup: d.ageGroup,
+      admissionDate: d.admissionDate,
+      religion: d.religion,
+      nationality: 'Sri Lankan',
+      status: d.status,
+      medicalNotes: d.medicalNotes,
+    }
   })
-}
-// Birthday-in-next-10-days for the celebrations card
-for (let k = 0; k < 3; k++) {
-  const soon = new Date()
-  soon.setDate(soon.getDate() + k * 3 + 1)
-  drafts[k].dob = new Date(soon.getFullYear() - randInt(3, 5), soon.getMonth(), soon.getDate())
-}
+  const students = await Student.insertMany(studentDocs)
+  console.log('[seed] students:', students.length,
+    '(P…, D…, T…, I… prefixes)')
 
-// Assign IDs with the new prefix scheme, using counters per (prefix, year)
-const counters = new Map<string, number>()
-function nextIdFor(codes: string[], admissionDate: Date): string {
-  const prefix = pickPrefix(codes)
-  const yy = String(admissionDate.getFullYear()).slice(-2)
-  const key = `${prefix}${yy}`
-  const next = (counters.get(key) ?? 0) + 1
-  counters.set(key, next)
-  return `${key}${String(next).padStart(3, '0')}`
-}
-
-const studentDocs: any[] = drafts.map((d) => {
-  const studentId = nextIdFor(d.programCodes, d.admissionDate)
-  return {
-    studentId,
-    indexNo: studentId.slice(1),   // keep indexNo aligned to the numeric part
-    barcode: `SAN${studentId}`,
-    fullName: d.fullName,
-    gender: d.gender,
-    dob: d.dob,
-    ageGroup: d.ageGroup,
-    admissionDate: d.admissionDate,
-    religion: d.religion,
-    nationality: 'Sri Lankan',
-    status: d.status,
-    medicalNotes: d.medicalNotes,
-  }
-})
-
-const students = await Student.insertMany(studentDocs)
-
+  // ── Guardians ────────────────────────────────────────────────────────────
   const guardianDocs: any[] = []
   for (const s of students) {
-    const primary = {
+    guardianDocs.push({
       studentId: s._id.toString(),
       name: `Mr. & Mrs. ${s.fullName.split(' ').pop()}`,
       phone: `07${randInt(1, 8)}${randInt(1000000, 9999999)}`,
       relationship: 'Mother',
       isPrimary: true,
       occupation: rand(['Teacher', 'Engineer', 'Nurse', 'Business owner', 'Bank officer', 'Farmer']),
-    }
-    guardianDocs.push(primary)
+    })
     if (Math.random() < 0.3) {
       guardianDocs.push({
         studentId: s._id.toString(),
@@ -205,20 +214,16 @@ const students = await Student.insertMany(studentDocs)
   // 2 students without reachable guardian phone (data-quality demo)
   guardianDocs[0].phone = 'N/A'
   const guardians = await Guardian.insertMany(guardianDocs)
-  console.log('[seed] students:', students.length, '· guardians:', guardians.length)
+  console.log('[seed] guardians:', guardians.length)
 
-  // ── Enrollments (multi-programme!) ───────────────────────────────────────
+  // ── Enrollments — use the SAME programmes that generated each ID ─────────
   const activeStudents = students.filter((s) => s.status === 'Active')
   const enrollmentDocs: any[] = []
   const enrollmentsByStudent = new Map<string, string[]>()
-  for (const s of activeStudents) {
-    const codes: string[] = ['PRESCHOOL']
-    const r = Math.random()
-    if (r < 0.25) codes.push('DAYCARE')
-    else if (r < 0.45) { codes.push('IT'); codes.push('ELOCUTION') }
-    else if (r < 0.6) codes.push('ELOCUTION')
-    else if (r < 0.72) codes.push('DANCING')
-    else if (r < 0.8) { codes.push('IT'); codes.push('DANCING') }
+  for (let i = 0; i < students.length; i++) {
+    const s = students[i]
+    if (s.status !== 'Active') continue
+    const codes = drafts[i].programCodes
     for (const code of codes) {
       enrollmentDocs.push({
         studentId: s._id.toString(),
@@ -264,27 +269,28 @@ const students = await Student.insertMany(studentDocs)
   }
   await Enrollment.insertMany(classEnrollDocs)
 
-  // ── Attendance (last ~9 weeks, school days) ──────────────────────────────
+  // ── Attendance (last ~9 weeks) ───────────────────────────────────────────
   const attendanceDocs: any[] = []
   const today = new Date()
   for (let dayBack = 60; dayBack >= 0; dayBack--) {
     const d = new Date(today)
     d.setDate(d.getDate() - dayBack)
     const dow = d.getDay()
-    if (dow === 0) continue // Sundays off
+    if (dow === 0) continue                      // Sundays off
     const isSaturday = dow === 6
-    if (dayBack === 0 && Math.random() < 0.5) continue // maybe today hasn't started
+    if (dayBack === 0 && Math.random() < 0.5) continue
 
     for (const s of activeStudents) {
       if (isSaturday) {
-        // only tuition-class kids attend Saturdays
         const inSatClass = classEnrollDocs.some(
           (e) => e.studentId === s._id.toString() &&
-            ['Thu', 'Sat', 'Sun', 'Wed', 'Fri'].includes(classes.find((c) => c._id.toString() === e.classId)?.dayOfWeek || ''),
+            ['Thu', 'Sat', 'Sun', 'Wed', 'Fri'].includes(
+              classes.find((c) => c._id.toString() === e.classId)?.dayOfWeek || '',
+            ),
         )
         if (!inSatClass || Math.random() < 0.5) continue
       } else if (Math.random() < 0.12) {
-        continue // some kids absent without record (unmarked)
+        continue
       }
       const r = Math.random()
       const status = r < 0.82 ? 'Present' : r < 0.9 ? 'Late' : r < 0.96 ? 'Absent' : 'Leave'
@@ -330,7 +336,7 @@ const students = await Student.insertMany(studentDocs)
   await Attendance.insertMany(attendanceDocs)
   console.log('[seed] attendance:', attendanceDocs.length)
 
-  // ── Payments: last month (all settled) + current month (mixed) ───────────
+  // ── Payments: last month (settled) + current month (mixed) ──────────────
   const now = new Date()
   const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
   const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1)
@@ -386,7 +392,7 @@ const students = await Student.insertMany(studentDocs)
   const multiCount = paymentDocs.filter((p) => p.items.length > 1).length
   console.log('[seed] payments:', payments.length, `(${multiCount} multi-programme bills)`)
 
-  // ── Payroll: last month paid, current month pending ──────────────────────
+  // ── Payroll: last month paid, current month pending ─────────────────────
   const payrollDocs: any[] = []
   for (const month of [lastMonth, thisMonth]) {
     const isCurrent = month === thisMonth
@@ -450,7 +456,7 @@ const students = await Student.insertMany(studentDocs)
   // ── Announcements ────────────────────────────────────────────────────────
   const announcements = await Announcement.insertMany([
     { title: 'Annual Sports Meet 2026', body: 'Our Annual Sports Meet will be held at the school grounds on the last Friday of this month. All parents are warmly invited. Children should wear their house colours.', category: 'Event', audience: 'All', priority: 'High', pinned: true, publishDate: new Date(now.getTime() - 2 * 86400000), authorName: 'Administration' },
-    { title: 'Fee Payment Reminder', body: 'Kindly settle this month\'s tuition fees before the 10th. Payments are accepted at the accounts desk (Cash/Card) or via bank transfer.', category: 'Payment', audience: 'Parents', priority: 'Normal', publishDate: new Date(now.getTime() - 4 * 86400000), authorName: 'Accounts' },
+    { title: 'Fee Payment Reminder', body: "Kindly settle this month's tuition fees before the 10th. Payments are accepted at the accounts desk (Cash/Card) or via bank transfer.", category: 'Payment', audience: 'Parents', priority: 'Normal', publishDate: new Date(now.getTime() - 4 * 86400000), authorName: 'Accounts' },
     { title: 'Vehicle Parade Holiday', body: 'The institute will remain closed on the day of the municipal procession. A makeup class schedule will be shared via WhatsApp.', category: 'Holiday', audience: 'All', priority: 'High', publishDate: new Date(now.getTime() - 6 * 86400000), authorName: 'Administration' },
     { title: 'Staff Meeting — Curriculum Review', body: 'All teaching staff: curriculum review meeting this Wednesday at 1:30 PM in the staff room.', category: 'Meeting', audience: 'Teachers', priority: 'Normal', publishDate: new Date(now.getTime() - 7 * 86400000), authorName: 'Principal' },
     { title: 'New IT Lab Computers', body: 'Ten new computers are now live in the IT Lab. Coding Club members get first access this term.', category: 'General', audience: 'All', priority: 'Low', publishDate: new Date(now.getTime() - 10 * 86400000), authorName: 'IT Coordinator' },
@@ -479,18 +485,23 @@ const students = await Student.insertMany(studentDocs)
   ])
   console.log('[seed] settings:', settings.length)
 
-  // teacher attendance for the lastActive field
+  // ── Summary ──────────────────────────────────────────────────────────────
+  const byPrefix: Record<string, number> = {}
+  for (const s of students) {
+    const m = /^([A-Z]+)/.exec(s.studentId)
+    const p = m ? m[1] : '?'
+    byPrefix[p] = (byPrefix[p] ?? 0) + 1
+  }
   console.log('\n[seed] ✅ Sample data inserted:',
     `\n  programs=${programDocs.length} students=${students.length} guardians=${guardians.length}`,
     `\n  teachers=${teachers.length} classes=${classes.length} enrollments=${enrollments.length + classEnrollDocs.length}`,
     `\n  attendance=${attendanceDocs.length} payments=${payments.length} payroll=${payroll.length}`,
     `\n  expenses=${expenses.length} announcements=${announcements.length} settings=${settings.length}`)
+  console.log('  student ID prefixes:', byPrefix)
 
   await mongoose.disconnect()
   console.log('[seed] done.')
 }
-
-const round2 = (n: number) => Math.round(n * 100) / 100
 
 main().catch((e) => {
   console.error('[seed] FAILED:', e)
