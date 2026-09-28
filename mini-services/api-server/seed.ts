@@ -84,33 +84,97 @@ async function main() {
   const ageGroups = ['2-3', '3-4', '4-5', '5-6']
 
   const studentDocs: any[] = []
-  for (let i = 0; i < 44; i++) {
-    const studentId = `P24${String(i + 1).padStart(3, '0')}`
-    const gender = i % 2 === 0 ? 'Female' : 'Male'
-    const ageGroup = rand(ageGroups)
-    const dobYear = 2026 - (parseInt(ageGroup[0]) + 1)
-    studentDocs.push({
-      studentId,
-      indexNo: String(i + 1),
-      barcode: `SAN${studentId}`,
-      fullName: `${rand(firstNames)} ${rand(lastNames)}`,
-      gender,
-      dob: new Date(dobYear, randInt(0, 11), randInt(1, 28)),
-      ageGroup,
-      admissionDate: new Date(2024, randInt(0, 11), randInt(1, 28)),
-      religion: rand(['Buddhist', 'Catholic', 'Hindu', 'Muslim', 'Christian']),
-      nationality: 'Sri Lankan',
-      status: i < 40 ? 'Active' : rand(['Inactive', 'Graduated']),
-      medicalNotes: i % 11 === 0 ? 'Mild asthma — inhaler in office' : null,
-    })
+  // Decide programs BEFORE assigning IDs so the prefix can be derived
+type Draft = {
+  fullName: string
+  gender: string
+  ageGroup: string
+  dob: Date
+  admissionDate: Date
+  religion: string
+  status: string
+  medicalNotes: string | null
+  programCodes: string[]
+}
+
+const drafts: Draft[] = []
+for (let i = 0; i < 44; i++) {
+  const gender = i % 2 === 0 ? 'Female' : 'Male'
+  const ageGroup = rand(ageGroups)
+  const dobYear = 2026 - (parseInt(ageGroup[0]) + 1)
+
+  // Same distribution logic as before
+  const codes: string[] = ['PRESCHOOL']
+  const r = Math.random()
+  if (r < 0.25) codes.push('DAYCARE')
+  else if (r < 0.45) { codes.push('IT'); codes.push('ELOCUTION') }
+  else if (r < 0.6) codes.push('ELOCUTION')
+  else if (r < 0.72) codes.push('DANCING')
+  else if (r < 0.8) { codes.push('IT'); codes.push('DANCING') }
+
+  // A handful of daycare-only / tution-only students to demonstrate the new prefix logic
+  if (i === 5 || i === 12 || i === 20) {
+    codes.length = 0
+    codes.push('DAYCARE')
   }
-  // A few birthdays in the next 10 days (celebrations card)
-  for (let k = 0; k < 3; k++) {
-    const soon = new Date()
-    soon.setDate(soon.getDate() + k * 3 + 1)
-    studentDocs[k].dob = new Date(soon.getFullYear() - randInt(3, 5), soon.getMonth(), soon.getDate())
+  if (i === 8 || i === 15) {
+    codes.length = 0
+    codes.push('ELOCUTION')
   }
-  const students = await Student.insertMany(studentDocs)
+  if (i === 22) {
+    codes.length = 0
+    codes.push('IT')
+  }
+
+  drafts.push({
+    fullName: `${rand(firstNames)} ${rand(lastNames)}`,
+    gender,
+    ageGroup,
+    dob: new Date(dobYear, randInt(0, 11), randInt(1, 28)),
+    admissionDate: new Date(2024, randInt(0, 11), randInt(1, 28)),
+    religion: rand(['Buddhist', 'Catholic', 'Hindu', 'Muslim', 'Christian']),
+    status: i < 40 ? 'Active' : rand(['Inactive', 'Graduated']),
+    medicalNotes: i % 11 === 0 ? 'Mild asthma — inhaler in office' : null,
+    programCodes: codes,
+  })
+}
+// Birthday-in-next-10-days for the celebrations card
+for (let k = 0; k < 3; k++) {
+  const soon = new Date()
+  soon.setDate(soon.getDate() + k * 3 + 1)
+  drafts[k].dob = new Date(soon.getFullYear() - randInt(3, 5), soon.getMonth(), soon.getDate())
+}
+
+// Assign IDs with the new prefix scheme, using counters per (prefix, year)
+const counters = new Map<string, number>()
+function nextIdFor(codes: string[], admissionDate: Date): string {
+  const prefix = pickPrefix(codes)
+  const yy = String(admissionDate.getFullYear()).slice(-2)
+  const key = `${prefix}${yy}`
+  const next = (counters.get(key) ?? 0) + 1
+  counters.set(key, next)
+  return `${key}${String(next).padStart(3, '0')}`
+}
+
+const studentDocs: any[] = drafts.map((d) => {
+  const studentId = nextIdFor(d.programCodes, d.admissionDate)
+  return {
+    studentId,
+    indexNo: studentId.slice(1),   // keep indexNo aligned to the numeric part
+    barcode: `SAN${studentId}`,
+    fullName: d.fullName,
+    gender: d.gender,
+    dob: d.dob,
+    ageGroup: d.ageGroup,
+    admissionDate: d.admissionDate,
+    religion: d.religion,
+    nationality: 'Sri Lankan',
+    status: d.status,
+    medicalNotes: d.medicalNotes,
+  }
+})
+
+const students = await Student.insertMany(studentDocs)
 
   const guardianDocs: any[] = []
   for (const s of students) {
