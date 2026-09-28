@@ -31,6 +31,7 @@ app.use('/api/attendance', attendanceRoutes)
 app.use('/api/payments', paymentRoutes)
 app.use('/api/payroll', payrollRoutes)
 app.use('/api/expenses', expenseRoutes)
+app.use('/api/kiosk', kioskRoutes)          // ← new
 app.use('/api', peopleRoutes)
 app.use('/api', analyticsRoutes)
 
