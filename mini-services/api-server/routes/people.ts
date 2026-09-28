@@ -720,4 +720,170 @@ function serializeClass(c: any, eMap: Map<string, number>) {
 }
 
 const DAY_ORDER: Record<string, number> = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 }
-const VALID_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', '
+const VALID_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
+// ─── GET /api/classes ───────────────────────────────────────────────────────
+r.get('/classes', ah(async (req, res) => {
+  const p = qs(req)
+  const day = p.get('day')?.trim() || ''
+  const programCode = p.get('program')?.trim() || ''
+  const teacherId = p.get('teacherId')?.trim() || ''
+  const activeParam = p.get('active')
+  const page = Math.max(1, parseInt(p.get('page') || '1', 10) || 1)
+  const limit = Math.min(200, Math.max(1, parseInt(p.get('limit') || '50', 10) || 50))
+
+  const where: Record<string, unknown> = {}
+  if (day) where.dayOfWeek = day
+  if (programCode) {
+    const prog = await Program.findOne({ code: programCode }, '_id').lean()
+    where.programId = prog ? (prog as any)._id.toString() : '___none___'
+  }
+  if (teacherId) where.teacherId = teacherId
+  if (activeParam === 'true') where.active = true
+  if (activeParam === 'false') where.active = false
+
+  const [total, rows] = await Promise.all([
+    Class.countDocuments(where),
+    Class.find(where)
+      .populate('programId', 'code name color')
+      .populate('teacherId', 'teacherId fullName type')
+      .lean(),
+  ])
+
+  const sorted = (rows as any[]).sort((a, b) => {
+    const da = DAY_ORDER[a.dayOfWeek || ''] ?? 99
+    const db = DAY_ORDER[b.dayOfWeek || ''] ?? 99
+    if (da !== db) return da - db
+    return (a.startTime || '').localeCompare(b.startTime || '')
+  })
+  const pageRows = sorted.slice((page - 1) * limit, (page - 1) * limit + limit)
+
+  const { eMap } = await classRelMaps(pageRows)
+  res.json({ data: pageRows.map((c) => serializeClass(c, eMap)), total })
+}))
+
+// ─── POST /api/classes ──────────────────────────────────────────────────────
+r.post('/classes', ah(async (req, res) => {
+  const body = req.body || {}
+  const name = body.name?.trim()
+  if (!name) return res.status(400).json({ error: 'name is required' })
+  if (body.dayOfWeek && !VALID_DAYS.includes(body.dayOfWeek)) {
+    return res.status(400).json({ error: `dayOfWeek must be one of ${VALID_DAYS.join(', ')}` })
+  }
+  if (body.programId) {
+    const p = await Program.findById(body.programId)
+    if (!p) return res.status(400).json({ error: 'programId not found' })
+  }
+  if (body.teacherId) {
+    const t = await Teacher.findById(body.teacherId)
+    if (!t) return res.status(400).json({ error: 'teacherId not found' })
+  }
+
+  const created = await Class.create({
+    name,
+    programId: body.programId || null,
+    teacherId: body.teacherId || null,
+    dayOfWeek: body.dayOfWeek || null,
+    startTime: body.startTime?.trim() || null,
+    endTime: body.endTime?.trim() || null,
+    room: body.room?.trim() || null,
+    capacity:
+      typeof body.capacity === 'number' && !isNaN(body.capacity) ? Math.max(0, Math.floor(body.capacity)) : 20,
+    fee: typeof body.fee === 'number' && !isNaN(body.fee) ? Math.max(0, body.fee) : 0,
+    instituteSharePct:
+      typeof body.instituteSharePct === 'number' && !isNaN(body.instituteSharePct)
+        ? Math.min(100, Math.max(0, body.instituteSharePct))
+        : 25,
+    active: body.active ?? true,
+    notes: body.notes?.trim() || null,
+  })
+
+  const doc = await Class.findById((created as any)._id)
+    .populate('programId', 'code name color')
+    .populate('teacherId', 'teacherId fullName type')
+    .lean()
+  const { eMap } = await classRelMaps([doc as any])
+  res.status(201).json(serializeClass(doc, eMap))
+}))
+
+// ─── GET /api/classes/:id ───────────────────────────────────────────────────
+r.get('/classes/:id', ah(async (req, res) => {
+  const cls = await Class.findById(req.params.id)
+    .populate('programId', 'code name color')
+    .populate('teacherId', 'teacherId fullName type')
+    .lean()
+  if (!cls) return res.status(404).json({ error: 'Class not found' })
+  const { eMap } = await classRelMaps([cls as any])
+  res.json(serializeClass(cls, eMap))
+}))
+
+// ─── PUT /api/classes/:id ───────────────────────────────────────────────────
+r.put('/classes/:id', ah(async (req, res) => {
+  const existing = await Class.findById(req.params.id)
+  if (!existing) return res.status(404).json({ error: 'Class not found' })
+  const body = req.body || {}
+
+  if (body.dayOfWeek !== undefined && body.dayOfWeek && !VALID_DAYS.includes(body.dayOfWeek)) {
+    return res.status(400).json({ error: `dayOfWeek must be one of ${VALID_DAYS.join(', ')}` })
+  }
+  if (body.programId !== undefined && body.programId) {
+    const p = await Program.findById(body.programId)
+    if (!p) return res.status(400).json({ error: 'programId not found' })
+  }
+  if (body.teacherId !== undefined && body.teacherId) {
+    const t = await Teacher.findById(body.teacherId)
+    if (!t) return res.status(400).json({ error: 'teacherId not found' })
+  }
+
+  if (body.name !== undefined) {
+    const name = body.name.trim()
+    if (!name) return res.status(400).json({ error: 'name cannot be empty' })
+    existing.name = name
+  }
+  if (body.programId !== undefined) existing.programId = body.programId || null
+  if (body.teacherId !== undefined) existing.teacherId = body.teacherId || null
+  if (body.dayOfWeek !== undefined) existing.dayOfWeek = body.dayOfWeek || null
+  if (body.startTime !== undefined) existing.startTime = body.startTime?.trim() || null
+  if (body.endTime !== undefined) existing.endTime = body.endTime?.trim() || null
+  if (body.room !== undefined) existing.room = body.room?.trim() || null
+  if (body.capacity !== undefined) {
+    existing.capacity =
+      typeof body.capacity === 'number' && !isNaN(body.capacity) ? Math.max(0, Math.floor(body.capacity)) : 20
+  }
+  if (body.fee !== undefined) {
+    existing.fee = typeof body.fee === 'number' && !isNaN(body.fee) ? Math.max(0, body.fee) : 0
+  }
+  if (body.instituteSharePct !== undefined) {
+    existing.instituteSharePct =
+      typeof body.instituteSharePct === 'number' && !isNaN(body.instituteSharePct)
+        ? Math.min(100, Math.max(0, body.instituteSharePct))
+        : 25
+  }
+  if (body.active !== undefined) existing.active = Boolean(body.active)
+  if (body.notes !== undefined) existing.notes = body.notes?.trim() || null
+
+  await existing.save()
+  const doc = await Class.findById(req.params.id)
+    .populate('programId', 'code name color')
+    .populate('teacherId', 'teacherId fullName type')
+    .lean()
+  const { eMap } = await classRelMaps([doc as any])
+  res.json(serializeClass(doc, eMap))
+}))
+
+// ─── DELETE /api/classes/:id (block when enrollments exist) ─────────────────
+r.delete('/classes/:id', ah(async (req, res) => {
+  const id = req.params.id
+  const existing = await Class.findById(id).lean()
+  if (!existing) return res.status(404).json({ error: 'Class not found' })
+  const enrolled = await Enrollment.countDocuments({ classId: id })
+  if (enrolled > 0) {
+    return res.status(400).json({
+      error: `Cannot delete "${(existing as any).name}" — ${enrolled} student(s) are enrolled. Withdraw them first.`,
+    })
+  }
+  await Class.deleteOne({ _id: (existing as any)._id })
+  res.json({ ok: true, id, name: (existing as any).name })
+}))
+
+export default r
