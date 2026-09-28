@@ -53,10 +53,15 @@ async function main() {
     { fullName: 'Mrs. Priyani Gunawardena', type: 'Internal', gender: 'Female', basicSalary: 60000, allowances: 4500, epfNo: 'EPF-88127', specialization: 'Preschool, Sinhala', qualification: 'Dip. Primary Education', status: 'On Leave' },
   ]
   const teacherDocs: any[] = []
+  let internalSeq = 0
+  let externalSeq = 0
   for (let i = 0; i < teacherDefs.length; i++) {
     const d = teacherDefs[i]
+    const teacherId = d.type === 'Internal'
+      ? `IT${String(++internalSeq).padStart(3, '0')}`
+      : `ET${String(++externalSeq).padStart(3, '0')}`
     teacherDocs.push({
-      teacherId: `T${String(i + 1).padStart(3, '0')}`,
+      teacherId,
       fingerprintId: `FP-${1001 + i}`,
       fullName: d.fullName,
       type: d.type,
