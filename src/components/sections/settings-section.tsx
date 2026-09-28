@@ -354,7 +354,7 @@ export function SettingsSection() {
         </CardHeader>
         <CardContent className="grid gap-3 text-sm sm:grid-cols-3">
           <Info label="Version" value="v1.0.0" />
-          <Info label="Database" value="SQLite (local)" />
+          <Info label="Database" value="Mongodb" />
           <Info label="Framework" value="Next.js 16 · TypeScript" />
           <Info label="Students on record" value="48 (seeded)" />
           <Info label="Programs" value="5 active" />
