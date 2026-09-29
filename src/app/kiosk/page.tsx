@@ -58,10 +58,10 @@ export default function KioskPage() {
     return () => clearInterval(t)
   }, [])
 
-  // Auto-clear the result screen after 5 seconds
+  // Auto-clear the result screen after 15 seconds
   useEffect(() => {
     if (!result) return
-    const t = setTimeout(() => setResult(null), 5000)
+    const t = setTimeout(() => setResult(null), 15000)
     return () => clearTimeout(t)
   }, [result])
 
