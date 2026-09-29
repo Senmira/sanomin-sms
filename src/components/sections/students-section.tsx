@@ -33,6 +33,7 @@ import { useSchoolInfo } from '@/lib/school'
 import {
   StudentRow,
   ProgramRow,
+  ClassRow,
   GENDERS,
   AGE_GROUPS,
   RELIGIONS,
@@ -111,6 +112,12 @@ function csvEscape(v: unknown): string {
   return s
 }
 
+function ageLabelOf(value: string | null | undefined): string {
+  if (!value) return ''
+  const found = AGE_GROUPS.find((a) => a.value === value)
+  return found ? found.label : value
+}
+
 function exportStudentsCsv(rows: StudentRow[]): void {
   const headers = [
     'Student ID',
@@ -120,9 +127,10 @@ function exportStudentsCsv(rows: StudentRow[]): void {
     'Gender',
     'DOB',
     'Age Group',
+    'Grade',
     'Religion',
     'Nationality',
-    'Programs',
+    'Programmes',
     'Guardian',
     'Guardian Phone',
     'Status',
@@ -137,16 +145,15 @@ function exportStudentsCsv(rows: StudentRow[]): void {
       r.gender,
       r.dob ? toDateInput(r.dob) : '',
       r.ageGroup || '',
+      r.grade || '',
       r.religion || '',
       r.nationality || '',
       r.enrollments
-        .map((e) =>
-          e.program
-            ? e.grade
-              ? `${e.program.code} (${e.grade})`
-              : e.program.code
-            : null,
-        )
+        .map((e) => {
+          if (!e.program) return null
+          const cls = e.class ? ` @ ${e.class.name}` : ''
+          return `${e.program.code}${cls}`
+        })
         .filter(Boolean)
         .join('|'),
       g?.name || '',
@@ -211,8 +218,9 @@ export function StudentsSection() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // Dynamic programme list (for filter dropdown + dialog)
+  // Dynamic lists for filters + dialogs
   const [programs, setPrograms] = useState<ProgramRow[]>([])
+  const [allClasses, setAllClasses] = useState<ClassRow[]>([])
 
   // ── Category tab ─────────────────────────────────────────────────────
   const [category, setCategory] = useState<StudentCategoryTab>('all')
@@ -236,16 +244,20 @@ export function StudentsSection() {
 
   const hasFilters = Boolean(q || program || ageGroup || gender || status)
 
-  // Load programmes once (for filter dropdown + dialog)
+  // Load programmes + classes once
   useEffect(() => {
     let alive = true
-    api<{ data: ProgramRow[] }>('/api/programs?active=true')
-      .then((res) => {
+    Promise.all([
+      api<{ data: ProgramRow[] }>('/api/programs?active=true'),
+      api<{ data: ClassRow[] }>('/api/classes?active=true&limit=200'),
+    ])
+      .then(([progs, classes]) => {
         if (!alive) return
-        setPrograms(res.data || [])
+        setPrograms(progs.data || [])
+        setAllClasses(classes.data || [])
       })
       .catch(() => {
-        /* silent — filter just stays empty */
+        /* silent — filter dropdowns just stay empty */
       })
     return () => {
       alive = false
@@ -382,7 +394,7 @@ export function StudentsSection() {
     <div className="flex flex-col gap-6">
       <SectionHeader
         title="Students"
-        description="Manage student profiles, guardians, program enrollments and ID cards."
+        description="Manage student profiles, guardians, programme enrolments and ID cards."
         icon={<Users className="h-5 w-5" />}
         actions={
           <div className="flex flex-wrap items-center justify-end gap-2">
@@ -482,10 +494,10 @@ export function StudentsSection() {
             onValueChange={(v) => setFilter('program', v === 'ALL' ? '' : v)}
           >
             <SelectTrigger className="w-full lg:w-[160px]">
-              <SelectValue placeholder="Program" />
+              <SelectValue placeholder="Programme" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="ALL">All programs</SelectItem>
+              <SelectItem value="ALL">All programmes</SelectItem>
               {programs.map((p) => (
                 <SelectItem key={p.id} value={p.code}>
                   {p.name}
@@ -498,14 +510,14 @@ export function StudentsSection() {
             value={ageGroup || 'ALL'}
             onValueChange={(v) => setFilter('ageGroup', v === 'ALL' ? '' : v)}
           >
-            <SelectTrigger className="w-full lg:w-[130px]">
-              <SelectValue placeholder="Age Group" />
+            <SelectTrigger className="w-full lg:w-[160px]">
+              <SelectValue placeholder="Age group" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="ALL">All ages</SelectItem>
               {AGE_GROUPS.map((a) => (
-                <SelectItem key={a} value={a}>
-                  {a} yrs
+                <SelectItem key={a.value} value={a.value}>
+                  {a.label}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -566,9 +578,9 @@ export function StudentsSection() {
               <TableRow>
                 <TableHead className="min-w-[200px]">Student</TableHead>
                 <TableHead>Barcode</TableHead>
-                <TableHead>Age</TableHead>
+                <TableHead>Age / Grade</TableHead>
                 <TableHead>Gender</TableHead>
-                <TableHead>Programs</TableHead>
+                <TableHead>Programmes</TableHead>
                 <TableHead>Guardian</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="w-[60px] text-right">Actions</TableHead>
@@ -591,7 +603,7 @@ export function StudentsSection() {
                       <Skeleton className="h-7 w-24" />
                     </TableCell>
                     <TableCell>
-                      <Skeleton className="h-4 w-10" />
+                      <Skeleton className="h-4 w-14" />
                     </TableCell>
                     <TableCell>
                       <Skeleton className="h-4 w-14" />
@@ -690,6 +702,7 @@ export function StudentsSection() {
         <AddEditStudentDialog
           student={editing}
           programs={programs}
+          allClasses={allClasses}
           onClose={() => setAddEditOpen(false)}
           onSaved={(msg) => {
             toast.success(msg)
@@ -727,7 +740,7 @@ export function StudentsSection() {
         title="Delete student?"
         description={
           deleteTarget
-            ? `This permanently removes ${deleteTarget.fullName} (${deleteTarget.studentId}) and all related guardian, enrollment and attendance records.`
+            ? `This permanently removes ${deleteTarget.fullName} (${deleteTarget.studentId}) and all related guardian, enrolment and attendance records.`
             : ''
         }
         confirmText="Delete"
@@ -786,7 +799,7 @@ function StudentTableRow({
         <div className="text-sm">
           <div className="font-medium">{student.ageGroup || '—'}</div>
           <div className="text-xs text-muted-foreground">
-            {ageFromDob(student.dob)}
+            {student.grade || ageFromDob(student.dob)}
           </div>
         </div>
       </TableCell>
@@ -806,12 +819,17 @@ function StudentTableRow({
                   key={e.id}
                   className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium text-white"
                   style={{ backgroundColor: e.program.color }}
-                  title={e.grade ? `${e.program.name} · ${e.grade}` : e.program.name}
+                  title={
+                    e.class
+                      ? `${e.program.name} · ${e.class.name}${e.class.grade ? ` (${e.class.grade})` : ''}`
+                      : e.program.name
+                  }
                 >
                   {e.program.code}
-                  {e.grade && (
+                  {e.class && (
                     <span className="rounded bg-white/20 px-1 text-[10px] font-semibold">
-                      {e.grade}
+                      {e.class.dayOfWeek || ''}
+                      {e.class.startTime ? ` ${e.class.startTime}` : ''}
                     </span>
                   )}
                 </span>
@@ -885,12 +903,12 @@ interface GuardianEntry {
   isPrimary: boolean
 }
 
-// Per-programme enrolment draft inside the dialog:
-//   { programId, grade }
-// grade is '' when the programme has no grades (or the user hasn't picked yet).
+// Per-programme enrolment draft inside the dialog. classId is optional and
+// may be null. Student grade is auto-filled from the chosen class's pinned
+// grade, but the user can override it manually.
 interface EnrollmentDraft {
   programId: string
-  grade: string
+  classId: string | null
 }
 
 interface FormState {
@@ -898,6 +916,7 @@ interface FormState {
   gender: string
   dob: string
   ageGroup: string
+  grade: string
   admissionDate: string
   religion: string
   nationality: string
@@ -914,6 +933,7 @@ function emptyForm(): FormState {
     gender: 'Male',
     dob: '',
     ageGroup: '',
+    grade: '',
     admissionDate: toDateInput(new Date().toISOString()),
     religion: '',
     nationality: 'Sri Lankan',
@@ -931,6 +951,7 @@ function formFromStudent(s: StudentRow): FormState {
     gender: s.gender,
     dob: toDateInput(s.dob),
     ageGroup: s.ageGroup || '',
+    grade: s.grade || '',
     admissionDate: toDateInput(s.admissionDate),
     religion: s.religion || '',
     nationality: s.nationality || 'Sri Lankan',
@@ -960,18 +981,20 @@ function enrollmentsFromStudent(s: StudentRow): EnrollmentDraft[] {
     .filter((e) => e.program !== null)
     .map((e) => ({
       programId: (e.program as NonNullable<typeof e.program>).id,
-      grade: e.grade || '',
+      classId: e.class?.id ?? null,
     }))
 }
 
 function AddEditStudentDialog({
   student,
   programs,
+  allClasses,
   onClose,
   onSaved,
 }: {
   student: StudentRow | null
   programs: ProgramRow[]
+  allClasses: ClassRow[]
   onClose: () => void
   onSaved: (msg: string) => void
 }) {
@@ -1019,29 +1042,28 @@ function AddEditStudentDialog({
     setGuardians((gs) => gs.map((g, i) => ({ ...g, isPrimary: i === idx })))
   }
 
-  // ─── Enrollment toggling ─────────────────────────────────────────────
-  const toggleProgram = useCallback(
-    (programId: string) => {
-      setEnrollments((prev) => {
-        const exists = prev.find((e) => e.programId === programId)
-        if (exists) {
-          return prev.filter((e) => e.programId !== programId)
-        }
-        const prog = programs.find((p) => p.id === programId)
-        return [
-          ...prev,
-          { programId, grade: prog?.hasGrades ? '' : '' /* still empty; sent as null */ },
-        ]
-      })
-    },
-    [programs],
-  )
-
-  const setGrade = useCallback((programId: string, grade: string) => {
-    setEnrollments((prev) =>
-      prev.map((e) => (e.programId === programId ? { ...e, grade } : e)),
-    )
+  // ─── Enrolment toggling ─────────────────────────────────────────────
+  const toggleProgram = useCallback((programId: string) => {
+    setEnrollments((prev) => {
+      const exists = prev.find((e) => e.programId === programId)
+      if (exists) return prev.filter((e) => e.programId !== programId)
+      return [...prev, { programId, classId: null }]
+    })
   }, [])
+
+  const setEnrolmentClass = useCallback(
+    (programId: string, classId: string | null) => {
+      setEnrollments((prev) =>
+        prev.map((x) => (x.programId === programId ? { ...x, classId } : x)),
+      )
+      // Auto-fill the student grade from the chosen class's pinned grade
+      const chosen = classId ? allClasses.find((c) => c.id === classId) : null
+      if (chosen?.grade) {
+        setForm((f) => ({ ...f, grade: chosen.grade || f.grade }))
+      }
+    },
+    [allClasses],
+  )
 
   const handleSubmit = async () => {
     setErr(null)
@@ -1054,20 +1076,12 @@ function AddEditStudentDialog({
       return
     }
 
-    // Validate grades for graded programmes
-    for (const e of enrollments) {
-      const prog = programs.find((p) => p.id === e.programId)
-      if (prog?.hasGrades && !e.grade.trim()) {
-        setErr(`Please choose a grade for ${prog.name}`)
-        return
-      }
-    }
-
     const payload = {
       fullName: form.fullName.trim(),
       gender: form.gender,
       dob: form.dob || null,
       ageGroup: form.ageGroup || null,
+      grade: form.grade.trim() || null,
       admissionDate: form.admissionDate || null,
       religion: form.religion || null,
       nationality: form.nationality || null,
@@ -1085,14 +1099,11 @@ function AddEditStudentDialog({
           relationship: g.relationship || 'Guardian',
           isPrimary: g.isPrimary,
         })),
-      // New payload shape: enrollments: [{ programId, grade }]
-      enrollments: enrollments.map((e) => {
-        const prog = programs.find((p) => p.id === e.programId)
-        return {
-          programId: e.programId,
-          grade: prog?.hasGrades ? e.grade.trim() || null : null,
-        }
-      }),
+      // New payload shape: enrollments: [{ programId, classId }]
+      enrollments: enrollments.map((e) => ({
+        programId: e.programId,
+        classId: e.classId || null,
+      })),
     }
 
     setSaving(true)
@@ -1187,12 +1198,22 @@ function AddEditStudentDialog({
                 <SelectContent>
                   <SelectItem value="NONE">—</SelectItem>
                   {AGE_GROUPS.map((a) => (
-                    <SelectItem key={a} value={a}>
-                      {a} yrs
+                    <SelectItem key={a.value} value={a.value}>
+                      {a.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+            </Field>
+            <Field label="Grade (optional)" className="sm:col-span-2">
+              <Input
+                value={form.grade}
+                onChange={(e) => updateField('grade', e.target.value)}
+                placeholder="e.g. Grade 6"
+              />
+              <p className="mt-1 text-xs text-muted-foreground">
+                Free text. Auto-filled when a class with a pinned grade is chosen below.
+              </p>
             </Field>
           </div>
 
@@ -1270,23 +1291,26 @@ function AddEditStudentDialog({
             </Field>
           </div>
 
-          {/* Program enrollments — dynamic list, grade picker per graded programme */}
+          {/* Programme + class enrolment */}
           <div className="rounded-lg border bg-muted/30 p-3">
             <div className="mb-2 flex items-center justify-between">
-              <p className="text-sm font-medium">Program enrollments</p>
+              <p className="text-sm font-medium">Programme enrolments</p>
               <p className="text-xs text-muted-foreground">
                 {enrollments.length} selected
               </p>
             </div>
             {programs.length === 0 ? (
               <p className="text-xs text-muted-foreground">
-                No active programmes available. Create one in the Programs section first.
+                No active programmes available. Create one in the Programmes section first.
               </p>
             ) : (
               <div className="space-y-2">
                 {programs.map((p) => {
                   const draft = enrollments.find((e) => e.programId === p.id)
                   const checked = !!draft
+                  const classesForProgram = allClasses.filter(
+                    (c) => c.program?.id === p.id,
+                  )
                   return (
                     <div
                       key={p.id}
@@ -1307,42 +1331,47 @@ function AddEditStudentDialog({
                         <span className="font-mono text-[10px] text-muted-foreground">
                           {p.code}
                         </span>
-                        {p.hasGrades && (
-                          <Badge
-                            variant="outline"
-                            className="ml-auto text-[10px] text-muted-foreground"
-                          >
-                            {p.grades.length} grade{p.grades.length === 1 ? '' : 's'}
-                          </Badge>
-                        )}
+                        <Badge
+                          variant="outline"
+                          className="ml-auto text-[10px] text-muted-foreground"
+                        >
+                          {p.category}
+                        </Badge>
                       </label>
 
-                      {/* Grade picker — only for graded programmes when checked */}
-                      {checked && p.hasGrades && (
-                        <div className="mt-2 flex items-center gap-2 pl-7">
-                          <Label className="shrink-0 text-xs text-muted-foreground">
-                            Grade:
+                      {checked && (
+                        <div className="mt-2 flex flex-col gap-1 pl-7">
+                          <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                            Class (optional)
                           </Label>
                           <Select
-                            value={draft!.grade || ''}
-                            onValueChange={(v) => setGrade(p.id, v)}
+                            value={draft!.classId ?? 'none'}
+                            onValueChange={(v) => {
+                              const classId = v === 'none' ? null : v
+                              setEnrolmentClass(p.id, classId)
+                            }}
                           >
-                            <SelectTrigger className="h-8 w-full max-w-[180px] text-xs">
-                              <SelectValue placeholder="Choose grade…" />
+                            <SelectTrigger className="h-8 w-full max-w-[280px] text-xs">
+                              <SelectValue placeholder="No class assigned" />
                             </SelectTrigger>
                             <SelectContent>
-                              {p.grades.map((g) => (
-                                <SelectItem key={g} value={g}>
-                                  {g}
+                              <SelectItem value="none">No class</SelectItem>
+                              {classesForProgram.length === 0 ? (
+                                <SelectItem value="none" disabled>
+                                  No classes for {p.name}
                                 </SelectItem>
-                              ))}
+                              ) : (
+                                classesForProgram.map((c) => (
+                                  <SelectItem key={c.id} value={c.id}>
+                                    {c.name}
+                                    {c.dayOfWeek ? ` · ${c.dayOfWeek}` : ''}
+                                    {c.startTime ? ` ${c.startTime}` : ''}
+                                    {c.grade ? ` (${c.grade})` : ''}
+                                  </SelectItem>
+                                ))
+                              )}
                             </SelectContent>
                           </Select>
-                          {!draft!.grade && (
-                            <span className="text-[11px] text-amber-600 dark:text-amber-400">
-                              Required
-                            </span>
-                          )}
                         </div>
                       )}
                     </div>
@@ -1522,7 +1551,15 @@ function ProfileDialog({
               <span>·</span>
               <span>{student.gender}</span>
               <span>·</span>
-              <span>{student.ageGroup || '—'} yrs</span>
+              <span>{ageLabelOf(student.ageGroup) || '—'}</span>
+              {student.grade && (
+                <>
+                  <span>·</span>
+                  <span className="font-medium text-foreground">
+                    {student.grade}
+                  </span>
+                </>
+              )}
               <span>·</span>
               <span>Age {ageFromDob(student.dob)}</span>
             </div>
@@ -1538,9 +1575,9 @@ function ProfileDialog({
                     style={{ backgroundColor: e.program.color }}
                   >
                     {e.program.code}
-                    {e.grade && (
+                    {e.class && (
                       <span className="rounded bg-white/20 px-1 text-[10px] font-semibold">
-                        {e.grade}
+                        {e.class.name}
                       </span>
                     )}
                   </span>
@@ -1592,6 +1629,11 @@ function ProfileDialog({
                 value={student.indexNo || '—'}
               />
               <DetailItem
+                icon={<GraduationCap className="h-4 w-4" />}
+                label="Grade"
+                value={student.grade || '—'}
+              />
+              <DetailItem
                 icon={<CalendarDays className="h-4 w-4" />}
                 label="Date of birth"
                 value={fmtDate(student.dob)}
@@ -1610,11 +1652,6 @@ function ProfileDialog({
                 icon={<Users2 className="h-4 w-4" />}
                 label="Nationality"
                 value={student.nationality || '—'}
-              />
-              <DetailItem
-                icon={<GraduationCap className="h-4 w-4" />}
-                label="Previous school"
-                value={student.previousSchool || '—'}
               />
             </div>
 
@@ -1666,10 +1703,10 @@ function ProfileDialog({
             </div>
 
             <div className="mt-4">
-              <h4 className="mb-2 text-sm font-semibold">Enrolled programs</h4>
+              <h4 className="mb-2 text-sm font-semibold">Enrolled programmes</h4>
               {student.enrollments.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
-                  Not enrolled in any program.
+                  Not enrolled in any programme.
                 </p>
               ) : (
                 <div className="flex flex-wrap gap-2">
@@ -1689,12 +1726,12 @@ function ProfileDialog({
                         <span className="text-xs text-muted-foreground">
                           ({e.program.code})
                         </span>
-                        {e.grade && (
+                        {e.class && (
                           <Badge
                             variant="outline"
                             className="text-[10px] font-semibold"
                           >
-                            {e.grade}
+                            {e.class.name}
                           </Badge>
                         )}
                       </div>
@@ -1894,9 +1931,9 @@ function IdCardDialog({
                       style={{ backgroundColor: e.program.color }}
                     >
                       {e.program.code}
-                      {e.grade && (
+                      {e.class && (
                         <span className="rounded bg-black/20 px-1 text-[9px]">
-                          {e.grade}
+                          {e.class.name}
                         </span>
                       )}
                     </span>
@@ -1931,8 +1968,8 @@ function IdCardDialog({
               <p className="font-medium">{student.ageGroup || '—'}</p>
             </div>
             <div>
-              <p className="text-muted-foreground">Status</p>
-              <p className="font-medium">{student.status}</p>
+              <p className="text-muted-foreground">Grade</p>
+              <p className="font-medium">{student.grade || '—'}</p>
             </div>
           </div>
         </div>
