@@ -46,6 +46,93 @@ function nextTeacherIdFor(type: 'Internal' | 'External', hireDate: Date): string
   return `${prefix}${String(next).padStart(3, '0')}`
 }
 
+// ─── Timetable helpers for seed (in-memory mirrors of the API helpers) ─────
+const DAY_CODES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const
+const GRACE_MINUTES = 10
+
+function parseHHMM(date: Date, time: string | null | undefined): Date | null {
+  if (!time) return null
+  const m = /^(\d{1,2}):(\d{2})/.exec(time.trim())
+  if (!m) return null
+  const hh = Math.min(23, parseInt(m[1], 10))
+  const mm = Math.min(59, parseInt(m[2], 10))
+  const d = new Date(date)
+  d.setHours(hh, mm, 0, 0)
+  return d
+}
+
+interface ExpectedWindow {
+  expectedStart: Date | null
+  expectedEnd: Date | null
+  classNames: string[]
+}
+
+// Resolve the expected arrival/pickup window using the in-memory `classes`
+// array — no DB round trip.
+function resolveExpectedFor(
+  personType: 'Student' | 'Teacher',
+  personId: string,
+  date: Date,
+  classes: any[],
+  classEnrollDocs: any[],
+  studentProgramIds: string[],   // student's programIds (from enrollments)
+): ExpectedWindow {
+  const dow = DAY_CODES[date.getDay()]
+
+  let matched: any[] = []
+  if (personType === 'Teacher') {
+    matched = classes.filter((c) => c.teacherId === personId && c.dayOfWeek === dow && c.active !== false)
+  } else {
+    const classIds = classEnrollDocs
+      .filter((e) => e.studentId === personId && e.classId)
+      .map((e) => e.classId)
+    const directClasses = classIds.length
+      ? classes.filter((c) => classIds.includes(c._id.toString()) && c.dayOfWeek === dow && c.active !== false)
+      : []
+    if (directClasses.length > 0) {
+      matched = directClasses
+    } else if (studentProgramIds.length > 0) {
+      matched = classes.filter(
+        (c) => studentProgramIds.includes(c.programId) && c.dayOfWeek === dow && c.active !== false,
+      )
+    }
+  }
+
+  if (matched.length === 0) return { expectedStart: null, expectedEnd: null, classNames: [] }
+
+  const starts = matched.map((c) => c.startTime).filter(Boolean).sort() as string[]
+  const ends = matched.map((c) => c.endTime).filter(Boolean).sort() as string[]
+  return {
+    expectedStart: starts.length ? parseHHMM(date, starts[0]) : null,
+    expectedEnd: ends.length ? parseHHMM(date, ends[ends.length - 1]) : null,
+    classNames: matched.map((c) => c.name),
+  }
+}
+
+function computeFlagsLocal(
+  checkIn: Date | null,
+  checkOut: Date | null,
+  expected: ExpectedWindow,
+): { lateMinutes: number | null; earlyMinutes: number | null; lateCheckoutMinutes: number | null } {
+  let lateMinutes: number | null = null
+  let earlyMinutes: number | null = null
+  let lateCheckoutMinutes: number | null = null
+  const graceMs = GRACE_MINUTES * 60_000
+  if (checkIn && expected.expectedStart) {
+    const diff = checkIn.getTime() - (expected.expectedStart.getTime() + graceMs)
+    if (diff > 0) lateMinutes = Math.round(diff / 60_000)
+  }
+  if (checkOut && expected.expectedEnd) {
+    const beforeMs = expected.expectedEnd.getTime() - graceMs - checkOut.getTime()
+    if (beforeMs > 0) earlyMinutes = Math.round(beforeMs / 60_000)
+    else {
+      const over = checkOut.getTime() - (expected.expectedEnd.getTime() + graceMs)
+      if (over > 0) lateCheckoutMinutes = Math.round(over / 60_000)
+    }
+  }
+  return { lateMinutes, earlyMinutes, lateCheckoutMinutes }
+}
+
 async function main() {
   await mongoose.connect(MONGODB_URI)
   console.log('[seed] connected to', MONGODB_URI)
@@ -220,19 +307,24 @@ async function main() {
   const activeStudents = students.filter((s) => s.status === 'Active')
   const enrollmentDocs: any[] = []
   const enrollmentsByStudent = new Map<string, string[]>()
+  const studentProgramIds = new Map<string, string[]>()  // for timetable lookup
   for (let i = 0; i < students.length; i++) {
     const s = students[i]
     if (s.status !== 'Active') continue
     const codes = drafts[i].programCodes
+    const programIds: string[] = []
     for (const code of codes) {
+      const pid = progByCode[code]._id.toString()
       enrollmentDocs.push({
         studentId: s._id.toString(),
-        programId: progByCode[code]._id.toString(),
+        programId: pid,
         enrolledAt: new Date(2024, randInt(0, 11), randInt(1, 28)),
         status: 'Active',
       })
+      programIds.push(pid)
     }
     enrollmentsByStudent.set(s._id.toString(), codes)
+    studentProgramIds.set(s._id.toString(), programIds)
   }
   const enrollments = await Enrollment.insertMany(enrollmentDocs)
   console.log('[seed] enrollments:', enrollments.length)
@@ -269,7 +361,7 @@ async function main() {
   }
   await Enrollment.insertMany(classEnrollDocs)
 
-  // ── Attendance (last ~9 weeks) ───────────────────────────────────────────
+  // ── Attendance (last ~9 weeks, timetable-aware) ─────────────────────────
   const attendanceDocs: any[] = []
   const today = new Date()
   for (let dayBack = 60; dayBack >= 0; dayBack--) {
@@ -292,16 +384,39 @@ async function main() {
       } else if (Math.random() < 0.12) {
         continue
       }
+
+      // Resolve expected window for this student on this day (in-memory)
+      const expected = resolveExpectedFor(
+        'Student',
+        s._id.toString(),
+        d,
+        classes,
+        classEnrollDocs,
+        studentProgramIds.get(s._id.toString()) ?? [],
+      )
+
       const r = Math.random()
       const status = r < 0.82 ? 'Present' : r < 0.9 ? 'Late' : r < 0.96 ? 'Absent' : 'Leave'
-      const checkInHour = status === 'Late' ? randInt(8, 9) : 7
-      const checkIn = status === 'Absent' || status === 'Leave'
-        ? null
-        : new Date(d.getFullYear(), d.getMonth(), d.getDate(), checkInHour, randInt(0, 59))
-      const checkOut =
-        status === 'Absent' || status === 'Leave'
-          ? null
-          : new Date(d.getFullYear(), d.getMonth(), d.getDate(), randInt(12, 17), randInt(0, 59))
+
+      // If we have an expected start, base the check-in time around it; else fall back
+      let checkIn: Date | null = null
+      let checkOut: Date | null = null
+      if (status !== 'Absent' && status !== 'Leave') {
+        const baseIn = expected.expectedStart ?? new Date(d.getFullYear(), d.getMonth(), d.getDate(), 8, 30)
+        // Present: 0–9 min early, Late: 5–25 min after start
+        const offsetMin = status === 'Late' ? randInt(5, 25) : -randInt(0, 9)
+        checkIn = new Date(baseIn.getTime() + offsetMin * 60_000)
+
+        const baseOut = expected.expectedEnd ?? new Date(d.getFullYear(), d.getMonth(), d.getDate(), 15, 30)
+        // 90% leave on time-ish, 10% pick up late / early
+        const outRand = Math.random()
+        if (outRand < 0.05) checkOut = new Date(baseOut.getTime() - randInt(5, 20) * 60_000)
+        else if (outRand < 0.15) checkOut = new Date(baseOut.getTime() + randInt(5, 30) * 60_000)
+        else checkOut = new Date(baseOut.getTime() + randInt(-3, 3) * 60_000)
+      }
+
+      const flags = computeFlagsLocal(checkIn, checkOut, expected)
+
       attendanceDocs.push({
         personType: 'Student',
         personId: s._id.toString(),
@@ -312,29 +427,63 @@ async function main() {
         method: rand(['Barcode', 'Barcode', 'Manual']),
         status,
         note: status === 'Leave' ? 'Family event' : null,
+        expectedStart: expected.expectedStart,
+        expectedEnd: expected.expectedEnd,
+        lateMinutes: flags.lateMinutes,
+        earlyMinutes: flags.earlyMinutes,
+        lateCheckoutMinutes: flags.lateCheckoutMinutes,
       })
     }
+
     for (const t of teachers) {
       if (t.status === 'On Leave' && Math.random() < 0.8) continue
       if (isSaturday && Math.random() < 0.6) continue
+
+      const expected = resolveExpectedFor(
+        'Teacher',
+        t._id.toString(),
+        d,
+        classes,
+        classEnrollDocs,
+        [],
+      )
+
       const r = Math.random()
       const status = r < 0.88 ? 'Present' : r < 0.95 ? 'Late' : r < 0.98 ? 'Absent' : 'Leave'
       const hasTimes = status === 'Present' || status === 'Late'
+
+      let checkIn: Date | null = null
+      let checkOut: Date | null = null
+      if (hasTimes) {
+        const baseIn = expected.expectedStart ?? new Date(d.getFullYear(), d.getMonth(), d.getDate(), 8, 0)
+        const offsetMin = status === 'Late' ? randInt(5, 20) : -randInt(0, 12)
+        checkIn = new Date(baseIn.getTime() + offsetMin * 60_000)
+
+        const baseOut = expected.expectedEnd ?? new Date(d.getFullYear(), d.getMonth(), d.getDate(), 15, 0)
+        checkOut = new Date(baseOut.getTime() + randInt(-5, 10) * 60_000)
+      }
+      const flags = computeFlagsLocal(checkIn, checkOut, expected)
+
       attendanceDocs.push({
         personType: 'Teacher',
         personId: t._id.toString(),
         personRef: t.teacherId,
         date: new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12, 0, 0),
-        checkIn: hasTimes ? new Date(d.getFullYear(), d.getMonth(), d.getDate(), randInt(7, 8), randInt(0, 59)) : null,
-        checkOut: hasTimes ? new Date(d.getFullYear(), d.getMonth(), d.getDate(), randInt(13, 17), randInt(0, 59)) : null,
+        checkIn,
+        checkOut,
         method: rand(['Fingerprint', 'Fingerprint', 'Manual']),
         status,
         note: null,
+        expectedStart: expected.expectedStart,
+        expectedEnd: expected.expectedEnd,
+        lateMinutes: flags.lateMinutes,
+        earlyMinutes: flags.earlyMinutes,
+        lateCheckoutMinutes: flags.lateCheckoutMinutes,
       })
     }
   }
   await Attendance.insertMany(attendanceDocs)
-  console.log('[seed] attendance:', attendanceDocs.length)
+  console.log('[seed] attendance:', attendanceDocs.length, '(timetable-aware)')
 
   // ── Payments: last month (settled) + current month (mixed) ──────────────
   const now = new Date()
@@ -470,6 +619,9 @@ async function main() {
     { key: 'school_address', value: 'No. 42, Temple Road, Kandy' },
     { key: 'school_phone', value: '081 234 5678' },
     { key: 'school_email', value: 'info@sanomin.lk' },
+    // Late-arrival grace period (minutes) used by the timetable-aware
+    // attendance logic in helpers.ts → readGraceMinutes()
+    { key: 'late_grace_minutes', value: String(GRACE_MINUTES) },
     {
       key: 'expense_budgets',
       value: JSON.stringify({ Rent: 85000, Utilities: 32000, Supplies: 20000, Transport: 25000, Maintenance: 40000 }),
@@ -497,6 +649,9 @@ async function main() {
     const type = t.type === 'Internal' ? 'I' : 'E'
     byTeacherType[type] = (byTeacherType[type] ?? 0) + 1
   }
+  // Quick sanity — how many attendance rows got a non-null lateMinutes?
+  const lateCount = attendanceDocs.filter((a) => a.lateMinutes != null && a.lateMinutes > 0).length
+  const earlyOutCount = attendanceDocs.filter((a) => a.lateCheckoutMinutes != null && a.lateCheckoutMinutes > 0).length
 
   console.log('\n[seed] ✅ Sample data inserted:',
     `\n  programs=${programDocs.length} students=${students.length} guardians=${guardians.length}`,
@@ -505,6 +660,7 @@ async function main() {
     `\n  expenses=${expenses.length} announcements=${announcements.length} settings=${settings.length}`)
   console.log('  student IDs by year:', byStudentYear)
   console.log('  teacher IDs by type:', byTeacherType)
+  console.log('  attendance late arrivals:', lateCount, '· late pickups:', earlyOutCount)
 
   await mongoose.disconnect()
   console.log('[seed] done.')
