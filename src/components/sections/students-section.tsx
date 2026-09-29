@@ -98,6 +98,8 @@ import { Skeleton } from '@/components/ui/skeleton'
 // ─── Helpers ───────────────────────────────────────────────────────────────
 const PAGE_SIZE = 20
 
+type Category = 'all' | 'preschool' | 'daycare' | 'tuition'
+
 function toDateInput(iso?: string | null): string {
   if (!iso) return ''
   const d = new Date(iso)
@@ -182,6 +184,12 @@ interface ListResponse {
     activeStudents: number
     newThisMonth: number
     filteredCount: number
+    byCategory?: {
+      all: number
+      preschool: number
+      daycare: number
+      tuition: number
+    }
   }
 }
 
@@ -189,14 +197,18 @@ interface ListResponse {
 export function StudentsSection() {
   const [rows, setRows] = useState<StudentRow[]>([])
   const [total, setTotal] = useState(0)
-  const [stats, setStats] = useState({
+  const [stats, setStats] = useState<ListResponse['stats']>({
     totalStudents: 0,
     activeStudents: 0,
     newThisMonth: 0,
     filteredCount: 0,
+    byCategory: { all: 0, preschool: 0, daycare: 0, tuition: 0 },
   })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  // ── Category tab ─────────────────────────────────────────────────────
+  const [category, setCategory] = useState<Category>('all')
 
   // filters
   const [q, setQ] = useState('')
@@ -241,19 +253,26 @@ export function StudentsSection() {
     setPage(1)
   }, [])
 
+  // Category change → reset to page 1
+  const handleCategoryChange = useCallback((v: string) => {
+    setCategory(v as Category)
+    setPage(1)
+  }, [])
+
   const queryParams = useMemo(() => {
     const p = new URLSearchParams()
     if (q) p.set('q', q)
     if (program) p.set('program', program)
+    if (category !== 'all') p.set('category', category)
     if (ageGroup) p.set('ageGroup', ageGroup)
     if (gender) p.set('gender', gender)
     if (status) p.set('status', status)
     p.set('page', String(page))
     p.set('limit', String(PAGE_SIZE))
     return p.toString()
-  }, [q, program, ageGroup, gender, status, page])
+  }, [q, program, category, ageGroup, gender, status, page])
 
-  // Fetch list — debounced via setTimeout; setState only inside async callback
+  // Fetch list — debounced; setState only inside async callback
   useEffect(() => {
     let alive = true
     const t = setTimeout(() => {
@@ -337,6 +356,8 @@ export function StudentsSection() {
   const showingFrom = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1
   const showingTo = Math.min(total, page * PAGE_SIZE)
 
+  const bc = stats.byCategory ?? { all: 0, preschool: 0, daycare: 0, tuition: 0 }
+
   return (
     <div className="flex flex-col gap-6">
       <SectionHeader
@@ -390,9 +411,39 @@ export function StudentsSection() {
           value={`${stats.filteredCount} / ${stats.totalStudents}`}
           icon={Filter}
           accent="amber"
-          hint={hasFilters ? 'Filtered results' : 'No filters applied'}
+          hint={hasFilters || category !== 'all' ? 'Filtered results' : 'No filters applied'}
         />
       </div>
+
+      {/* ── Category tabs ───────────────────────────────────────────── */}
+      <Tabs value={category} onValueChange={handleCategoryChange}>
+        <TabsList className="grid w-full grid-cols-4 sm:w-auto sm:inline-flex">
+          <TabsTrigger value="all" className="gap-1.5">
+            All
+            <span className="text-xs text-muted-foreground tabular-nums">
+              {bc.all}
+            </span>
+          </TabsTrigger>
+          <TabsTrigger value="preschool" className="gap-1.5">
+            Preschool
+            <span className="text-xs text-muted-foreground tabular-nums">
+              {bc.preschool}
+            </span>
+          </TabsTrigger>
+          <TabsTrigger value="daycare" className="gap-1.5">
+            Daycare
+            <span className="text-xs text-muted-foreground tabular-nums">
+              {bc.daycare}
+            </span>
+          </TabsTrigger>
+          <TabsTrigger value="tuition" className="gap-1.5">
+            Tuition
+            <span className="text-xs text-muted-foreground tabular-nums">
+              {bc.tuition}
+            </span>
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
 
       {/* Toolbar */}
       <div className="flex flex-col gap-3 rounded-xl border bg-card p-3 shadow-sm sm:flex-row sm:items-center sm:gap-2 sm:p-4">
@@ -544,10 +595,14 @@ export function StudentsSection() {
                   <TableCell colSpan={8} className="p-0">
                     <EmptyState
                       icon={Users}
-                      title={hasFilters ? 'No matching students' : 'No students yet'}
+                      title={
+                        hasFilters || category !== 'all'
+                          ? 'No matching students'
+                          : 'No students yet'
+                      }
                       description={
-                        hasFilters
-                          ? 'Try adjusting your search or filters.'
+                        hasFilters || category !== 'all'
+                          ? 'Try adjusting your search, filters or category.'
                           : 'Add your first student to get started.'
                       }
                       action={
@@ -679,10 +734,7 @@ function StudentTableRow({
     student.guardians.find((g) => g.isPrimary) || student.guardians[0]
 
   return (
-    <TableRow
-      className="cursor-pointer"
-      onClick={onView}
-    >
+    <TableRow className="cursor-pointer" onClick={onView}>
       <TableCell>
         <div className="flex items-center gap-3">
           <Avatar className="size-9 ring-1 ring-border">
@@ -877,16 +929,17 @@ function AddEditStudentDialog({
   onClose: () => void
   onSaved: (msg: string) => void
 }) {
-  // Lazy initial state — runs once when dialog mounts
   const [form, setForm] = useState<FormState>(() =>
     student ? formFromStudent(student) : emptyForm(),
   )
   const [guardians, setGuardians] = useState<GuardianEntry[]>(() =>
-    student ? guardiansFromStudent(student) : [{ name: '', phone: '', address: '', relationship: 'Guardian', isPrimary: true }],
+    student
+      ? guardiansFromStudent(student)
+      : [{ name: '', phone: '', address: '', relationship: 'Guardian', isPrimary: true }],
   )
   const [programCodes, setProgramCodes] = useState<string[]>(() =>
     student
-      ? student.enrollments.map((e) => e.program?.code).filter(Boolean) as string[]
+      ? (student.enrollments.map((e) => e.program?.code).filter(Boolean) as string[])
       : [],
   )
   const [saving, setSaving] = useState(false)
@@ -913,7 +966,6 @@ function AddEditStudentDialog({
       const next = gs.filter((_, i) => i !== idx)
       const hasPrimary = next.some((g) => g.isPrimary)
       if (!hasPrimary && next.length > 0) {
-        // Replace first slot with a new object (no mutation of existing state)
         next[0] = { ...next[0], isPrimary: true }
       }
       return next
@@ -968,10 +1020,10 @@ function AddEditStudentDialog({
     setSaving(true)
     try {
       if (isEdit && student) {
-        const updated = await api<StudentRow>(
-          `/api/students/${student.id}`,
-          { method: 'PUT', body: JSON.stringify(payload) },
-        )
+        const updated = await api<StudentRow>(`/api/students/${student.id}`, {
+          method: 'PUT',
+          body: JSON.stringify(payload),
+        })
         onSaved(`Updated ${updated.fullName}`)
       } else {
         const created = await api<StudentRow>('/api/students', {
@@ -1008,7 +1060,6 @@ function AddEditStudentDialog({
         )}
 
         <div className="grid gap-4 py-1">
-          {/* Identity */}
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Full name *" className="sm:col-span-2">
               <Input
@@ -1067,7 +1118,6 @@ function AddEditStudentDialog({
             </Field>
           </div>
 
-          {/* Admission + religion + nationality */}
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Admission date">
               <Input
@@ -1142,7 +1192,6 @@ function AddEditStudentDialog({
             </Field>
           </div>
 
-          {/* Programs */}
           <div className="rounded-lg border bg-muted/30 p-3">
             <p className="mb-2 text-sm font-medium">Program enrollments</p>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
@@ -1171,7 +1220,6 @@ function AddEditStudentDialog({
             </div>
           </div>
 
-          {/* Guardians */}
           <div className="rounded-lg border bg-muted/30 p-3">
             <div className="mb-2 flex items-center justify-between">
               <p className="text-sm font-medium">Guardians / Parents</p>
@@ -1182,10 +1230,7 @@ function AddEditStudentDialog({
             </div>
             <div className="space-y-3">
               {guardians.map((g, idx) => (
-                <div
-                  key={idx}
-                  className="rounded-md border bg-background p-3"
-                >
+                <div key={idx} className="rounded-md border bg-background p-3">
                   <div className="mb-2 flex items-center justify-between">
                     <label className="flex items-center gap-2 text-xs font-medium">
                       <Checkbox
@@ -1293,7 +1338,6 @@ function ProfileDialog({
   const [attendance, setAttendance] = useState<AttendanceLite[] | null>(null)
   const [attErr, setAttErr] = useState(false)
 
-  // Fetch attendance for this student — non-blocking
   useEffect(() => {
     let alive = true
     api<{ data?: AttendanceLite[] } & AttendanceLite[]>(
@@ -1330,7 +1374,6 @@ function ProfileDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {/* Identity header */}
         <div className="flex flex-col gap-4 rounded-lg border bg-muted/30 p-4 sm:flex-row sm:items-center">
           <Avatar className="size-16 ring-2 ring-border">
             <AvatarFallback
@@ -1447,7 +1490,6 @@ function ProfileDialog({
               </div>
             )}
 
-            {/* Guardians */}
             <div className="mt-4">
               <h4 className="mb-2 text-sm font-semibold">Guardians</h4>
               {student.guardians.length === 0 ? (
@@ -1455,10 +1497,7 @@ function ProfileDialog({
               ) : (
                 <div className="grid gap-2 sm:grid-cols-2">
                   {student.guardians.map((g) => (
-                    <div
-                      key={g.id}
-                      className="rounded-md border bg-muted/20 p-3"
-                    >
+                    <div key={g.id} className="rounded-md border bg-muted/20 p-3">
                       <div className="flex items-center justify-between gap-2">
                         <span className="font-medium">{g.name}</span>
                         {g.isPrimary && (
@@ -1488,7 +1527,6 @@ function ProfileDialog({
               )}
             </div>
 
-            {/* Programs */}
             <div className="mt-4">
               <h4 className="mb-2 text-sm font-semibold">Enrolled programs</h4>
               {student.enrollments.length === 0 ? (
@@ -1663,9 +1701,7 @@ function IdCardDialog({
 
         <style>{printCss}</style>
 
-        {/* Printable ID card */}
         <div className="printable-id-card mx-auto w-full max-w-sm overflow-hidden rounded-xl border bg-white text-foreground shadow-md">
-          {/* Header band */}
           <div
             className="flex items-center gap-3 px-4 py-3 text-white"
             style={{
@@ -1688,7 +1724,6 @@ function IdCardDialog({
             </div>
           </div>
 
-          {/* Body */}
           <div className="flex gap-3 p-4">
             <Avatar className="size-16 shrink-0 ring-2 ring-border">
               <AvatarFallback
@@ -1720,7 +1755,6 @@ function IdCardDialog({
             </div>
           </div>
 
-          {/* Barcode */}
           <div className="flex flex-col items-center gap-1 border-t bg-muted/20 px-4 py-3">
             <Barcode value={student.barcode} height={36} showText={false} />
             <span className="font-mono text-[11px] tracking-[0.18em]">
@@ -1728,7 +1762,6 @@ function IdCardDialog({
             </span>
           </div>
 
-          {/* Footer info */}
           <div className="grid grid-cols-2 gap-2 border-t px-4 py-3 text-xs">
             <div>
               <p className="text-muted-foreground">Guardian</p>
