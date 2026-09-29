@@ -3,11 +3,12 @@
 // Run: bun run seed
 //
 // ID scheme (mirrors routes/people.ts):
-//   Student:  <PREFIX><YY><NNN>
-//     PREFIX = P (Preschool) > D (Daycare) > T (Tution/Elocution) > I (IT) > X (other)
-//     YY    = year of admission
-//     NNN   = sequential within (PREFIX, YY)
-//   Teacher:  IT<NNN> (Internal)  |  ET<NNN> (External)
+//   Student:   S<YY><NNNN>   e.g. S240001, S240002, S250001
+//   Teacher:   I<YY><NNN>    (Internal)  e.g. I24001, I24002
+//              E<YY><NNN>    (External)  e.g. E24001, E24002
+//   YY = year of admission (student) / hire (teacher)
+//   Barcode = studentId exactly (no SAN prefix).
+//   Programme info lives ONLY in the Enrollment collection.
 import mongoose from 'mongoose'
 import {
   Program, Student, Guardian, Teacher, Class, Enrollment,
@@ -24,14 +25,25 @@ const pick = <T>(arr: T[], n: number): T[] => {
 }
 const round2 = (n: number) => Math.round(n * 100) / 100
 
-// ─── ID helpers ─────────────────────────────────────────────────────────────
-function pickPrefix(programCodes: string[]): string {
-  const set = new Set(programCodes.map((c) => c.toUpperCase()))
-  if (set.has('PRESCHOOL')) return 'P'
-  if (set.has('DAYCARE')) return 'D'
-  if (set.has('ELOCUTION') || set.has('TUTION') || set.has('TUITION')) return 'T'
-  if (set.has('IT')) return 'I'
-  return 'X'
+// ─── ID helpers (in-memory counters; mirrors routes/people.ts) ──────────────
+const counters = new Map<string, number>()
+
+function computeYear2(d: Date): string {
+  return String(d.getFullYear()).slice(-2)
+}
+
+function nextStudentIdFor(admissionDate: Date): string {
+  const prefix = `S${computeYear2(admissionDate)}`
+  const next = (counters.get(prefix) ?? 0) + 1
+  counters.set(prefix, next)
+  return `${prefix}${String(next).padStart(4, '0')}`
+}
+
+function nextTeacherIdFor(type: 'Internal' | 'External', hireDate: Date): string {
+  const prefix = `${type === 'Internal' ? 'I' : 'E'}${computeYear2(hireDate)}`
+  const next = (counters.get(prefix) ?? 0) + 1
+  counters.set(prefix, next)
+  return `${prefix}${String(next).padStart(3, '0')}`
 }
 
 async function main() {
@@ -60,24 +72,21 @@ async function main() {
 
   // ── Teachers ─────────────────────────────────────────────────────────────
   const teacherDefs = [
-    { fullName: 'Mrs. Nirmala Perera', type: 'Internal', gender: 'Female', basicSalary: 65000, allowances: 5000, epfNo: 'EPF-88121', specialization: 'Early childhood', qualification: 'Diploma in Montessori' },
-    { fullName: 'Ms. Sanduni Fernando', type: 'Internal', gender: 'Female', basicSalary: 55000, allowances: 3500, epfNo: 'EPF-88122', specialization: 'Preschool', qualification: 'AMI Diploma' },
-    { fullName: 'Mr. Kasun Jayasuriya', type: 'Internal', gender: 'Male', basicSalary: 72000, allowances: 6000, epfNo: 'EPF-88123', specialization: 'IT, Coding', qualification: 'BSc (Hons) Computing' },
-    { fullName: 'Mrs. Anusha Wickramasinghe', type: 'Internal', gender: 'Female', basicSalary: 58000, allowances: 4000, epfNo: 'EPF-88124', specialization: 'Elocution', qualification: 'LTCL Speech & Drama' },
-    { fullName: 'Ms. Dilani Rathnayake', type: 'Internal', gender: 'Female', basicSalary: 52000, allowances: 3000, epfNo: 'EPF-88125', specialization: 'Daycare', qualification: 'NVQ Level 4 Childcare' },
-    { fullName: 'Mr. Suresh Bandara', type: 'External', gender: 'Male', basicSalary: 45000, allowances: 2000, epfNo: 'EPF-88126', specialization: 'Dancing', qualification: 'Kandyan dance (Bhaswara)' },
-    { fullName: 'Mrs. Chathurika Silva', type: 'External', gender: 'Female', basicSalary: 0, allowances: 0, monthlyRate: 18000, specialization: 'Elocution (visiting)', qualification: 'BEd English' },
-    { fullName: 'Mr. Nuwan Edirisinghe', type: 'External', gender: 'Male', basicSalary: 0, allowances: 0, monthlyRate: 20000, specialization: 'Abacus & Mental Maths', qualification: 'Abacus trainer cert.' },
-    { fullName: 'Mrs. Priyani Gunawardena', type: 'Internal', gender: 'Female', basicSalary: 60000, allowances: 4500, epfNo: 'EPF-88127', specialization: 'Preschool, Sinhala', qualification: 'Dip. Primary Education', status: 'On Leave' },
+    { fullName: 'Mrs. Nirmala Perera', type: 'Internal', gender: 'Female', basicSalary: 65000, allowances: 5000, epfNo: 'EPF-88121', specialization: 'Early childhood', qualification: 'Diploma in Montessori', hireYear: 2018 },
+    { fullName: 'Ms. Sanduni Fernando', type: 'Internal', gender: 'Female', basicSalary: 55000, allowances: 3500, epfNo: 'EPF-88122', specialization: 'Preschool', qualification: 'AMI Diploma', hireYear: 2019 },
+    { fullName: 'Mr. Kasun Jayasuriya', type: 'Internal', gender: 'Male', basicSalary: 72000, allowances: 6000, epfNo: 'EPF-88123', specialization: 'IT, Coding', qualification: 'BSc (Hons) Computing', hireYear: 2020 },
+    { fullName: 'Mrs. Anusha Wickramasinghe', type: 'Internal', gender: 'Female', basicSalary: 58000, allowances: 4000, epfNo: 'EPF-88124', specialization: 'Elocution', qualification: 'LTCL Speech & Drama', hireYear: 2021 },
+    { fullName: 'Ms. Dilani Rathnayake', type: 'Internal', gender: 'Female', basicSalary: 52000, allowances: 3000, epfNo: 'EPF-88125', specialization: 'Daycare', qualification: 'NVQ Level 4 Childcare', hireYear: 2022 },
+    { fullName: 'Mr. Suresh Bandara', type: 'External', gender: 'Male', basicSalary: 45000, allowances: 2000, epfNo: 'EPF-88126', specialization: 'Dancing', qualification: 'Kandyan dance (Bhaswara)', hireYear: 2021 },
+    { fullName: 'Mrs. Chathurika Silva', type: 'External', gender: 'Female', basicSalary: 0, allowances: 0, monthlyRate: 18000, specialization: 'Elocution (visiting)', qualification: 'BEd English', hireYear: 2023 },
+    { fullName: 'Mr. Nuwan Edirisinghe', type: 'External', gender: 'Male', basicSalary: 0, allowances: 0, monthlyRate: 20000, specialization: 'Abacus & Mental Maths', qualification: 'Abacus trainer cert.', hireYear: 2023 },
+    { fullName: 'Mrs. Priyani Gunawardena', type: 'Internal', gender: 'Female', basicSalary: 60000, allowances: 4500, epfNo: 'EPF-88127', specialization: 'Preschool, Sinhala', qualification: 'Dip. Primary Education', status: 'On Leave', hireYear: 2024 },
   ]
   const teacherDocs: any[] = []
-  let internalSeq = 0
-  let externalSeq = 0
   for (let i = 0; i < teacherDefs.length; i++) {
     const d = teacherDefs[i]
-    const teacherId = d.type === 'Internal'
-      ? `IT${String(++internalSeq).padStart(3, '0')}`
-      : `ET${String(++externalSeq).padStart(3, '0')}`
+    const hireDate = new Date(d.hireYear, randInt(0, 11), randInt(1, 28))
+    const teacherId = nextTeacherIdFor(d.type as 'Internal' | 'External', hireDate)
     teacherDocs.push({
       teacherId,
       fingerprintId: `FP-${1001 + i}`,
@@ -90,7 +99,7 @@ async function main() {
       qualification: d.qualification,
       specialization: d.specialization,
       status: d.status || 'Active',
-      hireDate: new Date(randInt(2018, 2024), randInt(0, 11), randInt(1, 28)),
+      hireDate,
       monthlyRate: d.monthlyRate ?? 0,
       basicSalary: d.basicSalary,
       allowances: d.allowances,
@@ -99,9 +108,9 @@ async function main() {
   }
   const teachers = await Teacher.insertMany(teacherDocs)
   const T = (i: number) => teachers[i]._id.toString()
-  console.log('[seed] teachers:', teachers.length, '(IT001/IT002/…, ET001/ET002/…)')
+  console.log('[seed] teachers:', teachers.length, '(I<YY><NNN> / E<YY><NNN>)')
 
-  // ── Students — first decide programmes, then derive IDs ──────────────────
+  // ── Students — programmes decided first, then ID derived from year only ──
   const firstNames = ['Ayesha', 'Dimuthu', 'Thisara', 'Nethmi', 'Sahan', 'Rashmi', 'Kavindu', 'Amaya', 'Ravindu', 'Sewmi', 'Dinuka', 'Hasini', 'Tharindu', 'Nethra', 'Sanula', 'Yenuli', 'Vihanga', 'Methuli', 'Ranithu', 'Oneli', 'Minula', 'Thinudi', 'Aesha', 'Kavya', 'Lihini', 'Sandev', 'Resandi', 'Tanudi', 'Vinudi', 'Mahith', 'Anula', 'Pamudu', 'Nadun', 'Rithma', 'Senith', 'Hiruni', 'Janith', 'Methara', 'Nuvin', 'Thehara', 'Ashen', 'Disna', 'Rukshan', 'Sayuru']
   const lastNames = ['Perera', 'Fernando', 'Silva', 'Jayasuriya', 'Wickramasinghe', 'Bandara', 'Rathnayake', 'Gunawardena', 'Edirisinghe', 'Dissanayake', 'Herath', 'Weerasinghe']
   const ageGroups = ['2-3', '3-4', '4-5', '5-6']
@@ -124,8 +133,7 @@ async function main() {
     const ageGroup = rand(ageGroups)
     const dobYear = 2026 - (parseInt(ageGroup[0]) + 1)
 
-    // Distribution: most students have Preschool; a handful demonstrate the
-    // other prefixes (D, T, I) so the ID scheme is visible in sample data.
+    // Programme distribution (does NOT influence the ID — IDs are opaque)
     const codes: string[] = ['PRESCHOOL']
     const r = Math.random()
     if (r < 0.25) codes.push('DAYCARE')
@@ -134,17 +142,21 @@ async function main() {
     else if (r < 0.72) codes.push('DANCING')
     else if (r < 0.8) { codes.push('IT'); codes.push('DANCING') }
 
-    // Specials: Daycare-only → D-prefix, Elocution-only → T-prefix, IT-only → I-prefix
+    // A few single-programme students so the app shows variety
     if (i === 5 || i === 12 || i === 20) { codes.length = 0; codes.push('DAYCARE') }
     if (i === 8 || i === 15) { codes.length = 0; codes.push('ELOCUTION') }
     if (i === 22) { codes.length = 0; codes.push('IT') }
+
+    // Admission year varies across 2024, 2025, 2026 so IDs show multiple years
+    const admissionYear = i < 20 ? 2024 : i < 35 ? 2025 : 2026
+    const admissionDate = new Date(admissionYear, randInt(0, 11), randInt(1, 28))
 
     drafts.push({
       fullName: `${rand(firstNames)} ${rand(lastNames)}`,
       gender,
       ageGroup,
       dob: new Date(dobYear, randInt(0, 11), randInt(1, 28)),
-      admissionDate: new Date(2024, randInt(0, 11), randInt(1, 28)),
+      admissionDate,
       religion: rand(['Buddhist', 'Catholic', 'Hindu', 'Muslim', 'Christian']),
       status: i < 40 ? 'Active' : rand(['Inactive', 'Graduated']),
       medicalNotes: i % 11 === 0 ? 'Mild asthma — inhaler in office' : null,
@@ -158,23 +170,12 @@ async function main() {
     drafts[k].dob = new Date(soon.getFullYear() - randInt(3, 5), soon.getMonth(), soon.getDate())
   }
 
-  // Assign IDs with the new prefix scheme, using per-(prefix, year) counters
-  const counters = new Map<string, number>()
-  const nextIdFor = (codes: string[], admissionDate: Date): string => {
-    const prefix = pickPrefix(codes)
-    const yy = String(admissionDate.getFullYear()).slice(-2)
-    const key = `${prefix}${yy}`
-    const next = (counters.get(key) ?? 0) + 1
-    counters.set(key, next)
-    return `${key}${String(next).padStart(3, '0')}`
-  }
-
   const studentDocs: any[] = drafts.map((d) => {
-    const studentId = nextIdFor(d.programCodes, d.admissionDate)
+    const studentId = nextStudentIdFor(d.admissionDate)
     return {
-      studentId,
-      indexNo: studentId.slice(1),      // numeric part only, e.g. "24001"
-      barcode: `SAN${studentId}`,       // e.g. "SANP24001"
+      studentId,                        // e.g. S240001, S250001, S260001
+      indexNo: studentId.slice(1),      // e.g. "240001"
+      barcode: studentId,               // barcode === studentId
       fullName: d.fullName,
       gender: d.gender,
       dob: d.dob,
@@ -187,8 +188,7 @@ async function main() {
     }
   })
   const students = await Student.insertMany(studentDocs)
-  console.log('[seed] students:', students.length,
-    '(P…, D…, T…, I… prefixes)')
+  console.log('[seed] students:', students.length, '(S<YY><NNNN>)')
 
   // ── Guardians ────────────────────────────────────────────────────────────
   const guardianDocs: any[] = []
@@ -216,7 +216,7 @@ async function main() {
   const guardians = await Guardian.insertMany(guardianDocs)
   console.log('[seed] guardians:', guardians.length)
 
-  // ── Enrollments — use the SAME programmes that generated each ID ─────────
+  // ── Enrollments — use the SAME programme list from the drafts ────────────
   const activeStudents = students.filter((s) => s.status === 'Active')
   const enrollmentDocs: any[] = []
   const enrollmentsByStudent = new Map<string, string[]>()
@@ -486,18 +486,25 @@ async function main() {
   console.log('[seed] settings:', settings.length)
 
   // ── Summary ──────────────────────────────────────────────────────────────
-  const byPrefix: Record<string, number> = {}
+  const byStudentYear: Record<string, number> = {}
   for (const s of students) {
-    const m = /^([A-Z]+)/.exec(s.studentId)
-    const p = m ? m[1] : '?'
-    byPrefix[p] = (byPrefix[p] ?? 0) + 1
+    const m = /^S(\d{2})/.exec(s.studentId)
+    const yy = m ? m[1] : '?'
+    byStudentYear[yy] = (byStudentYear[yy] ?? 0) + 1
   }
+  const byTeacherType: Record<string, number> = {}
+  for (const t of teachers) {
+    const type = t.type === 'Internal' ? 'I' : 'E'
+    byTeacherType[type] = (byTeacherType[type] ?? 0) + 1
+  }
+
   console.log('\n[seed] ✅ Sample data inserted:',
     `\n  programs=${programDocs.length} students=${students.length} guardians=${guardians.length}`,
     `\n  teachers=${teachers.length} classes=${classes.length} enrollments=${enrollments.length + classEnrollDocs.length}`,
     `\n  attendance=${attendanceDocs.length} payments=${payments.length} payroll=${payroll.length}`,
     `\n  expenses=${expenses.length} announcements=${announcements.length} settings=${settings.length}`)
-  console.log('  student ID prefixes:', byPrefix)
+  console.log('  student IDs by year:', byStudentYear)
+  console.log('  teacher IDs by type:', byTeacherType)
 
   await mongoose.disconnect()
   console.log('[seed] done.')
