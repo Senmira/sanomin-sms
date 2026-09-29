@@ -167,6 +167,12 @@ const AttendanceSchema = new Schema(
     method: { type: String, default: 'Manual' },
     status: { type: String, default: 'Present' },
     note: nullStr,
+    // ── Timetable-derived expectations (populated at scan time) ──
+    expectedStart: nullDate,              // earliest class start today
+    expectedEnd: nullDate,                // latest class end today
+    lateMinutes: { type: Number, default: null },   // minutes after expectedStart + grace
+    earlyMinutes: { type: Number, default: null },  // minutes before expectedEnd - grace (early pickup)
+    lateCheckoutMinutes: { type: Number, default: null }, // minutes after expectedEnd + grace
   },
   { timestamps: true },
 )
