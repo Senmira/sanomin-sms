@@ -135,6 +135,49 @@ async function nextTeacherId(
   return `${prefix}${String(max + 1).padStart(3, '0')}`
 }
 
+// ─── Student category bucketing ─────────────────────────────────────────────
+//
+// Precedence: PRESCHOOL > DAYCARE > (anything else = "tuition")
+// Returns a Map of studentId → bucket and the total counts per bucket.
+type StudentBucket = 'preschool' | 'daycare' | 'tuition'
+
+async function computeStudentCategories(): Promise<{
+  bucketByStudent: Map<string, StudentBucket>
+  counts: { all: number; preschool: number; daycare: number; tuition: number }
+}> {
+  const [programs, enrollments] = await Promise.all([
+    Program.find({}, 'code').lean(),
+    Enrollment.find({ status: 'Active' }, 'studentId programId').lean(),
+  ])
+
+  const codeById = new Map<string, string>()
+  for (const p of programs as any[]) codeById.set(p._id.toString(), String(p.code).toUpperCase())
+
+  // studentId → set of programme codes
+  const codesByStudent = new Map<string, Set<string>>()
+  for (const e of enrollments as any[]) {
+    if (!e.programId) continue
+    const code = codeById.get(e.programId)
+    if (!code) continue
+    if (!codesByStudent.has(e.studentId)) codesByStudent.set(e.studentId, new Set())
+    codesByStudent.get(e.studentId)!.add(code)
+  }
+
+  const bucketByStudent = new Map<string, StudentBucket>()
+  const counts = { all: 0, preschool: 0, daycare: 0, tuition: 0 }
+  for (const [sid, codes] of codesByStudent) {
+    let bucket: StudentBucket
+    if (codes.has('PRESCHOOL')) bucket = 'preschool'
+    else if (codes.has('DAYCARE')) bucket = 'daycare'
+    else bucket = 'tuition'
+    bucketByStudent.set(sid, bucket)
+    counts.all++
+    counts[bucket]++
+  }
+
+  return { bucketByStudent, counts }
+}
+
 // ─── GET /api/students/lookup?barcode= | ?studentId= (BEFORE /:id) ──────────
 r.get('/students/lookup', ah(async (req, res) => {
   const p = qs(req)
@@ -154,10 +197,17 @@ r.get('/students/lookup', ah(async (req, res) => {
 }))
 
 // ─── GET /api/students ──────────────────────────────────────────────────────
+//
+// Query params:
+//   q         — free text on name/ID/indexNo/barcode
+//   program   — exact programme code (e.g. PRESCHOOL)
+//   category  — "preschool" | "daycare" | "tuition" | "all" (default all)
+//   ageGroup, gender, status, page, limit
 r.get('/students', ah(async (req, res) => {
   const p = qs(req)
   const q = p.get('q')?.trim() || ''
   const program = p.get('program') || ''
+  const category = p.get('category')?.trim() || ''
   const ageGroup = p.get('ageGroup') || ''
   const gender = p.get('gender') || ''
   const status = p.get('status') || ''
@@ -176,11 +226,43 @@ r.get('/students', ah(async (req, res) => {
   if (ageGroup) where.ageGroup = ageGroup
   if (gender) where.gender = gender
   if (status) where.status = status
+
+  // ─── Programme filter (exact code match) ─────────────────────────────
+  let programmeStudentIds: string[] | null = null
   if (program) {
     const prog = await Program.findOne({ code: program }, '_id').lean()
     const pid = prog ? (prog as any)._id.toString() : '___none___'
     const enr = await Enrollment.find({ programId: pid }, 'studentId').lean()
-    where._id = { $in: (enr as any[]).map((e) => e.studentId) }
+    programmeStudentIds = (enr as any[]).map((e) => e.studentId)
+  }
+
+  // ─── Category filter (preschool > daycare > tuition precedence) ──────
+  let categoryStudentIds: string[] | null = null
+  let categoryCounts = { all: 0, preschool: 0, daycare: 0, tuition: 0 }
+  if (category && category !== 'all') {
+    const { bucketByStudent, counts } = await computeStudentCategories()
+    categoryCounts = counts
+    categoryStudentIds = [...bucketByStudent.entries()]
+      .filter(([, b]) => b === category)
+      .map(([sid]) => sid)
+  } else {
+    // Still compute counts so the frontend can show tab badges on "All"
+    const { counts } = await computeStudentCategories()
+    categoryCounts = counts
+  }
+
+  // ─── Merge _id filters (programme AND category) ──────────────────────
+  let idIntersection: string[] | null = null
+  if (programmeStudentIds !== null && categoryStudentIds !== null) {
+    const catSet = new Set(categoryStudentIds)
+    idIntersection = programmeStudentIds.filter((id) => catSet.has(id))
+  } else if (programmeStudentIds !== null) {
+    idIntersection = programmeStudentIds
+  } else if (categoryStudentIds !== null) {
+    idIntersection = categoryStudentIds
+  }
+  if (idIntersection !== null) {
+    where._id = { $in: idIntersection }
   }
 
   const monthStart = new Date()
@@ -212,6 +294,7 @@ r.get('/students', ah(async (req, res) => {
       activeStudents,
       newThisMonth,
       filteredCount: total,
+      byCategory: categoryCounts,
     },
   })
 }))
