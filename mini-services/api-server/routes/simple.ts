@@ -41,7 +41,36 @@ r.put('/settings', ah(async (req, res) => {
 }))
 
 // ─── Programs ───────────────────────────────────────────────────────────────
+// Programmes are fully admin-managed. No magic codes. Two additional concepts:
+//   • category   — 'Preschool' | 'Daycare' | 'Tuition'. Drives the Student
+//                  section tabs (All / Preschool / Daycare / Tuition).
+//   • hasGrades + grades[] — optional per-programme grade list (e.g. Maths
+//                  Grade 1..11). Students pick one when enrolling.
 const COLOR_RE = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/
+const VALID_CATEGORIES = ['Preschool', 'Daycare', 'Tuition'] as const
+type Category = (typeof VALID_CATEGORIES)[number]
+
+function normalizeCategory(v: unknown): Category {
+  const s = String(v ?? '').trim().toLowerCase()
+  const match = VALID_CATEGORIES.find((c) => c.toLowerCase() === s)
+  return match ?? 'Tuition'
+}
+
+function normalizeGrades(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const v of raw) {
+    const s = String(v ?? '').trim()
+    if (!s) continue
+    const key = s.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(s)
+    if (out.length >= 50) break
+  }
+  return out
+}
 
 async function programWithCounts(id?: string) {
   const programs = await Program.find(id ? { _id: id } : {}).sort({ code: 1 }).lean()
@@ -67,15 +96,25 @@ function serializeProgram(p: any, eMap: Record<string, number>, cMap: Record<str
     color: p.color,
     monthlyFee: p.monthlyFee,
     active: p.active,
+    category: p.category ?? 'Tuition',
+    hasGrades: !!p.hasGrades,
+    grades: Array.isArray(p.grades) ? p.grades : [],
     _count: { enrollments: eMap[id] || 0, classes: cMap[id] || 0 },
   }
 }
 
 r.get('/programs', ah(async (req, res) => {
-  const onlyActive = qs(req).get('active') === 'true'
+  const p = qs(req)
+  const onlyActive = p.get('active') === 'true'
+  const category = p.get('category')?.trim() || ''
   const { programs, eMap, cMap } = await programWithCounts()
-  const filtered = onlyActive ? programs.filter((p: any) => p.active) : programs
-  res.json({ data: filtered.map((p: any) => serializeProgram(p, eMap, cMap)) })
+  let filtered = onlyActive ? programs.filter((x: any) => x.active) : programs
+  if (category) {
+    filtered = filtered.filter(
+      (x: any) => String(x.category ?? 'Tuition').toLowerCase() === category.toLowerCase(),
+    )
+  }
+  res.json({ data: filtered.map((x: any) => serializeProgram(x, eMap, cMap)) })
 }))
 
 r.post('/programs', ah(async (req, res) => {
@@ -86,10 +125,20 @@ r.post('/programs', ah(async (req, res) => {
   if (!name) return res.status(400).json({ error: 'name is required' })
   const clash = await Program.findOne({ code })
   if (clash) return res.status(400).json({ error: `Program code "${code}" already exists` })
+
   const rawColor = (body.color || '').trim()
   const color = COLOR_RE.test(rawColor) ? rawColor : '#7c3aed'
   const monthlyFee =
     typeof body.monthlyFee === 'number' && !isNaN(body.monthlyFee) ? Math.max(0, body.monthlyFee) : 0
+
+  const category = normalizeCategory(body.category)
+  const hasGrades = body.hasGrades === true
+  const grades = hasGrades ? normalizeGrades(body.grades) : []
+
+  if (hasGrades && grades.length === 0) {
+    return res.status(400).json({ error: 'Add at least one grade, or turn off "has grades"' })
+  }
+
   const created = await Program.create({
     code,
     name,
@@ -97,6 +146,9 @@ r.post('/programs', ah(async (req, res) => {
     color,
     monthlyFee,
     active: body.active ?? true,
+    category,
+    hasGrades,
+    grades,
   })
   const doc = created.toJSON()
   res.status(201).json({ ...doc, _count: { enrollments: 0, classes: 0 } })
@@ -113,6 +165,7 @@ r.put('/programs/:id', ah(async (req, res) => {
   const existing = await Program.findById(req.params.id)
   if (!existing) return res.status(404).json({ error: 'Program not found' })
   const body = req.body || {}
+
   if (body.code !== undefined) {
     const code = body.code.trim().toUpperCase()
     if (!code) return res.status(400).json({ error: 'code cannot be empty' })
@@ -137,7 +190,41 @@ r.put('/programs/:id', ah(async (req, res) => {
       typeof body.monthlyFee === 'number' && !isNaN(body.monthlyFee) ? Math.max(0, body.monthlyFee) : 0
   }
   if (body.active !== undefined) existing.active = Boolean(body.active)
+  if (body.category !== undefined) existing.category = normalizeCategory(body.category)
+
+  // hasGrades / grades are treated as a pair — if either is present, recompute both
+  let gradeListChanged = false
+  const previousGrades = Array.isArray(existing.grades) ? [...existing.grades] : []
+  const previousHasGrades = !!existing.hasGrades
+  if (body.hasGrades !== undefined || body.grades !== undefined) {
+    const hasGrades = body.hasGrades !== undefined ? body.hasGrades === true : !!existing.hasGrades
+    const grades = hasGrades ? normalizeGrades(body.grades ?? existing.grades ?? []) : []
+    if (hasGrades && grades.length === 0) {
+      return res.status(400).json({ error: 'Add at least one grade, or turn off "has grades"' })
+    }
+    existing.hasGrades = hasGrades
+    existing.grades = grades
+    gradeListChanged =
+      previousHasGrades !== hasGrades ||
+      previousGrades.length !== grades.length ||
+      previousGrades.some((g, i) => g !== grades[i])
+  }
+
   await existing.save()
+
+  // If the grade list changed, clear any enrollment.grade that is no longer valid
+  if (gradeListChanged) {
+    const pid = existing._id.toString()
+    if (existing.hasGrades && (existing.grades as string[]).length > 0) {
+      await Enrollment.updateMany(
+        { programId: pid, grade: { $nin: existing.grades as string[], $ne: null } },
+        { $set: { grade: null } },
+      )
+    } else {
+      await Enrollment.updateMany({ programId: pid, grade: { $ne: null } }, { $set: { grade: null } })
+    }
+  }
+
   const p = await Program.findById(existing._id).lean()
   const { eMap, cMap } = await programWithCounts()
   res.json(serializeProgram(p, eMap, cMap))
