@@ -49,6 +49,9 @@ const ProgramSchema = new Schema(
 )
 
 // ─── Student ────────────────────────────────────────────────────────────────
+// grade — single optional grade for the student (e.g. "Grade 6"). Not
+//   per-programme. Auto-filled from the chosen class's pinned grade in the
+//   UI, but stored on the student so it survives class reassignment.
 const StudentSchema = new Schema(
   {
     studentId: { type: String, required: true, unique: true },
@@ -58,6 +61,8 @@ const StudentSchema = new Schema(
     gender: { type: String, required: true },
     dob: nullDate,
     ageGroup: nullStr,
+    // ── new ──
+    grade: nullStr,
     admissionDate: nullDate,
     religion: nullStr,
     nationality: nullStr,
@@ -134,6 +139,9 @@ const PayrollRecordSchema = new Schema(
 PayrollRecordSchema.index({ teacherId: 1, month: 1 }, { unique: true })
 
 // ─── Class ──────────────────────────────────────────────────────────────────
+// grade — optional pinned grade for this class (e.g. "Grade 6"). Shown as a
+//   badge. Students enrolled in this class inherit the grade, and the student
+//   form auto-fills the grade field when a class is picked.
 const ClassSchema = new Schema(
   {
     name: { type: String, required: true },
@@ -146,6 +154,8 @@ const ClassSchema = new Schema(
     capacity: { type: Number, default: 20 },
     fee: { type: Number, default: 0 },
     instituteSharePct: { type: Number, default: 25 },
+    // ── new ──
+    grade: nullStr,
     active: { type: Boolean, default: true },
     notes: nullStr,
   },
@@ -153,9 +163,9 @@ const ClassSchema = new Schema(
 )
 
 // ─── Enrollment ─────────────────────────────────────────────────────────────
-// grade — only meaningful when the linked Programme has hasGrades: true.
-//   Validated in routes/people.ts against Program.grades; cleared server-side
-//   when the Programme's grade list shrinks or hasGrades turns off.
+// An enrollment is a (programId, classId) pair. classId may be null. The same
+// programme can appear multiple times with different classes (multi-class
+// enrolment). Grade is NOT stored here — it lives on the Student.
 const EnrollmentSchema = new Schema(
   {
     studentId: { type: String, required: true, ref: 'Student' },
@@ -163,8 +173,6 @@ const EnrollmentSchema = new Schema(
     classId: { type: String, default: null, ref: 'Class' },
     enrolledAt: { type: Date, default: Date.now },
     status: { type: String, default: 'Active' },
-    // ── new ──
-    grade: { type: String, default: null },
   },
   { timestamps: true },
 )
@@ -184,11 +192,11 @@ const AttendanceSchema = new Schema(
     status: { type: String, default: 'Present' },
     note: nullStr,
     // ── Timetable-derived expectations (populated at scan time) ──
-    expectedStart: nullDate,              // earliest class start today
-    expectedEnd: nullDate,                // latest class end today
-    lateMinutes: { type: Number, default: null },   // minutes after expectedStart + grace
-    earlyMinutes: { type: Number, default: null },  // minutes before expectedEnd - grace (early pickup)
-    lateCheckoutMinutes: { type: Number, default: null }, // minutes after expectedEnd + grace
+    expectedStart: nullDate,
+    expectedEnd: nullDate,
+    lateMinutes: { type: Number, default: null },
+    earlyMinutes: { type: Number, default: null },
+    lateCheckoutMinutes: { type: Number, default: null },
   },
   { timestamps: true },
 )
