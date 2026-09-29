@@ -1,5 +1,6 @@
 // ─── Shared helpers (ports of the Prisma API utility functions) ────────────
 import type { Request, Response, NextFunction, RequestHandler } from 'express'
+import { Student, Teacher, Class, Enrollment, Setting } from './models'
 
 export const round2 = (n: number): number => Math.round(n * 100) / 100
 
@@ -23,14 +24,12 @@ export const parseAmount = (v: unknown): number | null => {
   return n
 }
 
-// Escape user input for substring regex (case-insensitive = SQLite LIKE parity)
 export const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 export const containsRe = (s: string): RegExp => new RegExp(escapeRe(s), 'i')
 
 export const qs = (req: Request): URLSearchParams =>
   new URL(req.url, 'http://localhost').searchParams
 
-// async handler wrapper → forwards thrown errors to the error middleware
 export const ah =
   (fn: (req: Request, res: Response, next: NextFunction) => unknown): RequestHandler =>
   (req, res, next) => {
@@ -75,7 +74,7 @@ export function computeStatus(
   return { status: 'Partial', paidDate: new Date(), updatedPaidAmount: paidAmount }
 }
 
-// ─── WhatsApp phone normalisation (mirrors lib/school.ts toWaPhone) ─────────
+// ─── WhatsApp phone normalisation ───────────────────────────────────────────
 export function toWaPhone(raw: string | null | undefined): string | null {
   if (!raw) return null
   let digits = raw.replace(/\D/g, '')
@@ -158,4 +157,111 @@ export function yearsBetween(from: Date, to: Date): number {
 export const isReachablePhone = (phone?: string | null): boolean => {
   if (!phone) return false
   return phone.replace(/\D/g, '').length >= 9
+}
+
+// ─── Timetable helpers ──────────────────────────────────────────────────────
+const DAY_CODES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const
+
+export interface ExpectedTimes {
+  expectedStart: Date | null
+  expectedEnd: Date | null
+  classNames: string[]
+  graceMinutes: number
+}
+
+// Parse "HH:MM" against a specific calendar date → Date | null
+export function parseHHMM(date: Date, time: string | null | undefined): Date | null {
+  if (!time) return null
+  const m = /^(\d{1,2}):(\d{2})/.exec(time.trim())
+  if (!m) return null
+  const hh = Math.min(23, parseInt(m[1], 10))
+  const mm = Math.min(59, parseInt(m[2], 10))
+  const d = new Date(date)
+  d.setHours(hh, mm, 0, 0)
+  return d
+}
+
+async function readGraceMinutes(): Promise<number> {
+  const row = await Setting.findOne({ key: 'late_grace_minutes' }).lean()
+  const raw = (row as any)?.value
+  const n = raw != null ? Number(raw) : NaN
+  return Number.isFinite(n) && n >= 0 && n <= 60 ? n : 10
+}
+
+// Resolve the expected arrival/pickup window for a person on a given date,
+// based on the classes they're enrolled in / teach that day.
+export async function getExpectedTimesForPerson(
+  personType: 'Student' | 'Teacher',
+  personId: string,
+  date: Date,
+): Promise<ExpectedTimes> {
+  const dow = DAY_CODES[date.getDay()]
+  const graceMinutes = await readGraceMinutes()
+
+  let classes: any[] = []
+
+  if (personType === 'Student') {
+    const enrollments = await Enrollment.find({ studentId: personId, status: 'Active' }).lean()
+    const classIds = enrollments.map((e: any) => e.classId).filter(Boolean)
+    const programIds = [...new Set(enrollments.map((e: any) => e.programId).filter(Boolean))]
+
+    const directClasses = classIds.length
+      ? await Class.find({ _id: { $in: classIds }, dayOfWeek: dow, active: true }).lean()
+      : []
+
+    if (directClasses.length > 0) {
+      classes = directClasses
+    } else if (programIds.length) {
+      classes = await Class.find({ programId: { $in: programIds }, dayOfWeek: dow, active: true }).lean()
+    }
+  } else {
+    classes = await Class.find({ teacherId: personId, dayOfWeek: dow, active: true }).lean()
+  }
+
+  if (classes.length === 0) {
+    return { expectedStart: null, expectedEnd: null, classNames: [], graceMinutes }
+  }
+
+  const startTimes = classes.map((c) => c.startTime).filter(Boolean).sort() as string[]
+  const endTimes = classes.map((c) => c.endTime).filter(Boolean).sort() as string[]
+
+  const expectedStart = startTimes.length > 0 ? parseHHMM(date, startTimes[0]) : null
+  const expectedEnd = endTimes.length > 0 ? parseHHMM(date, endTimes[endTimes.length - 1]) : null
+
+  return {
+    expectedStart,
+    expectedEnd,
+    classNames: classes.map((c: any) => c.name),
+    graceMinutes,
+  }
+}
+
+// Compute late / early / lateCheckout minutes given check times + expectations
+export function computeAttendanceFlags(
+  checkIn: Date | null,
+  checkOut: Date | null,
+  expected: ExpectedTimes,
+): { lateMinutes: number | null; earlyMinutes: number | null; lateCheckoutMinutes: number | null } {
+  let lateMinutes: number | null = null
+  let earlyMinutes: number | null = null
+  let lateCheckoutMinutes: number | null = null
+
+  if (checkIn && expected.expectedStart) {
+    const graceMs = expected.graceMinutes * 60_000
+    const diffMs = checkIn.getTime() - (expected.expectedStart.getTime() + graceMs)
+    if (diffMs > 0) lateMinutes = Math.round(diffMs / 60_000)
+  }
+
+  if (checkOut && expected.expectedEnd) {
+    const graceMs = expected.graceMinutes * 60_000
+    const diffMs = expected.expectedEnd.getTime() - graceMs - checkOut.getTime()
+    if (diffMs > 0) {
+      earlyMinutes = Math.round(diffMs / 60_000)
+    } else {
+      const overMs = checkOut.getTime() - (expected.expectedEnd.getTime() + graceMs)
+      if (overMs > 0) lateCheckoutMinutes = Math.round(overMs / 60_000)
+    }
+  }
+
+  return { lateMinutes, earlyMinutes, lateCheckoutMinutes }
 }
