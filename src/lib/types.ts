@@ -22,14 +22,6 @@ export const ANNOUNCEMENT_AUDIENCES = ['All', 'Staff', 'Parents', 'Teachers'] as
 export const ANNOUNCEMENT_PRIORITIES = ['Low', 'Normal', 'High'] as const
 export const ANNOUNCEMENT_STATUSES = ['Draft', 'Published', 'Archived'] as const
 
-export const PROGRAM_COLORS: Record<string, string> = {
-  PRESCHOOL: '#1e40af',
-  Daycare: '#7c3aed',
-  IT: '#dc2626',
-  Elocution: '#0d9488',
-  Dancing: '#d97706',
-}
-
 export const AGE_GROUPS = ['1-2', '2-3', '3-4', '4-5'] as const
 export const GENDERS = ['Male', 'Female'] as const
 export const RELIGIONS = ['Buddhist', 'Hindu', 'Islam', 'Christian', 'Roman Catholic'] as const
@@ -40,9 +32,41 @@ export const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const
 export const ATTENDANCE_METHODS = ['Barcode', 'Fingerprint', 'Manual'] as const
 export const ATTENDANCE_STATUS = ['Present', 'Absent', 'Late', 'Leave'] as const
 
-export const PROGRAM_LIST = ['PRESCHOOL', 'Daycare', 'IT', 'Elocution', 'Dancing'] as const
+// ─── Programmes (dynamic — no magic codes) ─────────────────────────────────
+//
+// Every programme is admin-managed. Two concepts drive the UI:
+//   • category   — Preschool | Daycare | Tuition. Powers the Student tabs.
+//   • hasGrades + grades[] — optional per-programme grade list (e.g. Maths
+//                  Grade 1..Grade 11). Students pick one when enrolling.
+//
+// The programme `code` is only a human-friendly identifier; nothing in the
+// app depends on specific code values any more.
+export const PROGRAM_CATEGORIES = ['Preschool', 'Daycare', 'Tuition'] as const
+export type ProgramCategory = (typeof PROGRAM_CATEGORIES)[number]
+
+// Student tabs in the Students section map directly to Programme.category.
+// Students enrolled in more than one category are bucketed by precedence:
+//   Preschool > Daycare > Tuition
+export type StudentCategoryTab = 'all' | 'preschool' | 'daycare' | 'tuition'
 
 // API response shapes (loosely typed on the client via the API returns)
+
+export interface EnrollmentRow {
+  id: string
+  // Grade is only meaningful when the linked programme has hasGrades: true.
+  // Otherwise it's null.
+  grade: string | null
+  program: {
+    id: string
+    code: string
+    name: string
+    color: string
+    category: ProgramCategory
+    hasGrades: boolean
+    grades: string[]
+  } | null
+}
+
 export interface StudentRow {
   id: string
   studentId: string
@@ -67,7 +91,7 @@ export interface StudentRow {
     relationship: string
     isPrimary: boolean
   }>
-  enrollments: Array<{ id: string; program: { id: string; code: string; name: string; color: string } }>
+  enrollments: EnrollmentRow[]
   _count?: { attendance: number }
 }
 
@@ -122,6 +146,10 @@ export interface ProgramRow {
   color: string
   monthlyFee: number
   active: boolean
+  // ── new ──
+  category: ProgramCategory
+  hasGrades: boolean
+  grades: string[]
   _count?: { enrollments: number; classes: number }
 }
 
@@ -154,6 +182,12 @@ export interface AttendanceRow {
   status: string
   note: string | null
   personName?: string
+  // ── Timetable-derived expectations (populated at scan time) ──
+  expectedStart?: string | null
+  expectedEnd?: string | null
+  lateMinutes?: number | null
+  earlyMinutes?: number | null
+  lateCheckoutMinutes?: number | null
 }
 
 export interface PaymentItemRow {
@@ -311,7 +345,6 @@ export interface ExpenseRow {
   receiptUrl?: string | null // only present on single-expense GET
   createdAt: string
 }
-
 
 // ─── Payroll history (teacher profile dialog) ──────────────────────────────
 export interface PayrollHistoryEntry {
