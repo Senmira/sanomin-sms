@@ -4,6 +4,7 @@ import { Router } from 'express'
 import { Attendance, Student, Teacher, Class, Enrollment, Program } from '../models'
 import {
   ah, qs, dayRange, todayStr, timeToDate, round2,
+  getExpectedTimesForPerson, computeAttendanceFlags,
 } from '../helpers'
 
 const r = Router()
@@ -36,6 +37,12 @@ export async function serializeAttendance(rows: any[]) {
         j.personType === 'Student'
           ? sMap.get(j.personId) ?? '—'
           : tMap.get(j.personId) ?? '—',
+      // ── Timetable context (populated at scan time) ──
+      expectedStart: j.expectedStart ? new Date(j.expectedStart).toISOString() : null,
+      expectedEnd: j.expectedEnd ? new Date(j.expectedEnd).toISOString() : null,
+      lateMinutes: j.lateMinutes ?? null,
+      earlyMinutes: j.earlyMinutes ?? null,
+      lateCheckoutMinutes: j.lateCheckoutMinutes ?? null,
     }
   })
 }
@@ -568,12 +575,7 @@ r.get('/at-risk', ah(async (_req, res) => {
 }))
 
 // ─── POST /api/attendance/scan ──────────────────────────────────────────────
-function isLateScan(now: Date): boolean {
-  const cutoff = new Date(now)
-  cutoff.setHours(8, 30, 0, 0)
-  return now.getTime() > cutoff.getTime()
-}
-
+// Same timetable-aware logic as the kiosk route — admin and kiosk scans agree.
 r.post('/scan', ah(async (req, res) => {
   const body = req.body || {}
   const method = (body.method || '').trim().toLowerCase()
@@ -636,6 +638,9 @@ r.post('/scan', ah(async (req, res) => {
   const end = new Date(now)
   end.setHours(23, 59, 59, 999)
 
+  // Timetable context — same helper the kiosk route uses
+  const expected = await getExpectedTimesForPerson(personType, personId, now)
+
   const existing = await Attendance.findOne({
     personId,
     personType,
@@ -643,7 +648,8 @@ r.post('/scan', ah(async (req, res) => {
   }).sort({ createdAt: -1 })
 
   if (!existing) {
-    const status = isLateScan(now) ? 'Late' : 'Present'
+    const flags = computeAttendanceFlags(now, null, expected)
+    const isLate = flags.lateMinutes != null && flags.lateMinutes > 0
     const created = await Attendance.create({
       personType,
       personId,
@@ -652,25 +658,47 @@ r.post('/scan', ah(async (req, res) => {
       checkIn: now,
       checkOut: null,
       method: scanMethod,
-      status,
-      note: null,
+      status: isLate ? 'Late' : 'Present',
+      note: isLate ? `Arrived ${flags.lateMinutes} min after expected start` : null,
+      expectedStart: expected.expectedStart,
+      expectedEnd: expected.expectedEnd,
+      lateMinutes: flags.lateMinutes,
     })
     const [serialized] = await serializeAttendance([created])
     return res.json({
       action: 'check-in',
       record: serialized,
       person: { name: personName, ref: personRef, type: personType },
+      schedule: expected.classNames,
+      graceMinutes: expected.graceMinutes,
     })
   }
 
   if (existing.checkIn && !existing.checkOut) {
+    const flags = computeAttendanceFlags(existing.checkIn as Date, now, expected)
     existing.checkOut = now
+    existing.earlyMinutes = flags.earlyMinutes
+    existing.lateCheckoutMinutes = flags.lateCheckoutMinutes
+    if (expected.expectedStart) existing.expectedStart = expected.expectedStart
+    if (expected.expectedEnd) existing.expectedEnd = expected.expectedEnd
+    // Merge any new note with the existing one
+    const notes: string[] = []
+    if (existing.note) notes.push(existing.note)
+    if (flags.earlyMinutes && flags.earlyMinutes > 0) {
+      notes.push(`Picked up ${flags.earlyMinutes} min before expected end`)
+    }
+    if (flags.lateCheckoutMinutes && flags.lateCheckoutMinutes > 0) {
+      notes.push(`Picked up ${flags.lateCheckoutMinutes} min after expected end`)
+    }
+    existing.note = notes.length > 0 ? notes.join(' · ') : null
     await existing.save()
     const [serialized] = await serializeAttendance([existing])
     return res.json({
       action: 'check-out',
       record: serialized,
       person: { name: personName, ref: personRef, type: personType },
+      schedule: expected.classNames,
+      graceMinutes: expected.graceMinutes,
     })
   }
 
