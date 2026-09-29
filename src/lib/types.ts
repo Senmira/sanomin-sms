@@ -22,7 +22,19 @@ export const ANNOUNCEMENT_AUDIENCES = ['All', 'Staff', 'Parents', 'Teachers'] as
 export const ANNOUNCEMENT_PRIORITIES = ['Low', 'Normal', 'High'] as const
 export const ANNOUNCEMENT_STATUSES = ['Draft', 'Published', 'Archived'] as const
 
-export const AGE_GROUPS = ['1-2', '2-3', '3-4', '4-5'] as const
+// ─── Age bands (fixed set, six bands) ──────────────────────────────────────
+// value is what gets stored on Student.ageGroup; label is what the UI shows.
+export const AGE_GROUPS = [
+  { value: '1-3',   label: '1-3 (Toddler)' },
+  { value: '3-5',   label: '3-5 (Preschool)' },
+  { value: '5-10',  label: '5-10 (Primary)' },
+  { value: '10-15', label: '10-15 (Middle School)' },
+  { value: '15-17', label: '15-17 (O/L)' },
+  { value: '17-19', label: '17-19 (A/L)' },
+] as const
+
+export type AgeBand = (typeof AGE_GROUPS)[number]['value']
+
 export const GENDERS = ['Male', 'Female'] as const
 export const RELIGIONS = ['Buddhist', 'Hindu', 'Islam', 'Christian', 'Roman Catholic'] as const
 export const STUDENT_STATUS = ['Active', 'Inactive', 'Graduated'] as const
@@ -37,7 +49,7 @@ export const ATTENDANCE_STATUS = ['Present', 'Absent', 'Late', 'Leave'] as const
 // Every programme is admin-managed. Two concepts drive the UI:
 //   • category   — Preschool | Daycare | Tuition. Powers the Student tabs.
 //   • hasGrades + grades[] — optional per-programme grade list (e.g. Maths
-//                  Grade 1..Grade 11). Students pick one when enrolling.
+//                  Grade 1..Grade 11).
 //
 // The programme `code` is only a human-friendly identifier; nothing in the
 // app depends on specific code values any more.
@@ -51,11 +63,12 @@ export type StudentCategoryTab = 'all' | 'preschool' | 'daycare' | 'tuition'
 
 // API response shapes (loosely typed on the client via the API returns)
 
+// ─── Enrolment ─────────────────────────────────────────────────────────────
+// An enrolment is a (programme, optional class) pair. The same programme can
+// appear multiple times with different classes (multi-class enrolment).
+// Grade lives on Student, not here.
 export interface EnrollmentRow {
   id: string
-  // Grade is only meaningful when the linked programme has hasGrades: true.
-  // Otherwise it's null.
-  grade: string | null
   program: {
     id: string
     code: string
@@ -64,6 +77,14 @@ export interface EnrollmentRow {
     category: ProgramCategory
     hasGrades: boolean
     grades: string[]
+  } | null
+  class: {
+    id: string
+    name: string
+    dayOfWeek: string | null
+    startTime: string | null
+    endTime: string | null
+    grade: string | null
   } | null
 }
 
@@ -76,6 +97,9 @@ export interface StudentRow {
   gender: string
   dob: string | null
   ageGroup: string | null
+  // ── new ── single grade per student (e.g. "Grade 6"). Auto-filled from the
+  // chosen class's pinned grade, but stored on the student.
+  grade: string | null
   admissionDate: string | null
   religion: string | null
   nationality: string | null
@@ -117,7 +141,13 @@ export interface TeacherRow {
   epfNo: string | null
   salaryNote: string | null
   photoUrl: string | null
-  classes: Array<{ id: string; name: string; dayOfWeek: string | null; startTime: string | null }>
+  classes: Array<{
+    id: string
+    name: string
+    dayOfWeek: string | null
+    startTime: string | null
+    grade?: string | null
+  }>
   _count?: { classes: number; attendance: number }
 }
 
@@ -146,7 +176,6 @@ export interface ProgramRow {
   color: string
   monthlyFee: number
   active: boolean
-  // ── new ──
   category: ProgramCategory
   hasGrades: boolean
   grades: string[]
@@ -163,9 +192,18 @@ export interface ClassRow {
   capacity: number
   fee: number
   instituteSharePct: number
+  // ── new ── optional pinned grade for this class (e.g. "Grade 6"). Shown as
+  // a badge; the student form auto-fills Student.grade from it.
+  grade: string | null
   active: boolean
   notes: string | null
-  program: { id: string; code: string; name: string; color: string } | null
+  program: {
+    id: string
+    code: string
+    name: string
+    color: string
+    category?: ProgramCategory
+  } | null
   teacher: { id: string; teacherId: string; fullName: string; type: string } | null
   _count?: { enrollments: number }
 }
