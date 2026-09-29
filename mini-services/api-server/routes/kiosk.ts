@@ -4,9 +4,21 @@
 //   • requires x-kiosk-key header (shared secret via KIOSK_API_KEY env)
 //   • returns only the fields needed to render the scan screen
 //   • cannot enumerate students/teachers, cannot edit anything
+//
+// Attendance status is derived from the person's actual timetable for the day
+// (via getExpectedTimesForPerson). A student is "Late" if they arrive after
+// their earliest class start + a configurable grace period (Setting key
+// late_grace_minutes, default 10). Late pickup / early pickup are computed on
+// check-out the same way.
 import { Router } from 'express'
 import { Student, Teacher, Enrollment, Payment, Attendance } from '../models'
-import { ah, dayRange, todayStr } from '../helpers'
+import {
+  ah,
+  dayRange,
+  todayStr,
+  getExpectedTimesForPerson,
+  computeAttendanceFlags,
+} from '../helpers'
 
 const r = Router()
 
@@ -23,12 +35,6 @@ function requireKioskKey(req: any, res: any, next: any) {
   next()
 }
 r.use(requireKioskKey)
-
-function isLateScan(now: Date): boolean {
-  const cutoff = new Date(now)
-  cutoff.setHours(8, 30, 0, 0)
-  return now.getTime() > cutoff.getTime()
-}
 
 // ─── POST /api/kiosk/scan  { barcode } ──────────────────────────────────────
 //
@@ -76,6 +82,11 @@ r.post('/scan', ah(async (req, res) => {
   const personRef =
     personType === 'Student' ? person.studentId : person.teacherId
 
+  // ─── Resolve the expected arrival / pickup window for today ─────────────
+  // Uses the classes this person is enrolled in (student) or teaches
+  // (teacher) that meet on today's weekday.
+  const expected = await getExpectedTimesForPerson(personType, personId, now)
+
   // ─── Attendance upsert ──────────────────────────────────────────────────
   let record = await Attendance.findOne({
     personType,
@@ -84,8 +95,18 @@ r.post('/scan', ah(async (req, res) => {
   })
 
   let action: 'check-in' | 'check-out' | 'already-complete'
+  let lateMinutes: number | null = null
+  let earlyMinutes: number | null = null
+  let lateCheckoutMinutes: number | null = null
 
   if (!record) {
+    // ─── New check-in ─────────────────────────────────────────────────────
+    const flags = computeAttendanceFlags(now, null, expected)
+    lateMinutes = flags.lateMinutes
+
+    const isLate = lateMinutes != null && lateMinutes > 0
+    const status: 'Present' | 'Late' = isLate ? 'Late' : 'Present'
+
     record = await Attendance.create({
       personType,
       personId,
@@ -94,16 +115,48 @@ r.post('/scan', ah(async (req, res) => {
       checkIn: now,
       checkOut: null,
       method: 'Barcode',
-      status: isLateScan(now) ? 'Late' : 'Present',
-      note: null,
+      status,
+      note: isLate ? `Arrived ${lateMinutes} min after expected start` : null,
+      expectedStart: expected.expectedStart,
+      expectedEnd: expected.expectedEnd,
+      lateMinutes,
+      earlyMinutes: null,
+      lateCheckoutMinutes: null,
     })
     action = 'check-in'
   } else if (record.checkIn && !record.checkOut) {
+    // ─── Check-out ────────────────────────────────────────────────────────
+    const flags = computeAttendanceFlags(record.checkIn as Date, now, expected)
+    earlyMinutes = flags.earlyMinutes
+    lateCheckoutMinutes = flags.lateCheckoutMinutes
+
     record.checkOut = now
+    record.earlyMinutes = earlyMinutes
+    record.lateCheckoutMinutes = lateCheckoutMinutes
+    // Refresh the expected window — a class could have been edited between
+    // the morning check-in and this afternoon scan.
+    if (expected.expectedStart) record.expectedStart = expected.expectedStart
+    if (expected.expectedEnd) record.expectedEnd = expected.expectedEnd
+
+    // Append a note if either anomaly occurred (keep any existing note).
+    const notes: string[] = []
+    if (record.note) notes.push(record.note)
+    if (earlyMinutes && earlyMinutes > 0) {
+      notes.push(`Picked up ${earlyMinutes} min before expected end`)
+    }
+    if (lateCheckoutMinutes && lateCheckoutMinutes > 0) {
+      notes.push(`Picked up ${lateCheckoutMinutes} min after expected end`)
+    }
+    record.note = notes.length > 0 ? notes.join(' · ') : null
+
     await record.save()
     action = 'check-out'
   } else {
+    // ─── Already complete — echo the persisted values ─────────────────────
     action = 'already-complete'
+    lateMinutes = (record as any).lateMinutes ?? null
+    earlyMinutes = (record as any).earlyMinutes ?? null
+    lateCheckoutMinutes = (record as any).lateCheckoutMinutes ?? null
   }
 
   // ─── For students: attach programmes + current-month payment status ─────
@@ -165,6 +218,14 @@ r.post('/scan', ah(async (req, res) => {
       status: record.status,
     },
     payment,
+    // ── Timetable context (drives the kiosk UI banners) ──
+    schedule: expected.classNames,
+    expectedStart: expected.expectedStart ? expected.expectedStart.toISOString() : null,
+    expectedEnd: expected.expectedEnd ? expected.expectedEnd.toISOString() : null,
+    graceMinutes: expected.graceMinutes,
+    lateMinutes,
+    earlyMinutes,
+    lateCheckoutMinutes,
     timestamp: now.toISOString(),
   })
 }))
