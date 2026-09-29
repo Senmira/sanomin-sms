@@ -84,51 +84,49 @@ function serializeStudent(s: any, maps: Awaited<ReturnType<typeof studentRelMaps
 
 // ─── ID generation ──────────────────────────────────────────────────────────
 //
-// Student ID format:  <PREFIX><YY><NNN>
-//   PREFIX = P (Preschool) > D (Daycare) > T (Tution/Elocution) > I (IT) > X (other)
-//   YY    = 2-digit year of admission (e.g. 24, 25, 26)
-//   NNN   = sequential within (PREFIX, YY), starting at 001
+// IDs are OPAQUE, IMMUTABLE, and programme-agnostic. All programme information
+// lives in the Enrollment collection — never encoded in the ID.
 //
-// Examples:  P24001  D25003  T24007  I26001
+// Student:   S<YY><NNNN>   e.g. S240001, S240002, S250001
+//   S    = Student
+//   YY   = 2-digit year of admission
+//   NNNN = 4-digit sequence within (S, YY)
 //
-// Teacher ID format:  IT<NNN>  or  ET<NNN>
-//   Internal → IT001, IT002 …
-//   External → ET001, ET002 …
+// Teacher:   I<YY><NNN>    (Internal)  e.g. I24001, I24002, I25001
+//            E<YY><NNN>    (External)  e.g. E24001, E24002, E25001
+//   YY   = 2-digit year of hire
+//   NNN  = 3-digit sequence within (I|E, YY)
+//
+// Barcode = studentId exactly (no SAN prefix).
 
-type ProgramCode = string
-
-function pickPrefix(programCodes: ProgramCode[]): string {
-  const set = new Set(programCodes.map((c) => c.toUpperCase()))
-  if (set.has('PRESCHOOL')) return 'P'
-  if (set.has('DAYCARE')) return 'D'
-  if (set.has('ELOCUTION') || set.has('TUTION') || set.has('TUITION')) return 'T'
-  if (set.has('IT')) return 'I'
-  // Any other single-programme enrolment falls through to X
-  return 'X'
+function computeYear2(d: Date | null): string {
+  const dt = d && !isNaN(d.getTime()) ? d : new Date()
+  return String(dt.getFullYear()).slice(-2)
 }
 
-function computeYear(admissionDate: Date | null): number {
-  const d = admissionDate && !isNaN(admissionDate.getTime()) ? admissionDate : new Date()
-  return d.getFullYear()
-}
-
-async function nextStudentId(programCodes: ProgramCode[], admissionDate: Date | null): Promise<string> {
-  const prefix = pickPrefix(programCodes)
-  const year2 = String(computeYear(admissionDate)).slice(-2)
-  const pattern = `^${prefix}${year2}`
-
-  const existing = await Student.find({ studentId: { $regex: pattern } }, 'studentId').lean()
+async function nextStudentId(admissionDate: Date | null): Promise<string> {
+  const prefix = `S${computeYear2(admissionDate)}`
+  const existing = await Student.find(
+    { studentId: { $regex: `^${prefix}` } },
+    'studentId',
+  ).lean()
   let max = 0
   for (const s of existing as any[]) {
-    const num = parseInt(s.studentId.slice(prefix.length + 2), 10)
+    const num = parseInt(s.studentId.slice(prefix.length), 10)
     if (!isNaN(num) && num > max) max = num
   }
-  return `${prefix}${year2}${String(max + 1).padStart(3, '0')}`
+  return `${prefix}${String(max + 1).padStart(4, '0')}`
 }
 
-async function nextTeacherId(type: 'Internal' | 'External'): Promise<string> {
-  const prefix = type === 'Internal' ? 'IT' : 'ET'
-  const existing = await Teacher.find({ teacherId: { $regex: `^${prefix}` } }, 'teacherId').lean()
+async function nextTeacherId(
+  type: 'Internal' | 'External',
+  hireDate: Date | null,
+): Promise<string> {
+  const prefix = `${type === 'Internal' ? 'I' : 'E'}${computeYear2(hireDate)}`
+  const existing = await Teacher.find(
+    { teacherId: { $regex: `^${prefix}` } },
+    'teacherId',
+  ).lean()
   let max = 0
   for (const t of existing as any[]) {
     const num = parseInt(t.teacherId.slice(prefix.length), 10)
@@ -242,11 +240,8 @@ r.post('/students', ah(async (req, res) => {
   }
 
   const admissionDate = parseDate(body.admissionDate) || new Date()
-  const studentId = await nextStudentId(
-    (programs as any[]).map((p) => p.code),
-    admissionDate,
-  )
-  const barcode = `SAN${studentId}`
+  const studentId = await nextStudentId(admissionDate)
+  const barcode = studentId
 
   const created = await Student.create({
     studentId,
@@ -554,13 +549,15 @@ r.post('/teachers', ah(async (req, res) => {
     if (clash) return res.status(400).json({ error: `fingerprintId "${fingerprintId}" is already in use` })
   }
 
-  const teacherId = await nextTeacherId(type as 'Internal' | 'External')
-
   const parseDate = (v?: string | null): Date | null => {
     if (!v) return null
     const d = new Date(v)
     return isNaN(d.getTime()) ? null : d
   }
+
+  // Parse hireDate FIRST so it can drive both the ID and the stored value.
+  const hireDate = parseDate(body.hireDate)
+  const teacherId = await nextTeacherId(type as 'Internal' | 'External', hireDate)
 
   const created = await Teacher.create({
     teacherId,
@@ -576,7 +573,7 @@ r.post('/teachers', ah(async (req, res) => {
     specialization: body.specialization || null,
     photoUrl: body.photoUrl || null,
     status: body.status || 'Active',
-    hireDate: parseDate(body.hireDate),
+    hireDate,
     monthlyRate: typeof body.monthlyRate === 'number' ? body.monthlyRate : 0,
     basicSalary: typeof body.basicSalary === 'number' ? Math.max(0, body.basicSalary) : 0,
     allowances: typeof body.allowances === 'number' ? Math.max(0, body.allowances) : 0,
