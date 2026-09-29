@@ -103,6 +103,8 @@ interface FormState {
   startTime: string
   endTime: string
   room: string
+  // ── new ── optional pinned grade for this class (e.g. "Grade 6")
+  grade: string
   capacity: string
   fee: string
   instituteSharePct: string
@@ -118,6 +120,7 @@ const EMPTY_FORM: FormState = {
   startTime: '09:00',
   endTime: '10:00',
   room: '',
+  grade: '',
   capacity: '20',
   fee: '0',
   instituteSharePct: '25',
@@ -231,7 +234,6 @@ export function ClassesSection() {
     for (const c of rows) {
       if (c.active) {
         active++
-        // Expected institute income: fee × institute share (default 25%)
         instituteIncome += ((c.fee || 0) * (c.instituteSharePct ?? 25)) / 100
       }
       if (c.teacher?.type === 'External') externalTeacherClasses++
@@ -282,6 +284,7 @@ export function ClassesSection() {
       startTime: c.startTime || '09:00',
       endTime: c.endTime || '10:00',
       room: c.room || '',
+      grade: c.grade || '',
       capacity: String(c.capacity ?? 20),
       fee: String(c.fee ?? 0),
       instituteSharePct: String(c.instituteSharePct ?? 25),
@@ -312,6 +315,7 @@ export function ClassesSection() {
       startTime: form.startTime,
       endTime: form.endTime,
       room: form.room.trim() || null,
+      grade: form.grade.trim() || null,
       capacity: Number(form.capacity) || 0,
       fee: Number(form.fee) || 0,
       instituteSharePct: parseSharePct(form.instituteSharePct),
@@ -465,7 +469,7 @@ export function ClassesSection() {
       />
 
       {/* Stats strip */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <StatCard
           label="Total Classes"
           value={stats.total}
@@ -593,7 +597,7 @@ export function ClassesSection() {
 
       {/* Add/Edit dialog */}
       <Dialog open={addEditOpen} onOpenChange={(v) => !v && closeDialog()}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto scroll-thin sm:max-w-2xl">
+        <DialogContent className="w-[95vw] max-h-[90vh] overflow-y-auto scroll-thin sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{editing ? 'Edit Class' : 'Add Class'}</DialogTitle>
             <DialogDescription>
@@ -612,7 +616,7 @@ export function ClassesSection() {
                 onChange={(e) =>
                   setForm((f) => ({ ...f, name: e.target.value }))
                 }
-                placeholder="e.g. IT Foundations — Grade 1"
+                placeholder="e.g. Maths — Gr 6"
               />
             </div>
 
@@ -726,7 +730,23 @@ export function ClassesSection() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            {/* Grade + Capacity + Fee */}
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+              <div className="grid gap-1.5">
+                <Label htmlFor="class-grade">Grade (optional)</Label>
+                <Input
+                  id="class-grade"
+                  value={form.grade}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, grade: e.target.value }))
+                  }
+                  placeholder="e.g. Grade 6"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Pin a grade (e.g. "Maths — Grade 6"). Students enrolled in this
+                  class inherit it as their own grade.
+                </p>
+              </div>
               <div className="grid gap-1.5">
                 <Label htmlFor="class-capacity">Capacity</Label>
                 <Input
@@ -757,9 +777,7 @@ export function ClassesSection() {
             <div className="rounded-lg border bg-muted/20 p-3">
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="grid gap-1.5">
-                  <Label htmlFor="class-share">
-                    Teacher pays institute (%)
-                  </Label>
+                  <Label htmlFor="class-share">Teacher pays institute (%)</Label>
                   <Input
                     id="class-share"
                     type="number"
@@ -874,7 +892,6 @@ function parseHour(time: string | null): number | null {
 
 function TimetableView({ rows }: TimetableViewProps) {
   const [compact, setCompact] = useState(true)
-  // Group by day, sort by startTime within each day
   const byDay = useMemo(() => {
     const map: Record<string, ClassRow[]> = {}
     for (const d of DAYS) map[d] = []
@@ -891,7 +908,6 @@ function TimetableView({ rows }: TimetableViewProps) {
     return map
   }, [rows])
 
-  // Compute active hours (hours that have at least one class) for compact mode
   const activeHours = useMemo(() => {
     const set = new Set<number>()
     for (const d of DAYS) {
@@ -901,7 +917,6 @@ function TimetableView({ rows }: TimetableViewProps) {
       }
     }
     const sorted = Array.from(set).sort((a, b) => a - b)
-    // In compact mode, if no active hours, fall back to full range
     return sorted.length > 0 ? sorted : ALL_TIME_SLOTS
   }, [byDay])
 
@@ -910,7 +925,6 @@ function TimetableView({ rows }: TimetableViewProps) {
 
   return (
     <Card className="overflow-hidden p-0">
-      {/* Toolbar with compact toggle + summary */}
       <div className="flex items-center justify-between border-b bg-muted/30 px-4 py-2">
         <div className="flex items-center gap-3 text-xs text-muted-foreground">
           <span className="flex items-center gap-1.5 font-medium text-foreground">
@@ -941,7 +955,6 @@ function TimetableView({ rows }: TimetableViewProps) {
       </div>
       <div className="scroll-thin overflow-x-auto">
         <div className="min-w-[1100px]">
-          {/* Header row: time column + 7 day columns */}
           <div
             className="grid border-b bg-muted/40"
             style={{
@@ -969,7 +982,6 @@ function TimetableView({ rows }: TimetableViewProps) {
             })}
           </div>
 
-          {/* Body: hour rows with day cells */}
           {hours.map((hour) => (
             <div
               key={hour}
@@ -982,7 +994,6 @@ function TimetableView({ rows }: TimetableViewProps) {
                 {String(hour).padStart(2, '0')}:00
               </div>
               {DAYS.map((d) => {
-                // Classes that start at this hour in this day
                 const cellClasses = byDay[d].filter((c) => {
                   const startH = parseHour(c.startTime)
                   return startH === hour
@@ -1021,24 +1032,31 @@ function TimetableCard({ cls }: TimetableCardProps) {
     <div
       className="group relative overflow-hidden rounded-md border p-2 text-xs shadow-sm transition-all hover:shadow-md hover:scale-[1.01]"
       style={{
-        backgroundColor: `${color}1f`, // ~12% tint — stronger for contrast
-        borderColor: `${color}80`, // 50% border — more visible
+        backgroundColor: `${color}1f`,
+        borderColor: `${color}80`,
         borderLeftWidth: '4px',
         borderLeftColor: color,
       }}
       title={cls.notes || undefined}
     >
-      {/* Top row: name + time */}
+      {/* Top row: name + grade + time */}
       <div className="flex items-start justify-between gap-1">
         <p className="font-semibold leading-tight text-foreground line-clamp-2">
           {cls.name}
         </p>
-        <span
-          className="shrink-0 rounded px-1 py-0.5 text-[9px] font-bold text-white"
-          style={{ background: color }}
-        >
-          {fmtTime(cls.startTime)}
-        </span>
+        <div className="flex shrink-0 flex-col items-end gap-0.5">
+          <span
+            className="rounded px-1 py-0.5 text-[9px] font-bold text-white"
+            style={{ background: color }}
+          >
+            {fmtTime(cls.startTime)}
+          </span>
+          {cls.grade && (
+            <span className="rounded bg-background/80 px-1 py-0.5 text-[9px] font-bold text-foreground ring-1 ring-border">
+              {cls.grade}
+            </span>
+          )}
+        </div>
       </div>
       {/* Teacher */}
       {cls.teacher && (
@@ -1106,8 +1124,8 @@ function ClassListTable({ rows, onEdit, onDelete }: ClassListTableProps) {
 
   return (
     <Card className="overflow-hidden p-0">
-      <div className="scroll-thin max-h-[60vh] overflow-y-auto">
-        <Table className="table-zebra">
+      <div className="scroll-thin max-h-[60vh] overflow-auto">
+        <Table className="table-zebra min-w-[1100px]">
           <TableHeader className="sticky top-0 z-10 bg-muted/80 backdrop-blur">
             <TableRow>
               <TableHead>Class</TableHead>
@@ -1133,7 +1151,17 @@ function ClassListTable({ rows, onEdit, onDelete }: ClassListTableProps) {
               return (
                 <TableRow key={c.id}>
                   <TableCell>
-                    <div className="font-medium">{c.name}</div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-medium">{c.name}</span>
+                      {c.grade && (
+                        <Badge
+                          variant="outline"
+                          className="shrink-0 text-[10px] font-semibold"
+                        >
+                          {c.grade}
+                        </Badge>
+                      )}
+                    </div>
                     {c.notes && (
                       <div className="line-clamp-1 text-xs text-muted-foreground">
                         {c.notes}
