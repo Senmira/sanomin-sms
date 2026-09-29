@@ -24,6 +24,14 @@ interface ScanResult {
     paid: number
     balance: number
   } | null
+  // ── Timetable context (returned by kiosk scan) ──
+  schedule?: string[]
+  expectedStart?: string | null
+  expectedEnd?: string | null
+  graceMinutes?: number
+  lateMinutes?: number | null
+  earlyMinutes?: number | null
+  lateCheckoutMinutes?: number | null
   message?: string
 }
 
@@ -170,7 +178,8 @@ export default function KioskPage() {
           </div>
 
           {/* Info panel */}
-          <div className="space-y-6 flex flex-col justify-center">
+          <div className="space-y-5 flex flex-col justify-center">
+            {/* Name + ref */}
             <div>
               <h1 className="text-5xl md:text-6xl font-bold leading-tight">
                 {result.person?.name}
@@ -183,6 +192,7 @@ export default function KioskPage() {
               </p>
             </div>
 
+            {/* Programme badges */}
             {result.person?.programs && result.person.programs.length > 0 && (
               <div className="flex flex-wrap gap-2">
                 {result.person.programs.map((p) => (
@@ -201,6 +211,7 @@ export default function KioskPage() {
               </div>
             )}
 
+            {/* Action headline */}
             <div
               className={`text-4xl md:text-5xl font-bold ${
                 result.action === 'check-out' ? 'text-blue-500' : 'text-emerald-500'
@@ -211,6 +222,7 @@ export default function KioskPage() {
               {result.action === 'already-complete' && '✔️ Already recorded'}
             </div>
 
+            {/* Check-in / check-out times */}
             <div className="text-2xl md:text-3xl tabular-nums text-muted-foreground">
               {result.record?.checkIn && (
                 <span>In: {fmtTime(result.record.checkIn)}</span>
@@ -220,6 +232,43 @@ export default function KioskPage() {
               )}
             </div>
 
+            {/* ─── Timetable context ─────────────────────────────────────── */}
+            {result.schedule && result.schedule.length > 0 && (
+              <p className="text-lg md:text-xl text-muted-foreground">
+                Today: <span className="font-medium text-foreground">{result.schedule.join(' · ')}</span>
+              </p>
+            )}
+
+            {(result.expectedStart || result.expectedEnd) && (
+              <p className="text-lg md:text-xl tabular-nums text-muted-foreground">
+                {result.expectedStart && (
+                  <span>Expected in: <span className="font-medium text-foreground">{fmtTime(result.expectedStart)}</span></span>
+                )}
+                {result.expectedStart && result.expectedEnd && <span className="mx-2 opacity-40">·</span>}
+                {result.expectedEnd && (
+                  <span>Expected out: <span className="font-medium text-foreground">{fmtTime(result.expectedEnd)}</span></span>
+                )}
+              </p>
+            )}
+
+            {/* ─── Late / Early / Late-pickup banners ───────────────────── */}
+            {result.lateMinutes != null && result.lateMinutes > 0 && (
+              <div className="inline-block w-fit rounded-2xl bg-amber-500/15 px-5 py-3 text-xl md:text-2xl font-bold text-amber-600 dark:text-amber-400">
+                ⚠️ Arrived {result.lateMinutes} min late
+              </div>
+            )}
+            {result.earlyMinutes != null && result.earlyMinutes > 0 && (
+              <div className="inline-block w-fit rounded-2xl bg-blue-500/15 px-5 py-3 text-xl md:text-2xl font-bold text-blue-600 dark:text-blue-400">
+                ℹ️ Picked up {result.earlyMinutes} min early
+              </div>
+            )}
+            {result.lateCheckoutMinutes != null && result.lateCheckoutMinutes > 0 && (
+              <div className="inline-block w-fit rounded-2xl bg-red-500/15 px-5 py-3 text-xl md:text-2xl font-bold text-red-600 dark:text-red-400">
+                ⚠️ Picked up {result.lateCheckoutMinutes} min late
+              </div>
+            )}
+
+            {/* ─── Payment badge ──────────────────────────────────────────── */}
             {result.payment && (
               <div>
                 <span
