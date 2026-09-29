@@ -15,10 +15,15 @@ import {
   Power,
   Layers,
   Loader2,
+  ClipboardList,
 } from 'lucide-react'
 
 import { api } from '@/lib/api'
-import { ProgramRow } from '@/lib/types'
+import {
+  ProgramRow,
+  ProgramCategory,
+  PROGRAM_CATEGORIES,
+} from '@/lib/types'
 import { currency, currencyCompact } from '@/lib/format'
 
 import { SectionHeader } from '@/components/shared/section-header'
@@ -33,6 +38,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
 import { Card } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   Dialog,
@@ -49,23 +55,40 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 
 // ─── List response shape ───────────────────────────────────────────────────
 interface ListResponse {
   data: ProgramRow[]
 }
 
-// ─── Preset color swatches (brand-aligned, no raw indigo/blue utilities) ───
+// ─── Preset colour swatches ────────────────────────────────────────────────
 const PRESET_COLORS = [
-  '#1e40af', // royal blue (PRESCHOOL brand)
-  '#7c3aed', // purple
-  '#dc2626', // red
-  '#0d9488', // teal
-  '#d97706', // amber
-  '#be185d', // pink
-  '#15803d', // green
-  '#475569', // slate
+  '#1e40af',
+  '#7c3aed',
+  '#dc2626',
+  '#0d9488',
+  '#d97706',
+  '#be185d',
+  '#15803d',
+  '#475569',
 ]
+
+// ─── Category badge style map ──────────────────────────────────────────────
+const CATEGORY_BADGE_CLASS: Record<ProgramCategory, string> = {
+  Preschool:
+    'border-transparent bg-violet-500/15 text-violet-700 dark:text-violet-300',
+  Daycare:
+    'border-transparent bg-amber-500/15 text-amber-700 dark:text-amber-300',
+  Tuition:
+    'border-transparent bg-sky-500/15 text-sky-700 dark:text-sky-300',
+}
 
 interface FormState {
   code: string
@@ -74,6 +97,10 @@ interface FormState {
   color: string
   monthlyFee: string
   active: boolean
+  // ── new ──
+  category: ProgramCategory
+  hasGrades: boolean
+  gradesText: string
 }
 
 const EMPTY_FORM: FormState = {
@@ -83,6 +110,30 @@ const EMPTY_FORM: FormState = {
   color: '#7c3aed',
   monthlyFee: '0',
   active: true,
+  category: 'Tuition',
+  hasGrades: false,
+  gradesText: '',
+}
+
+// ─── Helpers ───────────────────────────────────────────────────────────────
+function parseGradesText(text: string): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const raw of text.split('\n')) {
+    const s = raw.trim()
+    if (!s) continue
+    const key = s.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(s)
+  }
+  return out
+}
+
+function normalizeCategoryValue(v: string): ProgramCategory {
+  const s = v.trim().toLowerCase()
+  const match = PROGRAM_CATEGORIES.find((c) => c.toLowerCase() === s)
+  return match ?? 'Tuition'
 }
 
 // ─── Main section ───────────────────────────────────────────────────────────
@@ -132,22 +183,25 @@ export function ProgramsSection() {
       })
   }, [])
 
-  // ─── Stats (computed via useMemo so we never mutate during render) ──────
+  // ─── Stats ───────────────────────────────────────────────────────────────
   const stats = useMemo(() => {
     let totalEnrollments = 0
     let revenue = 0
     let activeCount = 0
+    let gradedCount = 0
     for (const p of rows) {
       const enrolled = p._count?.enrollments ?? 0
       totalEnrollments += enrolled
       revenue += enrolled * (p.monthlyFee || 0)
       if (p.active) activeCount++
+      if (p.hasGrades) gradedCount++
     }
     return {
       total: rows.length,
       active: activeCount,
       totalEnrollments,
       revenue,
+      graded: gradedCount,
     }
   }, [rows])
 
@@ -167,6 +221,9 @@ export function ProgramsSection() {
       color: p.color,
       monthlyFee: String(p.monthlyFee ?? 0),
       active: p.active,
+      category: normalizeCategoryValue(p.category ?? 'Tuition'),
+      hasGrades: !!p.hasGrades,
+      gradesText: (p.grades ?? []).join('\n'),
     })
     setAddEditOpen(true)
   }, [])
@@ -178,29 +235,20 @@ export function ProgramsSection() {
   }, [])
 
   // ─── Quick toggle active (inline) ────────────────────────────────────────
-  const toggleActive = useCallback(
-    async (p: ProgramRow, next: boolean) => {
-      // Optimistic local update
-      setRows((prev) =>
-        prev.map((x) => (x.id === p.id ? { ...x, active: next } : x)),
-      )
-      try {
-        await api(`/api/programs/${p.id}`, {
-          method: 'PUT',
-          body: JSON.stringify({ active: next }),
-        })
-        toast.success(`${p.name} ${next ? 'activated' : 'deactivated'}`)
-      } catch (err) {
-        // Revert on error
-        setRows((prev) =>
-          prev.map((x) => (x.id === p.id ? { ...x, active: p.active } : x)),
-        )
-        const msg = err instanceof Error ? err.message : 'Failed to update'
-        toast.error(msg)
-      }
-    },
-    [],
-  )
+  const toggleActive = useCallback(async (p: ProgramRow, next: boolean) => {
+    setRows((prev) => prev.map((x) => (x.id === p.id ? { ...x, active: next } : x)))
+    try {
+      await api(`/api/programs/${p.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ active: next }),
+      })
+      toast.success(`${p.name} ${next ? 'activated' : 'deactivated'}`)
+    } catch (err) {
+      setRows((prev) => prev.map((x) => (x.id === p.id ? { ...x, active: p.active } : x)))
+      const msg = err instanceof Error ? err.message : 'Failed to update'
+      toast.error(msg)
+    }
+  }, [])
 
   // ─── Save (create/update) ────────────────────────────────────────────────
   const handleSave = useCallback(async () => {
@@ -208,6 +256,12 @@ export function ProgramsSection() {
       toast.error('Code and name are required')
       return
     }
+    const grades = form.hasGrades ? parseGradesText(form.gradesText) : []
+    if (form.hasGrades && grades.length === 0) {
+      toast.error('Add at least one grade, or turn off "has grades"')
+      return
+    }
+
     setSaving(true)
     const payload = {
       code: form.code.trim().toUpperCase(),
@@ -216,6 +270,9 @@ export function ProgramsSection() {
       color: form.color,
       monthlyFee: Number(form.monthlyFee) || 0,
       active: form.active,
+      category: form.category,
+      hasGrades: form.hasGrades,
+      grades,
     }
     try {
       if (editing) {
@@ -261,7 +318,7 @@ export function ProgramsSection() {
     <div className="flex flex-col gap-6">
       <SectionHeader
         title="Programs"
-        description="Curriculum & enrichment programs"
+        description="Curriculum & enrichment programs — full control over categories and grades"
         icon={<BookOpen className="h-5 w-5" />}
         actions={
           <Button onClick={openAdd} size="sm" className="gap-1.5">
@@ -271,14 +328,14 @@ export function ProgramsSection() {
         }
       />
 
-      {/* Stats strip */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {/* Stats strip — 2 cols on mobile, 4 on desktop */}
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         <StatCard
           label="Total Programs"
           value={stats.total}
           icon={Layers}
           accent="blue"
-          hint="All curriculum programs"
+          hint={`${stats.graded} graded`}
         />
         <StatCard
           label="Active Programs"
@@ -347,37 +404,36 @@ export function ProgramsSection() {
         </div>
       )}
 
-      {/* Add/Edit dialog */}
+      {/* Add/Edit dialog — wider, scrollable on small screens */}
       <Dialog open={addEditOpen} onOpenChange={(v) => !v && closeDialog()}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="w-[95vw] max-h-[90vh] overflow-y-auto sm:max-w-xl">
           <DialogHeader>
-            <DialogTitle>
-              {editing ? 'Edit Program' : 'Add Program'}
-            </DialogTitle>
+            <DialogTitle>{editing ? 'Edit Program' : 'Add Program'}</DialogTitle>
             <DialogDescription>
               {editing
                 ? 'Update program details. Code must remain unique.'
-                : 'Create a new curriculum or enrichment program.'}
+                : 'Create a new curriculum or enrichment program. Category drives the Student section tabs.'}
             </DialogDescription>
           </DialogHeader>
 
           <div className="grid gap-4 py-2">
-            <div className="grid grid-cols-2 gap-4">
+            {/* Code + Fee */}
+            <div className="grid gap-4 sm:grid-cols-2">
               <div className="grid gap-1.5">
                 <Label htmlFor="program-code">Code</Label>
                 <Input
                   id="program-code"
                   value={form.code}
                   onChange={(e) =>
-                    setForm((f) => ({
-                      ...f,
-                      code: e.target.value.toUpperCase(),
-                    }))
+                    setForm((f) => ({ ...f, code: e.target.value.toUpperCase() }))
                   }
-                  placeholder="PRESCHOOL"
+                  placeholder="MATHS"
                   disabled={!!editing}
                   className="font-mono uppercase"
                 />
+                <p className="text-xs text-muted-foreground">
+                  Uppercase, unique. Free-form — no reserved values.
+                </p>
               </div>
               <div className="grid gap-1.5">
                 <Label htmlFor="program-fee">Monthly Fee (LKR)</Label>
@@ -393,18 +449,44 @@ export function ProgramsSection() {
               </div>
             </div>
 
+            {/* Name */}
             <div className="grid gap-1.5">
               <Label htmlFor="program-name">Name</Label>
               <Input
                 id="program-name"
                 value={form.name}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, name: e.target.value }))
-                }
-                placeholder="Preschool"
+                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                placeholder="Maths"
               />
             </div>
 
+            {/* Category */}
+            <div className="grid gap-1.5">
+              <Label>Category *</Label>
+              <Select
+                value={form.category}
+                onValueChange={(v) =>
+                  setForm((f) => ({ ...f, category: normalizeCategoryValue(v) }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select category" />
+                </SelectTrigger>
+                <SelectContent>
+                  {PROGRAM_CATEGORIES.map((c) => (
+                    <SelectItem key={c} value={c}>
+                      {c}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Determines which tab this program appears under in the Students section
+                (Preschool / Daycare / Tuition).
+              </p>
+            </div>
+
+            {/* Description */}
             <div className="grid gap-1.5">
               <Label htmlFor="program-desc">Description</Label>
               <Textarea
@@ -418,6 +500,7 @@ export function ProgramsSection() {
               />
             </div>
 
+            {/* Colour */}
             <div className="grid gap-1.5">
               <Label>Color</Label>
               <div className="flex flex-wrap items-center gap-2">
@@ -452,6 +535,49 @@ export function ProgramsSection() {
               </div>
             </div>
 
+            {/* Has grades toggle */}
+            <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-dashed bg-muted/20 p-3 transition-colors hover:bg-muted/40">
+              <Checkbox
+                checked={form.hasGrades}
+                onCheckedChange={(v) =>
+                  setForm((f) => ({ ...f, hasGrades: v === true }))
+                }
+                className="mt-0.5"
+                aria-label="This programme has grades"
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-medium">
+                  This program has grades
+                </span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  When enabled, students pick a grade (e.g. Grade 1 … Grade 11) at
+                  enrollment time. Leave off for programs without grade levels.
+                </span>
+              </span>
+            </label>
+
+            {/* Grades textarea — only when hasGrades */}
+            {form.hasGrades && (
+              <div className="grid gap-1.5">
+                <Label htmlFor="program-grades">Grades (one per line)</Label>
+                <Textarea
+                  id="program-grades"
+                  value={form.gradesText}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, gradesText: e.target.value }))
+                  }
+                  rows={6}
+                  className="font-mono text-sm"
+                  placeholder={'Grade 1\nGrade 2\nGrade 3\n…\nGrade 11'}
+                />
+                <p className="text-xs text-muted-foreground">
+                  These are the only values students can pick. Duplicates and blank
+                  lines are removed on save.
+                </p>
+              </div>
+            )}
+
+            {/* Active toggle */}
             <div className="flex items-center justify-between rounded-lg border p-3">
               <div>
                 <Label htmlFor="program-active" className="cursor-pointer">
@@ -515,11 +641,13 @@ function ProgramCard({
   const enrolled = program._count?.enrollments ?? 0
   const classes = program._count?.classes ?? 0
   const color = program.color || '#7c3aed'
+  const category: ProgramCategory = normalizeCategoryValue(program.category ?? 'Tuition')
+  const grades = program.grades ?? []
 
   const revenue = enrolled * (program.monthlyFee || 0)
   return (
     <Card className="card-lift group relative overflow-hidden p-0">
-      {/* Colored header section with gradient */}
+      {/* Coloured header */}
       <div
         className="relative flex items-center gap-3 p-5 pb-4"
         style={{
@@ -534,17 +662,34 @@ function ProgramCard({
           {program.code.slice(0, 2).toUpperCase()}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1.5">
             <Badge variant="secondary" className="font-mono uppercase text-[10px]">
               {program.code}
             </Badge>
+            <Badge
+              variant="outline"
+              className={`text-[10px] ${CATEGORY_BADGE_CLASS[category]}`}
+            >
+              {category}
+            </Badge>
+            {program.hasGrades && (
+              <Badge
+                variant="outline"
+                className="border-transparent bg-indigo-500/15 text-[10px] text-indigo-700 dark:text-indigo-300"
+              >
+                <ClipboardList className="mr-1 h-3 w-3" />
+                {grades.length} grade{grades.length === 1 ? '' : 's'}
+              </Badge>
+            )}
             {!program.active && (
               <Badge variant="outline" className="text-[10px] text-muted-foreground">
                 Inactive
               </Badge>
             )}
           </div>
-          <h3 className="mt-1 truncate text-base font-semibold leading-tight">{program.name}</h3>
+          <h3 className="mt-1 truncate text-base font-semibold leading-tight">
+            {program.name}
+          </h3>
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -558,9 +703,7 @@ function ProgramCard({
               <Pencil className="mr-2 h-4 w-4" />
               Edit
             </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={() => onToggleActive(!program.active)}
-            >
+            <DropdownMenuItem onClick={() => onToggleActive(!program.active)}>
               <Power className="mr-2 h-4 w-4" />
               {program.active ? 'Deactivate' : 'Activate'}
             </DropdownMenuItem>
@@ -581,23 +724,51 @@ function ProgramCard({
           {program.description || 'No description provided.'}
         </p>
 
-        {/* Fee + revenue highlight */}
+        {/* Grade preview — only when hasGrades */}
+        {program.hasGrades && grades.length > 0 && (
+          <div className="rounded-lg border bg-muted/30 p-2.5">
+            <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+              Grades offered
+            </p>
+            <div className="flex flex-wrap gap-1">
+              {grades.slice(0, 6).map((g) => (
+                <span
+                  key={g}
+                  className="rounded-md bg-background px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-border"
+                >
+                  {g}
+                </span>
+              ))}
+              {grades.length > 6 && (
+                <span className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                  +{grades.length - 6}
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Fee + revenue */}
         <div className="flex items-end justify-between gap-2 rounded-lg border bg-muted/30 p-3">
           <div>
-            <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Monthly fee</p>
+            <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+              Monthly fee
+            </p>
             <p className="text-lg font-bold tracking-tight">
               {currency(program.monthlyFee || 0)}
             </p>
           </div>
           <div className="text-right">
-            <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Revenue/mo</p>
+            <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+              Revenue/mo
+            </p>
             <p className="text-sm font-semibold text-emerald-600 dark:text-emerald-400">
               {currency(revenue)}
             </p>
           </div>
         </div>
 
-        {/* Stats grid */}
+        {/* Stats */}
         <div className="grid grid-cols-2 gap-2 text-sm">
           <div className="flex items-center gap-1.5 rounded-md bg-muted/60 px-2.5 py-1.5">
             <Users className="h-3.5 w-3.5 text-muted-foreground" />
@@ -611,7 +782,7 @@ function ProgramCard({
           </div>
         </div>
 
-        {/* Footer with active toggle + manage */}
+        {/* Footer */}
         <div className="flex items-center justify-between gap-2 border-t pt-3">
           <div className="flex items-center gap-2">
             <Switch
