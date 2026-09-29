@@ -9,6 +9,12 @@
 //   YY = year of admission (student) / hire (teacher)
 //   Barcode = studentId exactly (no SAN prefix).
 //   Programme info lives ONLY in the Enrollment collection.
+//
+// Programme model:
+//   • category   — 'Preschool' | 'Daycare' | 'Tuition'
+//                  Drives the Student tabs (All / Preschool / Daycare / Tuition)
+//   • hasGrades  — boolean
+//   • grades[]   — e.g. ['Grade 1'..'Grade 11'] for Maths
 import mongoose from 'mongoose'
 import {
   Program, Student, Guardian, Teacher, Class, Enrollment,
@@ -67,15 +73,13 @@ interface ExpectedWindow {
   classNames: string[]
 }
 
-// Resolve the expected arrival/pickup window using the in-memory `classes`
-// array — no DB round trip.
 function resolveExpectedFor(
   personType: 'Student' | 'Teacher',
   personId: string,
   date: Date,
   classes: any[],
   classEnrollDocs: any[],
-  studentProgramIds: string[],   // student's programIds (from enrollments)
+  studentProgramIds: string[],
 ): ExpectedWindow {
   const dow = DAY_CODES[date.getDay()]
 
@@ -146,16 +150,77 @@ async function main() {
   ])
   console.log('[seed] collections cleared')
 
-  // ── Programs ─────────────────────────────────────────────────────────────
+  // ── Programmes — dynamic, with category + optional grades ────────────────
+  //
+  // • category drives the Student tabs (Preschool / Daycare / Tuition)
+  // • MATHS demonstrates a graded programme (Grade 1 … Grade 11)
   const programDocs = await Program.insertMany([
-    { code: 'PRESCHOOL', name: 'Preschool', description: 'Early years foundation programme (ages 2–5)', color: '#7c3aed', monthlyFee: 4500 },
-    { code: 'DAYCARE', name: 'Daycare', description: 'Full-day childcare with meals and nap time', color: '#f59e0b', monthlyFee: 6000 },
-    { code: 'IT', name: 'IT Kids', description: 'Computer literacy & coding for kids', color: '#10b981', monthlyFee: 2000 },
-    { code: 'ELOCUTION', name: 'Elocution', description: 'Speech, drama & communication (ESRA/Trinity)', color: '#ef4444', monthlyFee: 2000 },
-    { code: 'DANCING', name: 'Dancing', description: 'Kandyan & freestyle dancing classes', color: '#ec4899', monthlyFee: 1500 },
+    {
+      code: 'PRESCHOOL',
+      name: 'Preschool',
+      description: 'Early years foundation programme (ages 2–5)',
+      color: '#7c3aed',
+      monthlyFee: 4500,
+      category: 'Preschool',
+      hasGrades: false,
+      grades: [],
+    },
+    {
+      code: 'DAYCARE',
+      name: 'Daycare',
+      description: 'Full-day childcare with meals and nap time',
+      color: '#f59e0b',
+      monthlyFee: 6000,
+      category: 'Daycare',
+      hasGrades: false,
+      grades: [],
+    },
+    {
+      code: 'IT',
+      name: 'IT Kids',
+      description: 'Computer literacy & coding for kids',
+      color: '#10b981',
+      monthlyFee: 2000,
+      category: 'Tuition',
+      hasGrades: false,
+      grades: [],
+    },
+    {
+      code: 'ELOCUTION',
+      name: 'Elocution',
+      description: 'Speech, drama & communication (ESRA/Trinity)',
+      color: '#ef4444',
+      monthlyFee: 2000,
+      category: 'Tuition',
+      hasGrades: false,
+      grades: [],
+    },
+    {
+      code: 'DANCING',
+      name: 'Dancing',
+      description: 'Kandyan & freestyle dancing classes',
+      color: '#ec4899',
+      monthlyFee: 1500,
+      category: 'Tuition',
+      hasGrades: false,
+      grades: [],
+    },
+    {
+      code: 'MATHS',
+      name: 'Maths',
+      description: 'Maths tuition — grade 1 through grade 11',
+      color: '#0ea5e9',
+      monthlyFee: 2500,
+      category: 'Tuition',
+      hasGrades: true,
+      grades: [
+        'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5', 'Grade 6',
+        'Grade 7', 'Grade 8', 'Grade 9', 'Grade 10', 'Grade 11',
+      ],
+    },
   ])
   const progByCode = Object.fromEntries(programDocs.map((p) => [p.code, p]))
-  console.log('[seed] programs:', programDocs.length)
+  console.log('[seed] programs:', programDocs.length, '(incl. graded MATHS demo)')
 
   // ── Teachers ─────────────────────────────────────────────────────────────
   const teacherDefs = [
@@ -212,7 +277,12 @@ async function main() {
     status: string
     medicalNotes: string | null
     programCodes: string[]
+    // per-programme grade when the programme has grades (e.g. { MATHS: 'Grade 5' })
+    grades: Record<string, string | null>
   }
+
+  // A small pool of grades for the MATHS demo
+  const mathsGrades = ['Grade 1', 'Grade 3', 'Grade 5', 'Grade 7', 'Grade 8', 'Grade 10']
 
   const drafts: Draft[] = []
   for (let i = 0; i < 44; i++) {
@@ -234,6 +304,14 @@ async function main() {
     if (i === 8 || i === 15) { codes.length = 0; codes.push('ELOCUTION') }
     if (i === 22) { codes.length = 0; codes.push('IT') }
 
+    // ~35 % of students also take MATHS — assign a random grade to demonstrate
+    // the graded-enrolment UI without bloating the seeded dataset.
+    const grades: Record<string, string | null> = {}
+    if (Math.random() < 0.35) {
+      codes.push('MATHS')
+      grades.MATHS = rand(mathsGrades)
+    }
+
     // Admission year varies across 2024, 2025, 2026 so IDs show multiple years
     const admissionYear = i < 20 ? 2024 : i < 35 ? 2025 : 2026
     const admissionDate = new Date(admissionYear, randInt(0, 11), randInt(1, 28))
@@ -248,6 +326,7 @@ async function main() {
       status: i < 40 ? 'Active' : rand(['Inactive', 'Graduated']),
       medicalNotes: i % 11 === 0 ? 'Mild asthma — inhaler in office' : null,
       programCodes: codes,
+      grades,
     })
   }
   // Birthday-in-next-10-days for the celebrations card
@@ -303,15 +382,17 @@ async function main() {
   const guardians = await Guardian.insertMany(guardianDocs)
   console.log('[seed] guardians:', guardians.length)
 
-  // ── Enrollments — use the SAME programme list from the drafts ────────────
+  // ── Enrollments — carry grade where the programme has grades ─────────────
   const activeStudents = students.filter((s) => s.status === 'Active')
   const enrollmentDocs: any[] = []
   const enrollmentsByStudent = new Map<string, string[]>()
-  const studentProgramIds = new Map<string, string[]>()  // for timetable lookup
+  const studentProgramIds = new Map<string, string[]>()
+  const studentGrades = new Map<string, Record<string, string | null>>()
   for (let i = 0; i < students.length; i++) {
     const s = students[i]
     if (s.status !== 'Active') continue
     const codes = drafts[i].programCodes
+    const grades = drafts[i].grades
     const programIds: string[] = []
     for (const code of codes) {
       const pid = progByCode[code]._id.toString()
@@ -320,14 +401,16 @@ async function main() {
         programId: pid,
         enrolledAt: new Date(2024, randInt(0, 11), randInt(1, 28)),
         status: 'Active',
+        grade: grades[code] ?? null,
       })
       programIds.push(pid)
     }
     enrollmentsByStudent.set(s._id.toString(), codes)
     studentProgramIds.set(s._id.toString(), programIds)
+    studentGrades.set(s._id.toString(), grades)
   }
   const enrollments = await Enrollment.insertMany(enrollmentDocs)
-  console.log('[seed] enrollments:', enrollments.length)
+  console.log('[seed] enrollments:', enrollments.length, '(incl. graded)')
 
   // ── Classes (with 25% institute share) ───────────────────────────────────
   const classDocs = [
@@ -356,6 +439,7 @@ async function main() {
         classId: c._id.toString(),
         enrolledAt: new Date(2025, randInt(0, 8), randInt(1, 28)),
         status: 'Active',
+        grade: null,
       })
     }
   }
@@ -385,7 +469,6 @@ async function main() {
         continue
       }
 
-      // Resolve expected window for this student on this day (in-memory)
       const expected = resolveExpectedFor(
         'Student',
         s._id.toString(),
@@ -398,17 +481,14 @@ async function main() {
       const r = Math.random()
       const status = r < 0.82 ? 'Present' : r < 0.9 ? 'Late' : r < 0.96 ? 'Absent' : 'Leave'
 
-      // If we have an expected start, base the check-in time around it; else fall back
       let checkIn: Date | null = null
       let checkOut: Date | null = null
       if (status !== 'Absent' && status !== 'Leave') {
         const baseIn = expected.expectedStart ?? new Date(d.getFullYear(), d.getMonth(), d.getDate(), 8, 30)
-        // Present: 0–9 min early, Late: 5–25 min after start
         const offsetMin = status === 'Late' ? randInt(5, 25) : -randInt(0, 9)
         checkIn = new Date(baseIn.getTime() + offsetMin * 60_000)
 
         const baseOut = expected.expectedEnd ?? new Date(d.getFullYear(), d.getMonth(), d.getDate(), 15, 30)
-        // 90% leave on time-ish, 10% pick up late / early
         const outRand = Math.random()
         if (outRand < 0.05) checkOut = new Date(baseOut.getTime() - randInt(5, 20) * 60_000)
         else if (outRand < 0.15) checkOut = new Date(baseOut.getTime() + randInt(5, 30) * 60_000)
@@ -500,9 +580,12 @@ async function main() {
     for (const s of activeStudents) {
       const codes = enrollmentsByStudent.get(s._id.toString()) || []
       if (codes.length === 0) continue
+      const grades = studentGrades.get(s._id.toString()) ?? {}
       const items = codes.map((code) => {
         const prog = progByCode[code]
-        return { programId: prog._id.toString(), amount: prog.monthlyFee, description: prog.name }
+        const g = grades[code]
+        const desc = g ? `${prog.name} · ${g}` : prog.name
+        return { programId: prog._id.toString(), amount: prog.monthlyFee, description: desc }
       })
       const amount = items.reduce((sum, it) => sum + it.amount, 0)
 
@@ -619,8 +702,6 @@ async function main() {
     { key: 'school_address', value: 'No. 42, Temple Road, Kandy' },
     { key: 'school_phone', value: '081 234 5678' },
     { key: 'school_email', value: 'info@sanomin.lk' },
-    // Late-arrival grace period (minutes) used by the timetable-aware
-    // attendance logic in helpers.ts → readGraceMinutes()
     { key: 'late_grace_minutes', value: String(GRACE_MINUTES) },
     {
       key: 'expense_budgets',
@@ -649,7 +730,25 @@ async function main() {
     const type = t.type === 'Internal' ? 'I' : 'E'
     byTeacherType[type] = (byTeacherType[type] ?? 0) + 1
   }
-  // Quick sanity — how many attendance rows got a non-null lateMinutes?
+
+  // Category counts (using Programme.category, not code)
+  const catById = new Map(programDocs.map((p) => [p._id.toString(), p.category]))
+  const catsByStudent = new Map<string, Set<string>>()
+  for (const e of enrollmentDocs) {
+    const cat = catById.get(e.programId)
+    if (!cat) continue
+    if (!catsByStudent.has(e.studentId)) catsByStudent.set(e.studentId, new Set())
+    catsByStudent.get(e.studentId)!.add(cat)
+  }
+  const catCounts = { all: 0, preschool: 0, daycare: 0, tuition: 0 }
+  for (const cats of catsByStudent.values()) {
+    catCounts.all++
+    if (cats.has('Preschool')) catCounts.preschool++
+    else if (cats.has('Daycare')) catCounts.daycare++
+    else catCounts.tuition++
+  }
+
+  const gradedEnrollCount = enrollmentDocs.filter((e) => e.grade != null).length
   const lateCount = attendanceDocs.filter((a) => a.lateMinutes != null && a.lateMinutes > 0).length
   const earlyOutCount = attendanceDocs.filter((a) => a.lateCheckoutMinutes != null && a.lateCheckoutMinutes > 0).length
 
@@ -660,6 +759,8 @@ async function main() {
     `\n  expenses=${expenses.length} announcements=${announcements.length} settings=${settings.length}`)
   console.log('  student IDs by year:', byStudentYear)
   console.log('  teacher IDs by type:', byTeacherType)
+  console.log('  student categories:', catCounts)
+  console.log('  graded enrollments (non-null grade):', gradedEnrollCount)
   console.log('  attendance late arrivals:', lateCount, '· late pickups:', earlyOutCount)
 
   await mongoose.disconnect()
