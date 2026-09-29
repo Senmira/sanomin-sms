@@ -32,12 +32,12 @@ import { api } from '@/lib/api'
 import { useSchoolInfo } from '@/lib/school'
 import {
   StudentRow,
+  ProgramRow,
   GENDERS,
   AGE_GROUPS,
   RELIGIONS,
   STUDENT_STATUS,
-  PROGRAM_LIST,
-  PROGRAM_COLORS,
+  StudentCategoryTab,
 } from '@/lib/types'
 import {
   initials,
@@ -98,8 +98,6 @@ import { Skeleton } from '@/components/ui/skeleton'
 // ─── Helpers ───────────────────────────────────────────────────────────────
 const PAGE_SIZE = 20
 
-type Category = 'all' | 'preschool' | 'daycare' | 'tuition'
-
 function toDateInput(iso?: string | null): string {
   if (!iso) return ''
   const d = new Date(iso)
@@ -142,7 +140,13 @@ function exportStudentsCsv(rows: StudentRow[]): void {
       r.religion || '',
       r.nationality || '',
       r.enrollments
-        .map((e) => e.program?.code)
+        .map((e) =>
+          e.program
+            ? e.grade
+              ? `${e.program.code} (${e.grade})`
+              : e.program.code
+            : null,
+        )
         .filter(Boolean)
         .join('|'),
       g?.name || '',
@@ -207,8 +211,11 @@ export function StudentsSection() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  // Dynamic programme list (for filter dropdown + dialog)
+  const [programs, setPrograms] = useState<ProgramRow[]>([])
+
   // ── Category tab ─────────────────────────────────────────────────────
-  const [category, setCategory] = useState<Category>('all')
+  const [category, setCategory] = useState<StudentCategoryTab>('all')
 
   // filters
   const [q, setQ] = useState('')
@@ -228,6 +235,22 @@ export function StudentsSection() {
   const [deleteTarget, setDeleteTarget] = useState<StudentRow | null>(null)
 
   const hasFilters = Boolean(q || program || ageGroup || gender || status)
+
+  // Load programmes once (for filter dropdown + dialog)
+  useEffect(() => {
+    let alive = true
+    api<{ data: ProgramRow[] }>('/api/programs?active=true')
+      .then((res) => {
+        if (!alive) return
+        setPrograms(res.data || [])
+      })
+      .catch(() => {
+        /* silent — filter just stays empty */
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
 
   const setFilter = useCallback(
     <K extends 'q' | 'program' | 'ageGroup' | 'gender' | 'status'>(
@@ -253,9 +276,8 @@ export function StudentsSection() {
     setPage(1)
   }, [])
 
-  // Category change → reset to page 1
   const handleCategoryChange = useCallback((v: string) => {
-    setCategory(v as Category)
+    setCategory(v as StudentCategoryTab)
     setPage(1)
   }, [])
 
@@ -272,7 +294,6 @@ export function StudentsSection() {
     return p.toString()
   }, [q, program, category, ageGroup, gender, status, page])
 
-  // Fetch list — debounced; setState only inside async callback
   useEffect(() => {
     let alive = true
     const t = setTimeout(() => {
@@ -318,7 +339,6 @@ export function StudentsSection() {
       })
   }, [queryParams])
 
-  // Action handlers
   const openAdd = useCallback(() => {
     setEditing(null)
     setAddEditOpen(true)
@@ -365,7 +385,7 @@ export function StudentsSection() {
         description="Manage student profiles, guardians, program enrollments and ID cards."
         icon={<Users className="h-5 w-5" />}
         actions={
-          <>
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <Button
               variant="outline"
               size="sm"
@@ -379,12 +399,12 @@ export function StudentsSection() {
               <Plus className="h-4 w-4" />
               Add Student
             </Button>
-          </>
+          </div>
         }
       />
 
       {/* Stats strip */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         <StatCard
           label="Total students"
           value={stats.totalStudents}
@@ -415,9 +435,9 @@ export function StudentsSection() {
         />
       </div>
 
-      {/* ── Category tabs ───────────────────────────────────────────── */}
+      {/* Category tabs */}
       <Tabs value={category} onValueChange={handleCategoryChange}>
-        <TabsList className="grid w-full grid-cols-4 sm:w-auto sm:inline-flex">
+        <TabsList className="grid w-full grid-cols-4 sm:inline-flex sm:w-auto">
           <TabsTrigger value="all" className="gap-1.5">
             All
             <span className="text-xs text-muted-foreground tabular-nums">
@@ -446,8 +466,8 @@ export function StudentsSection() {
       </Tabs>
 
       {/* Toolbar */}
-      <div className="flex flex-col gap-3 rounded-xl border bg-card p-3 shadow-sm sm:flex-row sm:items-center sm:gap-2 sm:p-4">
-        <div className="relative flex-1">
+      <div className="flex flex-col gap-3 rounded-xl border bg-card p-3 shadow-sm sm:p-4 lg:flex-row lg:items-center lg:gap-2">
+        <div className="relative min-w-0 flex-1">
           <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             placeholder="Search by name, ID, index no or barcode…"
@@ -456,19 +476,19 @@ export function StudentsSection() {
             className="pl-9"
           />
         </div>
-        <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:flex lg:flex-wrap">
           <Select
             value={program || 'ALL'}
             onValueChange={(v) => setFilter('program', v === 'ALL' ? '' : v)}
           >
-            <SelectTrigger className="w-full sm:w-[150px]">
+            <SelectTrigger className="w-full lg:w-[160px]">
               <SelectValue placeholder="Program" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="ALL">All programs</SelectItem>
-              {PROGRAM_LIST.map((p) => (
-                <SelectItem key={p} value={p}>
-                  {p}
+              {programs.map((p) => (
+                <SelectItem key={p.id} value={p.code}>
+                  {p.name}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -478,7 +498,7 @@ export function StudentsSection() {
             value={ageGroup || 'ALL'}
             onValueChange={(v) => setFilter('ageGroup', v === 'ALL' ? '' : v)}
           >
-            <SelectTrigger className="w-full sm:w-[120px]">
+            <SelectTrigger className="w-full lg:w-[130px]">
               <SelectValue placeholder="Age Group" />
             </SelectTrigger>
             <SelectContent>
@@ -495,7 +515,7 @@ export function StudentsSection() {
             value={gender || 'ALL'}
             onValueChange={(v) => setFilter('gender', v === 'ALL' ? '' : v)}
           >
-            <SelectTrigger className="w-full sm:w-[120px]">
+            <SelectTrigger className="w-full lg:w-[120px]">
               <SelectValue placeholder="Gender" />
             </SelectTrigger>
             <SelectContent>
@@ -512,7 +532,7 @@ export function StudentsSection() {
             value={status || 'ALL'}
             onValueChange={(v) => setFilter('status', v === 'ALL' ? '' : v)}
           >
-            <SelectTrigger className="w-full sm:w-[130px]">
+            <SelectTrigger className="w-full lg:w-[130px]">
               <SelectValue placeholder="Status" />
             </SelectTrigger>
             <SelectContent>
@@ -539,9 +559,9 @@ export function StudentsSection() {
       </div>
 
       {/* Data table */}
-      <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
-        <div className="max-h-[60vh] overflow-y-auto">
-          <Table className="table-zebra">
+      <div className="min-w-0 overflow-hidden rounded-xl border bg-card shadow-sm">
+        <div className="max-h-[60vh] overflow-auto">
+          <Table className="table-zebra min-w-[1000px]">
             <TableHeader className="sticky top-0 z-10 bg-muted/80 backdrop-blur">
               <TableRow>
                 <TableHead className="min-w-[200px]">Student</TableHead>
@@ -669,6 +689,7 @@ export function StudentsSection() {
       {addEditOpen && (
         <AddEditStudentDialog
           student={editing}
+          programs={programs}
           onClose={() => setAddEditOpen(false)}
           onSaved={(msg) => {
             toast.success(msg)
@@ -783,10 +804,16 @@ function StudentTableRow({
               e.program ? (
                 <span
                   key={e.id}
-                  className="inline-flex items-center rounded-md px-1.5 py-0.5 text-xs font-medium text-white"
+                  className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium text-white"
                   style={{ backgroundColor: e.program.color }}
+                  title={e.grade ? `${e.program.name} · ${e.grade}` : e.program.name}
                 >
                   {e.program.code}
+                  {e.grade && (
+                    <span className="rounded bg-white/20 px-1 text-[10px] font-semibold">
+                      {e.grade}
+                    </span>
+                  )}
                 </span>
               ) : null,
             )
@@ -858,6 +885,14 @@ interface GuardianEntry {
   isPrimary: boolean
 }
 
+// Per-programme enrolment draft inside the dialog:
+//   { programId, grade }
+// grade is '' when the programme has no grades (or the user hasn't picked yet).
+interface EnrollmentDraft {
+  programId: string
+  grade: string
+}
+
 interface FormState {
   fullName: string
   gender: string
@@ -920,12 +955,23 @@ function guardiansFromStudent(s: StudentRow): GuardianEntry[] {
   }))
 }
 
+function enrollmentsFromStudent(s: StudentRow): EnrollmentDraft[] {
+  return s.enrollments
+    .filter((e) => e.program !== null)
+    .map((e) => ({
+      programId: (e.program as NonNullable<typeof e.program>).id,
+      grade: e.grade || '',
+    }))
+}
+
 function AddEditStudentDialog({
   student,
+  programs,
   onClose,
   onSaved,
 }: {
   student: StudentRow | null
+  programs: ProgramRow[]
   onClose: () => void
   onSaved: (msg: string) => void
 }) {
@@ -937,10 +983,8 @@ function AddEditStudentDialog({
       ? guardiansFromStudent(student)
       : [{ name: '', phone: '', address: '', relationship: 'Guardian', isPrimary: true }],
   )
-  const [programCodes, setProgramCodes] = useState<string[]>(() =>
-    student
-      ? (student.enrollments.map((e) => e.program?.code).filter(Boolean) as string[])
-      : [],
+  const [enrollments, setEnrollments] = useState<EnrollmentDraft[]>(() =>
+    student ? enrollmentsFromStudent(student) : [],
   )
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -975,11 +1019,29 @@ function AddEditStudentDialog({
     setGuardians((gs) => gs.map((g, i) => ({ ...g, isPrimary: i === idx })))
   }
 
-  const toggleProgram = (code: string) => {
-    setProgramCodes((ps) =>
-      ps.includes(code) ? ps.filter((c) => c !== code) : [...ps, code],
+  // ─── Enrollment toggling ─────────────────────────────────────────────
+  const toggleProgram = useCallback(
+    (programId: string) => {
+      setEnrollments((prev) => {
+        const exists = prev.find((e) => e.programId === programId)
+        if (exists) {
+          return prev.filter((e) => e.programId !== programId)
+        }
+        const prog = programs.find((p) => p.id === programId)
+        return [
+          ...prev,
+          { programId, grade: prog?.hasGrades ? '' : '' /* still empty; sent as null */ },
+        ]
+      })
+    },
+    [programs],
+  )
+
+  const setGrade = useCallback((programId: string, grade: string) => {
+    setEnrollments((prev) =>
+      prev.map((e) => (e.programId === programId ? { ...e, grade } : e)),
     )
-  }
+  }, [])
 
   const handleSubmit = async () => {
     setErr(null)
@@ -990,6 +1052,15 @@ function AddEditStudentDialog({
     if (!form.gender) {
       setErr('Gender is required')
       return
+    }
+
+    // Validate grades for graded programmes
+    for (const e of enrollments) {
+      const prog = programs.find((p) => p.id === e.programId)
+      if (prog?.hasGrades && !e.grade.trim()) {
+        setErr(`Please choose a grade for ${prog.name}`)
+        return
+      }
     }
 
     const payload = {
@@ -1014,7 +1085,14 @@ function AddEditStudentDialog({
           relationship: g.relationship || 'Guardian',
           isPrimary: g.isPrimary,
         })),
-      programCodes,
+      // New payload shape: enrollments: [{ programId, grade }]
+      enrollments: enrollments.map((e) => {
+        const prog = programs.find((p) => p.id === e.programId)
+        return {
+          programId: e.programId,
+          grade: prog?.hasGrades ? e.grade.trim() || null : null,
+        }
+      }),
     }
 
     setSaving(true)
@@ -1043,7 +1121,7 @@ function AddEditStudentDialog({
 
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+      <DialogContent className="w-[95vw] max-h-[90vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{isEdit ? 'Edit student' : 'Add new student'}</DialogTitle>
           <DialogDescription>
@@ -1192,34 +1270,89 @@ function AddEditStudentDialog({
             </Field>
           </div>
 
+          {/* Program enrollments — dynamic list, grade picker per graded programme */}
           <div className="rounded-lg border bg-muted/30 p-3">
-            <p className="mb-2 text-sm font-medium">Program enrollments</p>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-              {PROGRAM_LIST.map((code) => {
-                const checked = programCodes.includes(code)
-                const color = PROGRAM_COLORS[code] || '#7c3aed'
-                return (
-                  <label
-                    key={code}
-                    className={`flex cursor-pointer items-center gap-2 rounded-md border bg-background p-2 text-sm transition hover:bg-accent ${
-                      checked ? 'border-primary/50 ring-1 ring-primary/30' : ''
-                    }`}
-                  >
-                    <Checkbox
-                      checked={checked}
-                      onCheckedChange={() => toggleProgram(code)}
-                    />
-                    <span
-                      className="size-2.5 rounded-full"
-                      style={{ backgroundColor: color }}
-                    />
-                    <span className="truncate">{code}</span>
-                  </label>
-                )
-              })}
+            <div className="mb-2 flex items-center justify-between">
+              <p className="text-sm font-medium">Program enrollments</p>
+              <p className="text-xs text-muted-foreground">
+                {enrollments.length} selected
+              </p>
             </div>
+            {programs.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                No active programmes available. Create one in the Programs section first.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {programs.map((p) => {
+                  const draft = enrollments.find((e) => e.programId === p.id)
+                  const checked = !!draft
+                  return (
+                    <div
+                      key={p.id}
+                      className={`rounded-md border bg-background p-2.5 transition ${
+                        checked ? 'border-primary/50 ring-1 ring-primary/20' : ''
+                      }`}
+                    >
+                      <label className="flex cursor-pointer items-center gap-2">
+                        <Checkbox
+                          checked={checked}
+                          onCheckedChange={() => toggleProgram(p.id)}
+                        />
+                        <span
+                          className="size-2.5 rounded-full"
+                          style={{ backgroundColor: p.color }}
+                        />
+                        <span className="text-sm font-medium">{p.name}</span>
+                        <span className="font-mono text-[10px] text-muted-foreground">
+                          {p.code}
+                        </span>
+                        {p.hasGrades && (
+                          <Badge
+                            variant="outline"
+                            className="ml-auto text-[10px] text-muted-foreground"
+                          >
+                            {p.grades.length} grade{p.grades.length === 1 ? '' : 's'}
+                          </Badge>
+                        )}
+                      </label>
+
+                      {/* Grade picker — only for graded programmes when checked */}
+                      {checked && p.hasGrades && (
+                        <div className="mt-2 flex items-center gap-2 pl-7">
+                          <Label className="shrink-0 text-xs text-muted-foreground">
+                            Grade:
+                          </Label>
+                          <Select
+                            value={draft!.grade || ''}
+                            onValueChange={(v) => setGrade(p.id, v)}
+                          >
+                            <SelectTrigger className="h-8 w-full max-w-[180px] text-xs">
+                              <SelectValue placeholder="Choose grade…" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {p.grades.map((g) => (
+                                <SelectItem key={g} value={g}>
+                                  {g}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          {!draft!.grade && (
+                            <span className="text-[11px] text-amber-600 dark:text-amber-400">
+                              Required
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
           </div>
 
+          {/* Guardians */}
           <div className="rounded-lg border bg-muted/30 p-3">
             <div className="mb-2 flex items-center justify-between">
               <p className="text-sm font-medium">Guardians / Parents</p>
@@ -1366,7 +1499,7 @@ function ProfileDialog({
 
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+      <DialogContent className="w-[95vw] max-h-[90vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Student profile</DialogTitle>
           <DialogDescription>
@@ -1401,10 +1534,15 @@ function ProfileDialog({
                 e.program ? (
                   <span
                     key={e.id}
-                    className="inline-flex items-center rounded-md px-1.5 py-0.5 text-xs font-medium text-white"
+                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium text-white"
                     style={{ backgroundColor: e.program.color }}
                   >
                     {e.program.code}
+                    {e.grade && (
+                      <span className="rounded bg-white/20 px-1 text-[10px] font-semibold">
+                        {e.grade}
+                      </span>
+                    )}
                   </span>
                 ) : null,
               )}
@@ -1551,6 +1689,14 @@ function ProfileDialog({
                         <span className="text-xs text-muted-foreground">
                           ({e.program.code})
                         </span>
+                        {e.grade && (
+                          <Badge
+                            variant="outline"
+                            className="text-[10px] font-semibold"
+                          >
+                            {e.grade}
+                          </Badge>
+                        )}
                       </div>
                     ) : null,
                   )}
@@ -1691,7 +1837,7 @@ function IdCardDialog({
 
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="w-[95vw] sm:max-w-md">
         <DialogHeader className="no-print">
           <DialogTitle>Student ID card</DialogTitle>
           <DialogDescription>
@@ -1744,10 +1890,15 @@ function IdCardDialog({
                   e.program ? (
                     <span
                       key={e.id}
-                      className="inline-flex items-center rounded px-1 py-0.5 text-[10px] font-semibold text-white"
+                      className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-[10px] font-semibold text-white"
                       style={{ backgroundColor: e.program.color }}
                     >
                       {e.program.code}
+                      {e.grade && (
+                        <span className="rounded bg-black/20 px-1 text-[9px]">
+                          {e.grade}
+                        </span>
+                      )}
                     </span>
                   ) : null,
                 )}
