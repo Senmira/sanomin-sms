@@ -903,9 +903,6 @@ interface GuardianEntry {
   isPrimary: boolean
 }
 
-// Per-programme enrolment draft inside the dialog. classId is optional and
-// may be null. Student grade is auto-filled from the chosen class's pinned
-// grade, but the user can override it manually.
 interface EnrollmentDraft {
   programId: string
   classId: string | null
@@ -1099,7 +1096,6 @@ function AddEditStudentDialog({
           relationship: g.relationship || 'Guardian',
           isPrimary: g.isPrimary,
         })),
-      // New payload shape: enrollments: [{ programId, classId }]
       enrollments: enrollments.map((e) => ({
         programId: e.programId,
         classId: e.classId || null,
