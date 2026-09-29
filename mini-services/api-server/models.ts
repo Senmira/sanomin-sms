@@ -25,6 +25,13 @@ const nullStr = { type: String, default: null }
 const nullDate = { type: Date, default: null }
 
 // ─── Program ────────────────────────────────────────────────────────────────
+// Fully admin-managed. No magic codes. Two extra concepts:
+//   • category   — 'Preschool' | 'Daycare' | 'Tuition'. Drives the Student
+//                  section tabs (All / Preschool / Daycare / Tuition).
+//   • hasGrades + grades — a programme may have a fixed set of grade labels
+//                  (e.g. "Grade 1" … "Grade 11" for Maths). Students pick a
+//                  grade when enrolling. If hasGrades is false, grades is
+//                  ignored and enrollment.grade stays null.
 const ProgramSchema = new Schema(
   {
     code: { type: String, required: true, unique: true },
@@ -33,6 +40,10 @@ const ProgramSchema = new Schema(
     color: { type: String, default: '#7c3aed' },
     monthlyFee: { type: Number, default: 0 },
     active: { type: Boolean, default: true },
+    // ── new ──
+    category: { type: String, default: 'Tuition' },
+    hasGrades: { type: Boolean, default: false },
+    grades: { type: [String], default: [] },
   },
   { timestamps: true },
 )
@@ -142,13 +153,18 @@ const ClassSchema = new Schema(
 )
 
 // ─── Enrollment ─────────────────────────────────────────────────────────────
+// grade — only meaningful when the linked Programme has hasGrades: true.
+//   Validated in routes/people.ts against Program.grades; cleared server-side
+//   when the Programme's grade list shrinks or hasGrades turns off.
 const EnrollmentSchema = new Schema(
   {
     studentId: { type: String, required: true, ref: 'Student' },
     programId: { type: String, default: null, ref: 'Program' },
-    classId: { type: String, default: null, ref: 'Class'},
+    classId: { type: String, default: null, ref: 'Class' },
     enrolledAt: { type: Date, default: Date.now },
     status: { type: String, default: 'Active' },
+    // ── new ──
+    grade: { type: String, default: null },
   },
   { timestamps: true },
 )
