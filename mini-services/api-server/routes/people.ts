@@ -8,6 +8,9 @@ import { ah, qs, containsRe, round2 } from '../helpers'
 
 const r = Router()
 
+// ─── Age bands (fixed) ──────────────────────────────────────────────────────
+const VALID_AGE_GROUPS = new Set(['1-3', '3-5', '5-10', '10-15', '15-17', '17-19'])
+
 // ─── shared serialization ───────────────────────────────────────────────────
 async function studentRelMaps(studentIds: string[], orderGuardians: boolean) {
   const [guardians, enrollments, attendanceCounts] = await Promise.all([
@@ -19,6 +22,7 @@ async function studentRelMaps(studentIds: string[], orderGuardians: boolean) {
     studentIds.length
       ? Enrollment.find({ studentId: { $in: studentIds } })
           .populate('programId', 'code name color category hasGrades grades')
+          .populate('classId', 'name dayOfWeek startTime endTime grade')
           .lean()
       : [],
     studentIds.length
@@ -54,6 +58,7 @@ function serializeStudent(s: any, maps: Awaited<ReturnType<typeof studentRelMaps
     gender: s.gender,
     dob: s.dob ? new Date(s.dob).toISOString() : null,
     ageGroup: s.ageGroup ?? null,
+    grade: s.grade ?? null,
     admissionDate: s.admissionDate ? new Date(s.admissionDate).toISOString() : null,
     religion: s.religion ?? null,
     nationality: s.nationality ?? null,
@@ -71,7 +76,6 @@ function serializeStudent(s: any, maps: Awaited<ReturnType<typeof studentRelMaps
     })),
     enrollments: (maps.eMap.get(id) || []).map((e: any) => ({
       id: e._id.toString(),
-      grade: e.grade ?? null,
       program: e.programId
         ? {
             id: e.programId._id.toString(),
@@ -83,6 +87,16 @@ function serializeStudent(s: any, maps: Awaited<ReturnType<typeof studentRelMaps
             grades: Array.isArray(e.programId.grades) ? e.programId.grades : [],
           }
         : null,
+      class: e.classId
+        ? {
+            id: e.classId._id.toString(),
+            name: e.classId.name,
+            dayOfWeek: e.classId.dayOfWeek ?? null,
+            startTime: e.classId.startTime ?? null,
+            endTime: e.classId.endTime ?? null,
+            grade: e.classId.grade ?? null,
+          }
+        : null,
     })),
     _count: { attendance: maps.aMap.get(id) || 0 },
   }
@@ -90,20 +104,9 @@ function serializeStudent(s: any, maps: Awaited<ReturnType<typeof studentRelMaps
 
 // ─── ID generation ──────────────────────────────────────────────────────────
 //
-// IDs are OPAQUE, IMMUTABLE, and programme-agnostic. All programme information
-// lives in the Enrollment collection — never encoded in the ID.
-//
-// Student:   S<YY><NNNN>   e.g. S240001, S240002, S250001
-//   S    = Student
-//   YY   = 2-digit year of admission
-//   NNNN = 4-digit sequence within (S, YY)
-//
-// Teacher:   I<YY><NNN>    (Internal)  e.g. I24001, I24002, I25001
-//            E<YY><NNN>    (External)  e.g. E24001, E24002, E25001
-//   YY   = 2-digit year of hire
-//   NNN  = 3-digit sequence within (I|E, YY)
-//
-// Barcode = studentId exactly (no SAN prefix).
+// Student:   S<YY><NNNN>   e.g. S240001
+// Teacher:   I<YY><NNN>    (Internal)  |  E<YY><NNN>  (External)
+// Barcode = studentId exactly.
 
 function computeYear2(d: Date | null): string {
   const dt = d && !isNaN(d.getTime()) ? d : new Date()
@@ -112,10 +115,7 @@ function computeYear2(d: Date | null): string {
 
 async function nextStudentId(admissionDate: Date | null): Promise<string> {
   const prefix = `S${computeYear2(admissionDate)}`
-  const existing = await Student.find(
-    { studentId: { $regex: `^${prefix}` } },
-    'studentId',
-  ).lean()
+  const existing = await Student.find({ studentId: { $regex: `^${prefix}` } }, 'studentId').lean()
   let max = 0
   for (const s of existing as any[]) {
     const num = parseInt(s.studentId.slice(prefix.length), 10)
@@ -129,10 +129,7 @@ async function nextTeacherId(
   hireDate: Date | null,
 ): Promise<string> {
   const prefix = `${type === 'Internal' ? 'I' : 'E'}${computeYear2(hireDate)}`
-  const existing = await Teacher.find(
-    { teacherId: { $regex: `^${prefix}` } },
-    'teacherId',
-  ).lean()
+  const existing = await Teacher.find({ teacherId: { $regex: `^${prefix}` } }, 'teacherId').lean()
   let max = 0
   for (const t of existing as any[]) {
     const num = parseInt(t.teacherId.slice(prefix.length), 10)
@@ -141,63 +138,12 @@ async function nextTeacherId(
   return `${prefix}${String(max + 1).padStart(3, '0')}`
 }
 
-// ─── Student category bucketing ─────────────────────────────────────────────
+// ─── Enrolment resolution (programme + optional class) ──────────────────────
 //
-// Reads the Programme's `category` field (Preschool | Daycare | Tuition), NOT
-// the code. Renaming a programme (e.g. PRESCHOOL → NURSERY) does not affect
-// the tabs, so long as its category stays 'Preschool'.
-//
-// A student with BOTH Preschool and Daycare lands in `preschool` (Preschool
-// wins — it's the more specific category).
-type StudentBucket = 'preschool' | 'daycare' | 'tuition'
-
-async function computeStudentCategories(): Promise<{
-  bucketByStudent: Map<string, StudentBucket>
-  counts: { all: number; preschool: number; daycare: number; tuition: number }
-}> {
-  const [programs, enrollments] = await Promise.all([
-    Program.find({}, 'category').lean(),
-    Enrollment.find({ status: 'Active' }, 'studentId programId').lean(),
-  ])
-
-  const catById = new Map<string, string>()
-  for (const p of programs as any[]) catById.set(p._id.toString(), String(p.category ?? 'Tuition'))
-
-  const catsByStudent = new Map<string, Set<string>>()
-  for (const e of enrollments as any[]) {
-    if (!e.programId) continue
-    const cat = catById.get(e.programId)
-    if (!cat) continue
-    if (!catsByStudent.has(e.studentId)) catsByStudent.set(e.studentId, new Set())
-    catsByStudent.get(e.studentId)!.add(cat)
-  }
-
-  const bucketByStudent = new Map<string, StudentBucket>()
-  const counts = { all: 0, preschool: 0, daycare: 0, tuition: 0 }
-  for (const [sid, cats] of catsByStudent) {
-    let bucket: StudentBucket
-    if (cats.has('Preschool')) bucket = 'preschool'
-    else if (cats.has('Daycare')) bucket = 'daycare'
-    else bucket = 'tuition'
-    bucketByStudent.set(sid, bucket)
-    counts.all++
-    counts[bucket]++
-  }
-
-  return { bucketByStudent, counts }
-}
-
-// ─── Enrolment resolution with grade validation ─────────────────────────────
-// Accepts the new shape:
-//   enrollments: [{ programId: "...", grade: "Grade 5" | null }, ...]
-// Falls back to the legacy shape when only `programCodes` is supplied:
-//   programCodes: ["MATHS", "DANCING", ...]  → grade always null
-//
-// Validation:
-//   • programme must exist
-//   • if programme.hasGrades is true, `grade` must be one of programme.grades
-//   • duplicates are silently deduped (first wins)
-type EnrollInput = { programId: string; grade: string | null }
+// Each enrolment is a (programId, classId) pair. classId may be null. The
+// same programme can appear multiple times with different classes.
+// Grade is NOT validated here — it lives on the Student, not the enrolment.
+type EnrollInput = { programId: string; classId: string | null }
 
 async function resolveEnrollments(raw: unknown): Promise<
   { error: string } | { list: EnrollInput[] }
@@ -208,51 +154,29 @@ async function resolveEnrollments(raw: unknown): Promise<
   for (const r of raw) {
     const programId = String((r as any)?.programId ?? '').trim()
     if (!programId) continue
-    if (seen.has(programId)) continue
-    seen.add(programId)
+    const classRaw = (r as any)?.classId
+    const classId = classRaw ? String(classRaw).trim() : null
 
-    const prog: any = await Program.findById(programId).lean()
-    if (!prog) return { error: `Program ${programId} not found` }
+    const key = `${programId}|${classId ?? ''}`
+    if (seen.has(key)) continue
+    seen.add(key)
 
-    let grade: string | null = null
-    if (prog.hasGrades) {
-      const g = String((r as any)?.grade ?? '').trim()
-      if (!g) return { error: `Grade is required for ${prog.name}` }
-      const allowed: string[] = Array.isArray(prog.grades) ? prog.grades : []
-      const matched = allowed.find((x) => x.toLowerCase() === g.toLowerCase())
-      if (!matched) return { error: `Grade "${g}" is not valid for ${prog.name}` }
-      grade = matched
+    const prog = await Program.findById(programId).lean()
+    if (!prog) return { error: `Programme ${programId} not found` }
+
+    if (classId) {
+      const cls = await Class.findById(classId).lean()
+      if (!cls) return { error: 'Selected class not found' }
+      if ((cls as any).programId && (cls as any).programId !== programId) {
+        return { error: `Class "${(cls as any).name}" is not part of ${(prog as any).name}` }
+      }
     }
-    list.push({ programId, grade })
+    list.push({ programId, classId })
   }
   return { list }
 }
 
-// Legacy resolver: takes programCodes → EnrollInput[] with grade always null,
-// but refuses graded programmes so the caller knows to use the new shape.
-async function resolveLegacyProgramCodes(raw: unknown): Promise<
-  { error: string } | { list: EnrollInput[] }
-> {
-  if (!Array.isArray(raw)) return { list: [] }
-  const codes = raw.filter(Boolean)
-  if (codes.length === 0) return { list: [] }
-  const progs: any[] = await Program.find({ code: { $in: codes } }).lean()
-  if (progs.length !== codes.length) {
-    const found = new Set(progs.map((p) => p.code))
-    const missing = codes.filter((c: string) => !found.has(c))
-    return { error: `Unknown program codes: ${missing.join(', ')}` }
-  }
-  const list: EnrollInput[] = []
-  for (const p of progs) {
-    if (p.hasGrades) {
-      return { error: `Grade is required for ${p.name} — use the enrollments form` }
-    }
-    list.push({ programId: p._id.toString(), grade: null })
-  }
-  return { list }
-}
-
-// ─── GET /api/students/lookup?barcode= | ?studentId= (BEFORE /:id) ──────────
+// ─── GET /api/students/lookup?barcode= | ?studentId= ────────────────────────
 r.get('/students/lookup', ah(async (req, res) => {
   const p = qs(req)
   const barcode = p.get('barcode')?.trim()
@@ -271,18 +195,11 @@ r.get('/students/lookup', ah(async (req, res) => {
 }))
 
 // ─── GET /api/students ──────────────────────────────────────────────────────
-//
-// Query params:
-//   q         — free text on name/ID/indexNo/barcode
-//   program   — exact programme code (e.g. PRESCHOOL)
-//   category  — "preschool" | "daycare" | "tuition" | "all" (default all)
-//               classification reads Programme.category, not code
-//   ageGroup, gender, status, page, limit
 r.get('/students', ah(async (req, res) => {
   const p = qs(req)
   const q = p.get('q')?.trim() || ''
   const program = p.get('program') || ''
-  const category = p.get('category')?.trim() || ''
+  const category = p.get('category')?.trim().toLowerCase() || ''
   const ageGroup = p.get('ageGroup') || ''
   const gender = p.get('gender') || ''
   const status = p.get('status') || ''
@@ -302,40 +219,26 @@ r.get('/students', ah(async (req, res) => {
   if (gender) where.gender = gender
   if (status) where.status = status
 
-  // ─── Programme filter (exact code match) ─────────────────────────────
-  let programmeStudentIds: string[] | null = null
+  // Category filter — uses Programme.category (Preschool | Daycare | Tuition)
+  if (category && category !== 'all') {
+    const catName = category === 'preschool' ? 'Preschool'
+      : category === 'daycare' ? 'Daycare'
+      : 'Tuition'
+    const progs = await Program.find({ category: catName }, '_id').lean()
+    const pids = (progs as any[]).map((x) => x._id.toString())
+    const enr = await Enrollment.find(
+      { programId: { $in: pids }, status: 'Active' },
+      'studentId',
+    ).lean()
+    where._id = { $in: [...new Set((enr as any[]).map((e) => e.studentId))] }
+  }
+
+  // Legacy single-programme filter
   if (program) {
     const prog = await Program.findOne({ code: program }, '_id').lean()
     const pid = prog ? (prog as any)._id.toString() : '___none___'
     const enr = await Enrollment.find({ programId: pid }, 'studentId').lean()
-    programmeStudentIds = (enr as any[]).map((e) => e.studentId)
-  }
-
-  // ─── Category filter (Programme.category + precedence) ───────────────
-  let categoryStudentIds: string[] | null = null
-  let categoryCounts = { all: 0, preschool: 0, daycare: 0, tuition: 0 }
-  {
-    const { bucketByStudent, counts } = await computeStudentCategories()
-    categoryCounts = counts
-    if (category && category !== 'all') {
-      categoryStudentIds = [...bucketByStudent.entries()]
-        .filter(([, b]) => b === category)
-        .map(([sid]) => sid)
-    }
-  }
-
-  // ─── Merge _id filters (programme AND category) ──────────────────────
-  let idIntersection: string[] | null = null
-  if (programmeStudentIds !== null && categoryStudentIds !== null) {
-    const catSet = new Set(categoryStudentIds)
-    idIntersection = programmeStudentIds.filter((id) => catSet.has(id))
-  } else if (programmeStudentIds !== null) {
-    idIntersection = programmeStudentIds
-  } else if (categoryStudentIds !== null) {
-    idIntersection = categoryStudentIds
-  }
-  if (idIntersection !== null) {
-    where._id = { $in: idIntersection }
+    where._id = { $in: (enr as any[]).map((e) => e.studentId) }
   }
 
   const monthStart = new Date()
@@ -357,6 +260,31 @@ r.get('/students', ah(async (req, res) => {
 
   const ids = (rows as any[]).map((s) => s._id.toString())
   const maps = await studentRelMaps(ids, false)
+
+  // Category counts across ALL students (ignores current filters)
+  const allProgs = await Program.find({}, 'category _id').lean()
+  const progIdToCat = new Map(
+    (allProgs as any[]).map((x) => [x._id.toString(), x.category ?? 'Tuition']),
+  )
+  const allActiveEnrolls = await Enrollment.find(
+    { status: 'Active' },
+    'studentId programId',
+  ).lean()
+  const studentCats = new Map<string, Set<string>>()
+  for (const e of allActiveEnrolls as any[]) {
+    if (!e.programId) continue
+    const cat = progIdToCat.get(e.programId) ?? 'Tuition'
+    if (!studentCats.has(e.studentId)) studentCats.set(e.studentId, new Set())
+    studentCats.get(e.studentId)!.add(cat)
+  }
+  const byCategory = { all: 0, preschool: 0, daycare: 0, tuition: 0 }
+  for (const cats of studentCats.values()) {
+    byCategory.all++
+    if (cats.has('Preschool')) byCategory.preschool++
+    else if (cats.has('Daycare')) byCategory.daycare++
+    else byCategory.tuition++
+  }
+
   res.json({
     data: (rows as any[]).map((s) => serializeStudent(s, maps)),
     total,
@@ -367,7 +295,7 @@ r.get('/students', ah(async (req, res) => {
       activeStudents,
       newThisMonth,
       filteredCount: total,
-      byCategory: categoryCounts,
+      byCategory,
     },
   })
 }))
@@ -380,18 +308,13 @@ r.post('/students', ah(async (req, res) => {
   if (!fullName) return res.status(400).json({ error: 'fullName is required' })
   if (!gender) return res.status(400).json({ error: 'gender is required' })
 
-  // Accept the new `enrollments: [{ programId, grade }]` shape, or the legacy
-  // `programCodes: ["MATHS", ...]` shape (non-graded programmes only).
-  let enrollmentsToCreate: EnrollInput[] = []
-  if (Array.isArray(body.enrollments)) {
-    const resolved = await resolveEnrollments(body.enrollments)
-    if ('error' in resolved) return res.status(400).json({ error: resolved.error })
-    enrollmentsToCreate = resolved.list
-  } else if (Array.isArray(body.programCodes) && body.programCodes.length > 0) {
-    const resolved = await resolveLegacyProgramCodes(body.programCodes)
-    if ('error' in resolved) return res.status(400).json({ error: resolved.error })
-    enrollmentsToCreate = resolved.list
+  const ageGroup = String(body.ageGroup ?? '').trim()
+  if (ageGroup && !VALID_AGE_GROUPS.has(ageGroup)) {
+    return res.status(400).json({ error: `ageGroup must be one of ${[...VALID_AGE_GROUPS].join(', ')}` })
   }
+
+  const enrollmentsToCreate = await resolveEnrollments(body.enrollments ?? [])
+  if ('error' in enrollmentsToCreate) return res.status(400).json({ error: enrollmentsToCreate.error })
 
   const parseDate = (v?: string | null): Date | null => {
     if (!v) return null
@@ -401,16 +324,16 @@ r.post('/students', ah(async (req, res) => {
 
   const admissionDate = parseDate(body.admissionDate) || new Date()
   const studentId = await nextStudentId(admissionDate)
-  const barcode = studentId
 
   const created = await Student.create({
     studentId,
-    barcode,
+    barcode: studentId,
     fullName,
     gender,
     indexNo: body.indexNo?.trim() || null,
     dob: parseDate(body.dob),
-    ageGroup: body.ageGroup || null,
+    ageGroup: ageGroup || null,
+    grade: body.grade?.trim() || null,
     admissionDate,
     religion: body.religion || null,
     nationality: body.nationality || null,
@@ -434,13 +357,13 @@ r.post('/students', ah(async (req, res) => {
     }))
   if (guardians.length) await Guardian.insertMany(guardians)
 
-  if (enrollmentsToCreate.length) {
+  if (enrollmentsToCreate.list.length) {
     await Enrollment.insertMany(
-      enrollmentsToCreate.map((e) => ({
+      enrollmentsToCreate.list.map((e) => ({
         studentId: (created as any)._id.toString(),
         programId: e.programId,
+        classId: e.classId,
         status: 'Active',
-        grade: e.grade ?? null,
       })),
     )
   }
@@ -459,9 +382,6 @@ r.get('/students/:id', ah(async (req, res) => {
 }))
 
 // ─── PUT /api/students/:id ──────────────────────────────────────────────────
-// NOTE: studentId is NOT regenerated on update — the ID is immutable for the
-// life of the student. Changing programmes only changes enrollments; it does
-// not change the ID, barcode, or existing references.
 r.put('/students/:id', ah(async (req, res) => {
   const existing = await Student.findById(req.params.id)
   if (!existing) return res.status(404).json({ error: 'Student not found' })
@@ -473,17 +393,15 @@ r.put('/students/:id', ah(async (req, res) => {
   if (body.gender !== undefined && !body.gender.trim()) {
     return res.status(400).json({ error: 'gender cannot be empty' })
   }
+  if (body.ageGroup !== undefined && body.ageGroup && !VALID_AGE_GROUPS.has(String(body.ageGroup))) {
+    return res.status(400).json({ error: `ageGroup must be one of ${[...VALID_AGE_GROUPS].join(', ')}` })
+  }
 
-  // Pre-resolve enrollments so we can bail before any writes on validation error
-  let enrollmentsToWrite: EnrollInput[] | null = null
-  if (Array.isArray(body.enrollments)) {
+  let toCreate: EnrollInput[] | null = null
+  if (body.enrollments !== undefined) {
     const resolved = await resolveEnrollments(body.enrollments)
     if ('error' in resolved) return res.status(400).json({ error: resolved.error })
-    enrollmentsToWrite = resolved.list
-  } else if (Array.isArray(body.programCodes)) {
-    const resolved = await resolveLegacyProgramCodes(body.programCodes)
-    if ('error' in resolved) return res.status(400).json({ error: resolved.error })
-    enrollmentsToWrite = resolved.list
+    toCreate = resolved.list
   }
 
   const parseDate = (v?: string | null): Date | null => {
@@ -497,6 +415,7 @@ r.put('/students/:id', ah(async (req, res) => {
   if (body.indexNo !== undefined) existing.indexNo = body.indexNo?.trim() || null
   if (body.dob !== undefined) existing.dob = parseDate(body.dob)
   if (body.ageGroup !== undefined) existing.ageGroup = body.ageGroup || null
+  if (body.grade !== undefined) existing.grade = body.grade?.trim() || null
   if (body.admissionDate !== undefined) existing.admissionDate = parseDate(body.admissionDate)
   if (body.religion !== undefined) existing.religion = body.religion || null
   if (body.nationality !== undefined) existing.nationality = body.nationality || null
@@ -523,15 +442,15 @@ r.put('/students/:id', ah(async (req, res) => {
     if (newGuardians.length) await Guardian.insertMany(newGuardians)
   }
 
-  if (enrollmentsToWrite !== null) {
+  if (toCreate !== null) {
     await Enrollment.deleteMany({ studentId: req.params.id })
-    if (enrollmentsToWrite.length) {
+    if (toCreate.length) {
       await Enrollment.insertMany(
-        enrollmentsToWrite.map((e) => ({
+        toCreate.map((e) => ({
           studentId: req.params.id,
           programId: e.programId,
+          classId: e.classId,
           status: 'Active',
-          grade: e.grade ?? null,
         })),
       )
     }
@@ -614,9 +533,7 @@ function serializeTeacher(t: any, rel: Awaited<ReturnType<typeof teacherRelData>
     allowances: t.allowances,
     epfNo: t.epfNo ?? null,
     salaryNote: t.salaryNote ?? null,
-    lastActive: lastAtt
-      ? new Date(lastAtt.checkIn ?? lastAtt.date).toISOString()
-      : null,
+    lastActive: lastAtt ? new Date(lastAtt.checkIn ?? lastAtt.date).toISOString() : null,
     classes: (rel.cMap.get(id) || [])
       .slice()
       .sort((a: any, b: any) => (a.name || '').localeCompare(b.name || ''))
@@ -625,6 +542,7 @@ function serializeTeacher(t: any, rel: Awaited<ReturnType<typeof teacherRelData>
         name: c.name,
         dayOfWeek: c.dayOfWeek ?? null,
         startTime: c.startTime ?? null,
+        grade: c.grade ?? null,
         ...(detailed
           ? {
               endTime: c.endTime ?? null,
@@ -644,12 +562,10 @@ function serializeTeacher(t: any, rel: Awaited<ReturnType<typeof teacherRelData>
   }
 }
 
-// ─── GET /api/teachers/lookup?fingerprintId= (BEFORE /:id) ──────────────────
+// ─── GET /api/teachers/lookup?fingerprintId= ────────────────────────────────
 r.get('/teachers/lookup', ah(async (req, res) => {
   const fingerprintId = qs(req).get('fingerprintId')?.trim()
-  if (!fingerprintId) {
-    return res.status(400).json({ error: 'Provide ?fingerprintId= query parameter' })
-  }
+  if (!fingerprintId) return res.status(400).json({ error: 'Provide ?fingerprintId= query parameter' })
   const teacher = await Teacher.findOne({ fingerprintId }).lean()
   if (!teacher) return res.status(404).json({ error: 'No teacher matches that fingerprint ID' })
   const rel = await teacherRelData([(teacher as any)._id.toString()])
@@ -692,13 +608,7 @@ r.get('/teachers', ah(async (req, res) => {
     total,
     page,
     limit,
-    stats: {
-      totalTeachers,
-      internalCount,
-      externalCount,
-      onLeaveCount,
-      filteredCount: total,
-    },
+    stats: { totalTeachers, internalCount, externalCount, onLeaveCount, filteredCount: total },
   })
 }))
 
@@ -725,7 +635,6 @@ r.post('/teachers', ah(async (req, res) => {
     return isNaN(d.getTime()) ? null : d
   }
 
-  // Parse hireDate FIRST so it can drive both the ID and the stored value.
   const hireDate = parseDate(body.hireDate)
   const teacherId = await nextTeacherId(type as 'Internal' | 'External', hireDate)
 
@@ -810,8 +719,6 @@ r.put('/teachers/:id', ah(async (req, res) => {
   if (body.epfNo !== undefined) existing.epfNo = body.epfNo?.trim() || null
   if (body.salaryNote !== undefined) existing.salaryNote = body.salaryNote?.trim() || null
   if (body.fingerprintId !== undefined) existing.fingerprintId = body.fingerprintId?.trim() || null
-  // NOTE: teacherId is NOT regenerated on update — even if `type` changes.
-  // The ID is immutable for the life of the teacher.
 
   await existing.save()
   const doc = await Teacher.findById(req.params.id).lean()
@@ -819,7 +726,7 @@ r.put('/teachers/:id', ah(async (req, res) => {
   res.json(serializeTeacher(doc, rel, true))
 }))
 
-// ─── DELETE /api/teachers/:id (classes → unassigned, attendance cascades) ───
+// ─── DELETE /api/teachers/:id ───────────────────────────────────────────────
 r.delete('/teachers/:id', ah(async (req, res) => {
   const existing = await Teacher.findById(req.params.id).lean()
   if (!existing) return res.status(404).json({ error: 'Teacher not found' })
@@ -830,12 +737,7 @@ r.delete('/teachers/:id', ah(async (req, res) => {
     PayrollRecord.deleteMany({ teacherId: id }),
   ])
   await Teacher.deleteOne({ _id: (existing as any)._id })
-  res.json({
-    ok: true,
-    id,
-    fullName: (existing as any).fullName,
-    teacherId: (existing as any).teacherId,
-  })
+  res.json({ ok: true, id, fullName: (existing as any).fullName, teacherId: (existing as any).teacherId })
 }))
 
 // ─── Classes ────────────────────────────────────────────────────────────────
@@ -864,6 +766,7 @@ function serializeClass(c: any, eMap: Map<string, number>) {
     capacity: c.capacity,
     fee: c.fee,
     instituteSharePct: c.instituteSharePct,
+    grade: c.grade ?? null,
     active: c.active,
     notes: c.notes ?? null,
     program: c.programId
@@ -872,6 +775,7 @@ function serializeClass(c: any, eMap: Map<string, number>) {
           code: c.programId.code,
           name: c.programId.name,
           color: c.programId.color,
+          category: c.programId.category ?? 'Tuition',
         }
       : null,
     teacher: c.teacherId
@@ -912,7 +816,7 @@ r.get('/classes', ah(async (req, res) => {
   const [total, rows] = await Promise.all([
     Class.countDocuments(where),
     Class.find(where)
-      .populate('programId', 'code name color')
+      .populate('programId', 'code name color category')
       .populate('teacherId', 'teacherId fullName type')
       .lean(),
   ])
@@ -961,12 +865,13 @@ r.post('/classes', ah(async (req, res) => {
       typeof body.instituteSharePct === 'number' && !isNaN(body.instituteSharePct)
         ? Math.min(100, Math.max(0, body.instituteSharePct))
         : 25,
+    grade: body.grade?.trim() || null,
     active: body.active ?? true,
     notes: body.notes?.trim() || null,
   })
 
   const doc = await Class.findById((created as any)._id)
-    .populate('programId', 'code name color')
+    .populate('programId', 'code name color category')
     .populate('teacherId', 'teacherId fullName type')
     .lean()
   const { eMap } = await classRelMaps([doc as any])
@@ -976,7 +881,7 @@ r.post('/classes', ah(async (req, res) => {
 // ─── GET /api/classes/:id ───────────────────────────────────────────────────
 r.get('/classes/:id', ah(async (req, res) => {
   const cls = await Class.findById(req.params.id)
-    .populate('programId', 'code name color')
+    .populate('programId', 'code name color category')
     .populate('teacherId', 'teacherId fullName type')
     .lean()
   if (!cls) return res.status(404).json({ error: 'Class not found' })
@@ -1026,12 +931,13 @@ r.put('/classes/:id', ah(async (req, res) => {
         ? Math.min(100, Math.max(0, body.instituteSharePct))
         : 25
   }
+  if (body.grade !== undefined) existing.grade = body.grade?.trim() || null
   if (body.active !== undefined) existing.active = Boolean(body.active)
   if (body.notes !== undefined) existing.notes = body.notes?.trim() || null
 
   await existing.save()
   const doc = await Class.findById(req.params.id)
-    .populate('programId', 'code name color')
+    .populate('programId', 'code name color category')
     .populate('teacherId', 'teacherId fullName type')
     .lean()
   const { eMap } = await classRelMaps([doc as any])
