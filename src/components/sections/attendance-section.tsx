@@ -24,8 +24,6 @@ import {
   RotateCcw,
   History,
   ClipboardList,
-  ChevronLeft,
-  ChevronRight,
   Building2,
   Briefcase,
   BookOpen,
@@ -167,23 +165,27 @@ interface ScanResponse {
   action: 'check-in' | 'check-out'
   record: AttendanceRow
   person: { name: string; ref: string; type: string }
+  // ── Timetable context (populated by /api/attendance/scan) ──
+  schedule?: string[]
+  expectedStart?: string | null
+  expectedEnd?: string | null
+  graceMinutes?: number
   error?: string
 }
 
 interface PersonPick {
   id: string
-  ref: string // studentId or teacherId
+  ref: string
   name: string
   type: 'Student' | 'Teacher'
   photoUrl: string | null
-  sub: string // gender + ageGroup OR type
+  sub: string
 }
 
 // ─── Bulk attendance sheet helpers ───────────────────────────────────────
 const SHEET_STATUSES = ['Present', 'Absent', 'Late', 'Leave'] as const
-const UNSET_STATUS = '__UNSET__' // Radix Select sentinel for "not marked yet"
+const UNSET_STATUS = '__UNSET__'
 
-// ISO datetime → "HH:MM" in local time ('' when null/invalid)
 function isoToHHMM(iso?: string | null): string {
   if (!iso) return ''
   const d = new Date(iso)
@@ -198,9 +200,9 @@ interface SheetRow {
   ref: string
   name: string
   sub: string
-  status: string // '' = unmarked
-  checkIn: string // 'HH:MM' or ''
-  checkOut: string // 'HH:MM' or ''
+  status: string
+  checkIn: string
+  checkOut: string
   note: string
   selected: boolean
 }
@@ -214,7 +216,6 @@ interface BulkResult {
   message: string
 }
 
-// Fetch ALL active students — server caps limit at 100, so paginate.
 async function fetchAllActiveStudents(programCode: string): Promise<StudentRow[]> {
   const out: StudentRow[] = []
   for (let page = 1; page <= 10; page++) {
@@ -229,13 +230,11 @@ async function fetchAllActiveStudents(programCode: string): Promise<StudentRow[]
   return out
 }
 
-// Fetch active teachers (limit 100 = server cap).
 async function fetchActiveTeachers(): Promise<TeacherRow[]> {
   const res = await api<{ data: TeacherRow[] }>('/api/teachers?status=Active&limit=100')
   return res.data || []
 }
 
-// Fetch every attendance record for one date — server caps limit at 200, paginate.
 async function fetchAttendanceForDate(date: string): Promise<AttendanceRow[]> {
   const out: AttendanceRow[] = []
   for (let page = 1; page <= 5; page++) {
@@ -273,7 +272,6 @@ function ScannerPanel({ onScanSuccess, onOpenManual, onOpenSheet }: ScannerPanel
   const barcodeInputRef = useRef<HTMLInputElement>(null)
   const fpInputRef = useRef<HTMLInputElement>(null)
 
-  // Lazy-load teachers when the fingerprint tab opens (for the random demo button).
   useEffect(() => {
     if (tab !== 'fingerprint' || teachers.length > 0) return
     let alive = true
@@ -286,9 +284,7 @@ function ScannerPanel({ onScanSuccess, onOpenManual, onOpenSheet }: ScannerPanel
         const list = (res.data || []).filter((t) => !!t.fingerprintId)
         setTeachers(list)
       })
-      .catch(() => {
-        /* non-fatal — demo button will just disable itself */
-      })
+      .catch(() => {})
       .finally(() => {
         if (alive) setTeachersLoading(false)
       })
@@ -297,7 +293,6 @@ function ScannerPanel({ onScanSuccess, onOpenManual, onOpenSheet }: ScannerPanel
     }
   }, [tab, teachers.length])
 
-  // Refocus the active input whenever the tab changes.
   useEffect(() => {
     if (tab === 'barcode') barcodeInputRef.current?.focus()
     else fpInputRef.current?.focus()
@@ -397,10 +392,8 @@ function ScannerPanel({ onScanSuccess, onOpenManual, onOpenSheet }: ScannerPanel
 
         <TabsContent value="barcode" className="mt-0 p-4 sm:p-6">
           <div className="grid gap-6 lg:grid-cols-[1.1fr_1fr]">
-            {/* Scanner viewport */}
             <div>
               <div className="relative h-56 w-full overflow-hidden rounded-xl border-2 border-primary/30 bg-slate-950 sm:h-64">
-                {/* simulated barcode bars background */}
                 <div className="absolute inset-0 flex items-center justify-center opacity-40">
                   <div className="flex h-32 w-56 items-center gap-[3px]">
                     {Array.from({ length: 36 }).map((_, i) => (
@@ -416,21 +409,17 @@ function ScannerPanel({ onScanSuccess, onOpenManual, onOpenSheet }: ScannerPanel
                     ))}
                   </div>
                 </div>
-                {/* scanline laser */}
                 <div className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-emerald-400/80 shadow-[0_0_20px_4px_rgba(52,211,153,0.6)] animate-scanline" />
-                {/* corner markers */}
                 <div className="pointer-events-none absolute top-3 left-3 h-6 w-6 border-t-2 border-l-2 border-emerald-400/70" />
                 <div className="pointer-events-none absolute top-3 right-3 h-6 w-6 border-t-2 border-r-2 border-emerald-400/70" />
                 <div className="pointer-events-none absolute bottom-3 left-3 h-6 w-6 border-b-2 border-l-2 border-emerald-400/70" />
                 <div className="pointer-events-none absolute bottom-3 right-3 h-6 w-6 border-b-2 border-r-2 border-emerald-400/70" />
-                {/* flash overlay */}
                 {flashTick > 0 && (
                   <div
                     key={`flash-${flashTick}`}
                     className="pointer-events-none absolute inset-0 bg-emerald-300/30 animate-in fade-in-0 fade-out-0 duration-500"
                   />
                 )}
-                {/* idle hint */}
                 <div className="absolute inset-x-0 bottom-3 text-center">
                   <span className="rounded-full bg-slate-950/70 px-3 py-1 text-xs font-medium text-emerald-300">
                     {scanning ? 'Scanning…' : 'Ready · scan a student barcode'}
@@ -444,7 +433,7 @@ function ScannerPanel({ onScanSuccess, onOpenManual, onOpenSheet }: ScannerPanel
                   <Input
                     ref={barcodeInputRef}
                     autoFocus
-                    placeholder="Scan or type barcode (e.g. SANP24001) — press Enter"
+                    placeholder="Scan or type barcode (e.g. S240001) — press Enter"
                     value={barcodeValue}
                     onChange={(e) => setBarcodeValue(e.target.value)}
                     onKeyDown={handleBarcodeKey}
@@ -472,7 +461,6 @@ function ScannerPanel({ onScanSuccess, onOpenManual, onOpenSheet }: ScannerPanel
               </p>
             </div>
 
-            {/* Result panel */}
             <ScanResultPanel
               result={result}
               error={error}
@@ -485,7 +473,6 @@ function ScannerPanel({ onScanSuccess, onOpenManual, onOpenSheet }: ScannerPanel
 
         <TabsContent value="fingerprint" className="mt-0 p-4 sm:p-6">
           <div className="grid gap-6 lg:grid-cols-[1.1fr_1fr]">
-            {/* Scanner viewport */}
             <div>
               <div className="relative flex h-56 w-full flex-col items-center justify-center gap-4 overflow-hidden rounded-xl border-2 border-purple-500/30 bg-slate-950 sm:h-64">
                 <div className="relative flex h-24 w-24 items-center justify-center">
@@ -534,7 +521,7 @@ function ScannerPanel({ onScanSuccess, onOpenManual, onOpenSheet }: ScannerPanel
                 </div>
               </div>
               <p className="mt-2 text-xs text-muted-foreground">
-                Demo mode: the random button picks an enrolled teacher's fingerprint. In production this
+                Demo mode: the random button picks an enrolled teacher&apos;s fingerprint. In production this
                 reads from the USB fingerprint device and submits the template id.
               </p>
             </div>
@@ -553,7 +540,7 @@ function ScannerPanel({ onScanSuccess, onOpenManual, onOpenSheet }: ScannerPanel
   )
 }
 
-// ─── Scan result panel (shared between barcode + fingerprint tabs) ─────────
+// ─── Scan result panel ─────────────────────────────────────────────────────
 interface ScanResultPanelProps {
   result: ScanResponse | null
   error: string | null
@@ -619,6 +606,10 @@ function ScanResultPanel({
   const personType = result.person.type
   const accent = avatarColor(result.person.name + result.person.ref)
 
+  const late = r.lateMinutes ?? null
+  const early = r.earlyMinutes ?? null
+  const lateOut = r.lateCheckoutMinutes ?? null
+
   return (
     <div
       key={`result-${flashTick}`}
@@ -682,20 +673,75 @@ function ScanResultPanel({
           <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <LogIn className="h-3 w-3" /> Check-in
           </p>
-          <p className="mt-1 font-semibold">{fmtTime(r.checkIn)}</p>
+          <p className="mt-1 flex items-center gap-1.5 font-semibold">
+            {fmtTime(r.checkIn)}
+            {late != null && late > 0 && (
+              <span className="inline-flex items-center rounded bg-amber-500/15 px-1 py-px text-[10px] font-bold text-amber-700 dark:text-amber-400">
+                +{late}m
+              </span>
+            )}
+          </p>
         </div>
         <div className="rounded-lg border bg-muted/30 p-3">
           <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <LogOut className="h-3 w-3" /> Check-out
           </p>
-          <p className="mt-1 font-semibold">
-            {r.checkOut ? fmtTime(r.checkOut) : <span className="text-emerald-600 dark:text-emerald-400">● Active</span>}
+          <p className="mt-1 flex items-center gap-1.5 font-semibold">
+            {r.checkOut ? (
+              fmtTime(r.checkOut)
+            ) : (
+              <span className="text-emerald-600 dark:text-emerald-400">● Active</span>
+            )}
+            {early != null && early > 0 && (
+              <span className="inline-flex items-center rounded bg-blue-500/15 px-1 py-px text-[10px] font-bold text-blue-700 dark:text-blue-400">
+                −{early}m
+              </span>
+            )}
+            {lateOut != null && lateOut > 0 && (
+              <span className="inline-flex items-center rounded bg-red-500/15 px-1 py-px text-[10px] font-bold text-red-700 dark:text-red-400">
+                +{lateOut}m
+              </span>
+            )}
           </p>
         </div>
       </div>
 
+      {/* Timetable context */}
+      {((result.schedule && result.schedule.length > 0) || result.expectedStart || result.expectedEnd) && (
+        <div className="rounded-lg border bg-muted/30 p-2.5 text-xs text-muted-foreground">
+          {result.schedule && result.schedule.length > 0 && (
+            <p className="truncate">
+              <span className="font-medium text-foreground">Today:</span> {result.schedule.join(' · ')}
+            </p>
+          )}
+          {(result.expectedStart || result.expectedEnd) && (
+            <p className="mt-0.5 tabular-nums">
+              {result.expectedStart && (
+                <>
+                  <span className="font-medium text-foreground">In</span> {fmtTime(result.expectedStart)}
+                </>
+              )}
+              {result.expectedStart && result.expectedEnd && <span className="mx-1 opacity-40">·</span>}
+              {result.expectedEnd && (
+                <>
+                  <span className="font-medium text-foreground">Out</span> {fmtTime(result.expectedEnd)}
+                </>
+              )}
+              {result.graceMinutes != null && (
+                <span className="ml-2 opacity-70">({result.graceMinutes}m grace)</span>
+              )}
+            </p>
+          )}
+        </div>
+      )}
+
       <div className="flex items-center justify-between text-xs">
-        <Badge className={STATUS_BADGE[r.status]?.cls || ''}>{r.status}</Badge>
+        <Badge className={STATUS_BADGE[r.status]?.cls || ''}>
+          {r.status}
+          {late != null && late > 0 && r.status === 'Late' && (
+            <span className="ml-1 tabular-nums">+{late}m</span>
+          )}
+        </Badge>
         <span className="text-muted-foreground">{fmtDateTime(r.date)}</span>
       </div>
 
@@ -724,7 +770,6 @@ function ManualEntryDialog({ open, onOpenChange, onSuccess }: ManualEntryDialogP
   const [submitting, setSubmitting] = useState(false)
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Debounced search
   useEffect(() => {
     if (!open) return
     if (searchTimer.current) clearTimeout(searchTimer.current)
@@ -920,7 +965,7 @@ function ManualEntryDialog({ open, onOpenChange, onSuccess }: ManualEntryDialogP
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Attendance Sheet Dialog — bulk manual marking with per-row check-in/out
+// Attendance Sheet Dialog
 // ════════════════════════════════════════════════════════════════════════════
 interface AttendanceSheetDialogProps {
   open: boolean
@@ -952,11 +997,9 @@ function AttendanceSheetDialog({ open, onOpenChange, onSuccess }: AttendanceShee
   const [saving, setSaving] = useState(false)
   const [saveErrors, setSaveErrors] = useState<string[] | null>(null)
 
-  // Roster effect reads the latest class list without re-triggering on its load.
   const classesRef = useRef<ClassRow[]>([])
   classesRef.current = classes
 
-  // Class list for the student class/program filter (loaded once per session).
   useEffect(() => {
     if (!open || classes.length > 0) return
     let alive = true
@@ -964,17 +1007,12 @@ function AttendanceSheetDialog({ open, onOpenChange, onSuccess }: AttendanceShee
       .then((res) => {
         if (alive) setClasses(res.data || [])
       })
-      .catch(() => {
-        /* non-fatal — filter just shows "All students" */
-      })
+      .catch(() => {})
     return () => {
       alive = false
     }
   }, [open, classes.length])
 
-  // Load the roster + existing attendance whenever the dialog opens or the
-  // controls change. setState happens inside setTimeout + .then callbacks only
-  // (lint-safe — no synchronous setState in the effect body).
   useEffect(() => {
     if (!open) return
     let alive = true
@@ -1035,12 +1073,9 @@ function AttendanceSheetDialog({ open, onOpenChange, onSuccess }: AttendanceShee
     }
   }, [open, date, personType, classId, reloadNonce])
 
-  // ── Row mutation helpers ──
   const updateRow = (personId: string, patch: Partial<SheetRow>) =>
     setRows((rs) => rs.map((r) => (r.personId === personId ? { ...r, ...patch } : r)))
 
-  // Status change semantics: Absent/Leave drop their times; Present/Late pick
-  // up the defaults when no time is set yet.
   const withStatus = (r: SheetRow, status: string): SheetRow => {
     if (status === 'Absent' || status === 'Leave') {
       return { ...r, status, checkIn: '', checkOut: '' }
@@ -1080,7 +1115,6 @@ function AttendanceSheetDialog({ open, onOpenChange, onSuccess }: AttendanceShee
   const toggleAll = (checked: boolean | 'indeterminate') =>
     setRows((rs) => rs.map((r) => ({ ...r, selected: checked === true })))
 
-  // ── Derived counts + payload ──
   const counts = useMemo(() => {
     let selected = 0
     let present = 0
@@ -1123,7 +1157,6 @@ function AttendanceSheetDialog({ open, onOpenChange, onSuccess }: AttendanceShee
     setSaving(true)
     setSaveErrors(null)
     try {
-      // API accepts max 500 entries per request → chunk when needed.
       const chunks: Array<typeof entriesToSend> = []
       for (let i = 0; i < entriesToSend.length; i += 500) {
         chunks.push(entriesToSend.slice(i, i + 500))
@@ -1177,7 +1210,6 @@ function AttendanceSheetDialog({ open, onOpenChange, onSuccess }: AttendanceShee
           </DialogDescription>
         </DialogHeader>
 
-        {/* Top controls: date · person type · class filter */}
         <div className="flex flex-col gap-3 rounded-xl border bg-muted/20 p-3">
           <div className="flex flex-wrap items-end gap-3">
             <div className="grid gap-1.5">
@@ -1233,7 +1265,6 @@ function AttendanceSheetDialog({ open, onOpenChange, onSuccess }: AttendanceShee
             )}
           </div>
 
-          {/* Default times row */}
           <div className="flex flex-wrap items-end gap-3 border-t pt-3">
             <div className="grid gap-1.5">
               <Label htmlFor="sheet-def-in" className="text-xs">
@@ -1269,7 +1300,6 @@ function AttendanceSheetDialog({ open, onOpenChange, onSuccess }: AttendanceShee
           </div>
         </div>
 
-        {/* Bulk actions + live counts */}
         <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="outline"
@@ -1320,7 +1350,6 @@ function AttendanceSheetDialog({ open, onOpenChange, onSuccess }: AttendanceShee
           </div>
         </div>
 
-        {/* Roster table — everyone at once, no searching */}
         <div className="max-h-[65vh] overflow-y-auto overflow-x-auto rounded-lg border scroll-thin">
           {loading ? (
             <div className="space-y-2 p-3">
@@ -1460,7 +1489,6 @@ function AttendanceSheetDialog({ open, onOpenChange, onSuccess }: AttendanceShee
           )}
         </div>
 
-        {/* Row-level errors from the last save */}
         {saveErrors && saveErrors.length > 0 && (
           <div className="rounded-lg border border-red-500/40 bg-red-500/5 p-3">
             <p className="flex items-center gap-1.5 text-sm font-semibold text-red-700 dark:text-red-300">
@@ -1515,8 +1543,6 @@ interface EditDialogProps {
 }
 
 function EditAttendanceDialog({ open, onOpenChange, record, onSaved }: EditDialogProps) {
-  // Lazy initializer keyed off `record` so the form state resets cleanly when the
-  // target changes (or when the dialog re-opens). Avoids setState-in-effect.
   const [form, setForm] = useState(() => ({
     status: record?.status ?? 'Present',
     note: record?.note ?? '',
@@ -1526,7 +1552,6 @@ function EditAttendanceDialog({ open, onOpenChange, record, onSaved }: EditDialo
   const [saving, setSaving] = useState(false)
   const [formKey, setFormKey] = useState(0)
 
-  // Reset the form whenever the dialog opens with a (possibly different) record.
   useEffect(() => {
     if (!open) return
     setForm({
@@ -1646,7 +1671,7 @@ function EditAttendanceDialog({ open, onOpenChange, record, onSaved }: EditDialo
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Attendance Table (shared by Today's Log and History)
+// Attendance Table
 // ════════════════════════════════════════════════════════════════════════════
 interface AttendanceTableProps {
   rows: AttendanceRow[]
@@ -1696,6 +1721,9 @@ function AttendanceTable({ rows, loading, onEdit, onDelete }: AttendanceTablePro
           {rows.map((r) => {
             const isStudent = r.personType === 'Student'
             const isActive = !!r.checkIn && !r.checkOut
+            const late = r.lateMinutes ?? null
+            const early = r.earlyMinutes ?? null
+            const lateOut = r.lateCheckoutMinutes ?? null
             return (
               <TableRow key={r.id} className="hover:bg-muted/40">
                 <TableCell>
@@ -1735,16 +1763,46 @@ function AttendanceTable({ rows, loading, onEdit, onDelete }: AttendanceTablePro
                     {r.method}
                   </Badge>
                 </TableCell>
+                {/* Check-in — shows late minutes when applicable */}
                 <TableCell>
                   {r.checkIn ? (
-                    <span className="text-sm">{fmtTime(r.checkIn)}</span>
+                    <span className="inline-flex items-center gap-1.5 text-sm tabular-nums">
+                      {fmtTime(r.checkIn)}
+                      {late != null && late > 0 && (
+                        <span
+                          className="inline-flex items-center rounded bg-amber-500/15 px-1 py-px text-[10px] font-bold text-amber-700 dark:text-amber-400"
+                          title={`Arrived ${late} min after expected start`}
+                        >
+                          +{late}m
+                        </span>
+                      )}
+                    </span>
                   ) : (
                     <span className="text-xs text-muted-foreground">—</span>
                   )}
                 </TableCell>
+                {/* Check-out — shows early / late-pickup badge */}
                 <TableCell>
                   {r.checkOut ? (
-                    <span className="text-sm">{fmtTime(r.checkOut)}</span>
+                    <span className="inline-flex items-center gap-1.5 text-sm tabular-nums">
+                      {fmtTime(r.checkOut)}
+                      {early != null && early > 0 && (
+                        <span
+                          className="inline-flex items-center rounded bg-blue-500/15 px-1 py-px text-[10px] font-bold text-blue-700 dark:text-blue-400"
+                          title={`Picked up ${early} min before expected end`}
+                        >
+                          −{early}m
+                        </span>
+                      )}
+                      {lateOut != null && lateOut > 0 && (
+                        <span
+                          className="inline-flex items-center rounded bg-red-500/15 px-1 py-px text-[10px] font-bold text-red-700 dark:text-red-400"
+                          title={`Picked up ${lateOut} min after expected end`}
+                        >
+                          +{lateOut}m
+                        </span>
+                      )}
+                    </span>
                   ) : isActive ? (
                     <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 dark:text-emerald-400">
                       <span className="relative flex h-2 w-2">
@@ -1758,7 +1816,12 @@ function AttendanceTable({ rows, loading, onEdit, onDelete }: AttendanceTablePro
                   )}
                 </TableCell>
                 <TableCell>
-                  <Badge className={STATUS_BADGE[r.status]?.cls || ''}>{r.status}</Badge>
+                  <Badge className={STATUS_BADGE[r.status]?.cls || ''}>
+                    {r.status}
+                    {late != null && late > 0 && r.status === 'Late' && (
+                      <span className="ml-1 tabular-nums">+{late}m</span>
+                    )}
+                  </Badge>
                 </TableCell>
                 <TableCell>
                   <span className="text-xs text-muted-foreground">
@@ -1838,8 +1901,6 @@ function HistoryView() {
     return p.toString()
   }, [dateStr, personType, method])
 
-  // Initial + filter-change fetch. setState happens inside setTimeout + .then
-  // callbacks only (lint-safe — no synchronous setState in effect body).
   useEffect(() => {
     let alive = true
     const t = setTimeout(() => {
@@ -1872,9 +1933,7 @@ function HistoryView() {
         setRows(res.data)
         setSummary(res.summary)
       })
-      .catch(() => {
-        /* non-fatal */
-      })
+      .catch(() => {})
   }, [queryParams])
 
   const handleEdit = (r: AttendanceRow) => {
@@ -1898,7 +1957,6 @@ function HistoryView() {
 
   return (
     <div className="space-y-4">
-      {/* Filter bar */}
       <div className="flex flex-col gap-3 rounded-xl border bg-card p-3 sm:flex-row sm:items-center sm:gap-2 sm:p-4">
         <Popover open={calendarOpen} onOpenChange={setCalendarOpen}>
           <PopoverTrigger asChild>
@@ -1962,7 +2020,6 @@ function HistoryView() {
         </Button>
       </div>
 
-      {/* Summary chips */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <SummaryChip label="Present" value={summary.present} tone="emerald" icon={CheckCircle2} />
         <SummaryChip label="Late" value={summary.late} tone="amber" icon={Clock} />
@@ -2034,7 +2091,6 @@ export function AttendanceSection() {
   const [manualOpen, setManualOpen] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
 
-  // Today's log state
   const [rows, setRows] = useState<AttendanceRow[]>([])
   const [summary, setSummary] = useState({ present: 0, late: 0, absent: 0, total: 0 })
   const [loading, setLoading] = useState(true)
@@ -2052,8 +2108,6 @@ export function AttendanceSection() {
     return p.toString()
   }, [])
 
-  // Fetch today's log — initial load + auto-refresh every 15s.
-  // setState happens only inside .then callbacks and the interval callback (lint-safe).
   useEffect(() => {
     let alive = true
     const tick = () => {
@@ -2063,9 +2117,7 @@ export function AttendanceSection() {
           setRows(res.data)
           setSummary(res.summary)
         })
-        .catch(() => {
-          /* non-fatal — keep previous data */
-        })
+        .catch(() => {})
         .finally(() => {
           if (alive) setLoading(false)
         })
@@ -2078,7 +2130,6 @@ export function AttendanceSection() {
     }
   }, [todayQuery])
 
-  // Fetch 7-day trend once for sparklines
   useEffect(() => {
     let alive = true
     api<{ trend: { students: number; teachers: number; late: number }[] }>(`/api/attendance/trend`)
@@ -2102,14 +2153,10 @@ export function AttendanceSection() {
         setRows(res.data)
         setSummary(res.summary)
       })
-      .catch(() => {
-        /* non-fatal */
-      })
+      .catch(() => {})
       .finally(() => setLoading(false))
   }, [todayQuery])
 
-  // Derived "today summary strip" stats:
-  //   Students present today, Teachers present today, Late arrivals, Still checked-in.
   const studentsPresent = useMemo(
     () => rows.filter((r) => r.personType === 'Student' && (r.status === 'Present' || r.status === 'Late')).length,
     [rows],
@@ -2154,14 +2201,12 @@ export function AttendanceSection() {
         icon={<Clock className="h-5 w-5" />}
       />
 
-      {/* Live Scanner panel */}
       <ScannerPanel
         onScanSuccess={reloadToday}
         onOpenManual={() => setManualOpen(true)}
         onOpenSheet={() => setSheetOpen(true)}
       />
 
-      {/* Today summary strip */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard
           label="Students present"
@@ -2198,7 +2243,7 @@ export function AttendanceSection() {
           value={lateArrivals}
           icon={Clock}
           accent="amber"
-          hint="After 08:30 grace"
+          hint="After expected start + grace"
           footer={
             trend.late.length > 0 ? (
               <div className="flex items-center gap-1.5">
@@ -2217,7 +2262,6 @@ export function AttendanceSection() {
         />
       </div>
 
-      {/* Tabs: Today's Log | History | Register */}
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'today' | 'history' | 'register')}>
         <TabsList className="grid w-full max-w-lg grid-cols-3">
           <TabsTrigger value="today" className="gap-2">
@@ -2267,21 +2311,18 @@ export function AttendanceSection() {
         </TabsContent>
       </Tabs>
 
-      {/* Manual entry dialog */}
       <ManualEntryDialog
         open={manualOpen}
         onOpenChange={setManualOpen}
         onSuccess={reloadToday}
       />
 
-      {/* Attendance sheet (bulk) dialog */}
       <AttendanceSheetDialog
         open={sheetOpen}
         onOpenChange={setSheetOpen}
         onSuccess={reloadToday}
       />
 
-      {/* Edit dialog (today's log) */}
       <EditAttendanceDialog
         open={editOpen}
         onOpenChange={setEditOpen}
@@ -2289,7 +2330,6 @@ export function AttendanceSection() {
         onSaved={reloadToday}
       />
 
-      {/* Delete confirm (today's log) */}
       <ConfirmDialog
         open={!!deleteTarget}
         onOpenChange={(v) => !v && setDeleteTarget(null)}
@@ -2476,7 +2516,6 @@ function RegisterView() {
   }, [data, month])
 
   const handlePrint = useCallback(() => {
-    // Landscape gives the 31-day grid room to breathe on paper
     const style = document.createElement('style')
     style.id = 'register-print-page'
     style.textContent = '@page { size: A4 landscape; margin: 8mm; }'
@@ -2489,10 +2528,6 @@ function RegisterView() {
     )
   }, [])
 
-  // PDF / branded print: opens a SELF-CONTAINED A4-landscape letter in a
-  // popup (school-branded header, insights summary, full colour-coded grid)
-  // and triggers the print dialog — deterministic in every browser, unlike
-  // the app-cascade sheet above. Save as PDF from the print dialog.
   const exportPdf = useCallback(() => {
     if (!data) return
     const w = window.open('', '_blank', 'width=1180,height=860')
@@ -2629,7 +2664,6 @@ function RegisterView() {
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Controls */}
       <Card>
         <CardContent className="flex flex-col gap-3 p-4 lg:flex-row lg:items-end lg:justify-between">
           <div className="flex flex-wrap items-end gap-3">
@@ -2730,7 +2764,6 @@ function RegisterView() {
       ) : (
         <Card className="p-0">
           <div className="register-print min-w-0">
-            {/* Sheet header (prints too) */}
             <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
               <div className="flex items-center gap-3">
                 <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-lg ring-1 ring-border">
@@ -2761,10 +2794,8 @@ function RegisterView() {
               </div>
             </div>
 
-            {/* Class insights summary (prints too) */}
             {data.summary && data.summary.marked > 0 && (
               <div className="grid grid-cols-2 gap-2 border-b bg-gradient-to-r from-muted/40 to-transparent p-3 sm:grid-cols-4 lg:grid-cols-[auto_1fr_1fr_1fr]">
-                {/* Overall rate */}
                 <div className="flex items-center gap-2.5">
                   <div
                     className={cn(
@@ -2789,7 +2820,6 @@ function RegisterView() {
                     </p>
                   </div>
                 </div>
-                {/* P/L/A/V totals */}
                 <div className="flex items-center justify-center gap-1.5">
                   {(
                     [
@@ -2809,7 +2839,6 @@ function RegisterView() {
                     </span>
                   ))}
                 </div>
-                {/* Best day */}
                 {data.summary.bestDay && (
                   <div className="flex items-center justify-center gap-1.5 text-[11px]">
                     <Trophy className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
@@ -2824,7 +2853,6 @@ function RegisterView() {
                     </span>
                   </div>
                 )}
-                {/* Perfect + at-risk */}
                 <div className="flex flex-wrap items-center justify-center gap-1.5 text-[11px]">
                   {data.summary.perfect > 0 && (
                     <span
@@ -2935,7 +2963,6 @@ function RegisterView() {
               </Table>
             </div>
 
-            {/* Legend */}
             <div className="flex flex-wrap items-center gap-3 border-t px-4 py-2.5 text-[11px] text-muted-foreground">
               <span className="inline-flex items-center gap-1">
                 <span className="reg-cell inline-flex h-4 w-4 items-center justify-center rounded bg-emerald-500/15 text-[9px] font-bold text-emerald-700">P</span>
