@@ -13,13 +13,11 @@ import {
   CheckCircle2,
   Clock,
   AlertCircle,
-  IndianRupee,
   Search,
   X,
   MoreVertical,
   Loader2,
   Users,
-  Filter,
   CircleDollarSign,
   Zap,
   BellRing,
@@ -151,8 +149,6 @@ function methodBadgeClasses(method: string): string {
 // ─── Bill line-item helpers ────────────────────────────────────────────────
 type BillProgram = { id: string; code: string; name: string; color: string }
 
-// Distinct programmes on a bill, from its line items (falls back to the
-// legacy single-programme column when items are missing).
 function billPrograms(p: PaymentRow): BillProgram[] {
   const out: BillProgram[] = []
   for (const it of p.items ?? []) {
@@ -170,8 +166,6 @@ interface BillLine {
   color: string | null
 }
 
-// One row per bill line item for receipts (falls back to the legacy
-// single-programme amount when items are missing).
 function billLines(p: PaymentRow): BillLine[] {
   if (p.items && p.items.length > 0) {
     return p.items.map((it, i) => ({
@@ -315,10 +309,7 @@ export function FeesSection() {
         })
     }
 
-    // Expose for action handlers (delete/save) so they can re-fetch on demand
     reloadRef.current = run
-    // Defer the first invocation so we don't call setState synchronously in the
-    // effect body (satisfies react-hooks/set-state-in-effect lint rule).
     const t = setTimeout(run, 0)
     return () => {
       alive = false
@@ -356,7 +347,7 @@ export function FeesSection() {
     [fetchPayments],
   )
 
-  // ─── Send fee reminder (auto-create announcement for outstanding fees) ──
+  // ─── Send fee reminder ─────────────────────────────────────────────────
   const handleSendReminder = useCallback(async () => {
     setSendingReminder(true)
     try {
@@ -459,7 +450,8 @@ export function FeesSection() {
         description="Monthly tuition fee tracking & receipts"
         icon={<Wallet className="h-5 w-5" />}
         actions={
-          <>
+          // Responsive: buttons wrap on narrow screens instead of overflowing
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <Button variant="outline" size="sm" onClick={exportCsv} className="gap-2">
               <Download className="h-4 w-4" /> Export CSV
             </Button>
@@ -494,19 +486,15 @@ export function FeesSection() {
               <MessageCircleMore className="h-4 w-4" />
               WhatsApp Blast
             </Button>
-            <Button
-              size="sm"
-              onClick={() => setCreateOpen(true)}
-              className="gap-2"
-            >
+            <Button size="sm" onClick={() => setCreateOpen(true)} className="gap-2">
               <Plus className="h-4 w-4" /> Record Payment
             </Button>
-          </>
+          </div>
         }
       />
 
-      {/* Stats strip */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      {/* Stats strip — 2 cols mobile, 4 cols desktop */}
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         {summary ? (
           <>
             <StatCard
@@ -547,14 +535,14 @@ export function FeesSection() {
         )}
       </div>
 
-      {/* Month selector + Filters */}
-      <Card className="p-4">
+      {/* Month selector + Filters — responsive wrap */}
+      <Card className="min-w-0 p-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-          <div className="flex flex-wrap items-end gap-3">
-            <div className="flex flex-col gap-1.5">
+          <div className="grid grid-cols-2 gap-3 sm:flex sm:flex-wrap sm:items-end">
+            <div className="flex w-full flex-col gap-1.5 sm:w-auto">
               <Label className="text-xs text-muted-foreground">Billing month</Label>
               <Select value={month} onValueChange={setMonth}>
-                <SelectTrigger className="w-[200px]">
+                <SelectTrigger className="w-full sm:w-[200px]">
                   <SelectValue placeholder="Select month" />
                 </SelectTrigger>
                 <SelectContent>
@@ -566,10 +554,10 @@ export function FeesSection() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="flex flex-col gap-1.5">
+            <div className="flex w-full flex-col gap-1.5 sm:w-auto">
               <Label className="text-xs text-muted-foreground">Status</Label>
               <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-[140px]">
+                <SelectTrigger className="w-full sm:w-[140px]">
                   <SelectValue placeholder="All statuses" />
                 </SelectTrigger>
                 <SelectContent>
@@ -582,10 +570,10 @@ export function FeesSection() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="flex flex-col gap-1.5">
+            <div className="flex w-full flex-col gap-1.5 sm:w-auto">
               <Label className="text-xs text-muted-foreground">Program</Label>
               <Select value={programFilter} onValueChange={setProgramFilter}>
-                <SelectTrigger className="w-[160px]">
+                <SelectTrigger className="w-full sm:w-[160px]">
                   <SelectValue placeholder="All programs" />
                 </SelectTrigger>
                 <SelectContent>
@@ -598,10 +586,10 @@ export function FeesSection() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="flex flex-col gap-1.5">
+            <div className="flex w-full flex-col gap-1.5 sm:w-auto">
               <Label className="text-xs text-muted-foreground">Method</Label>
               <Select value={methodFilter} onValueChange={setMethodFilter}>
-                <SelectTrigger className="w-[130px]">
+                <SelectTrigger className="w-full sm:w-[130px]">
                   <SelectValue placeholder="All methods" />
                 </SelectTrigger>
                 <SelectContent>
@@ -615,8 +603,8 @@ export function FeesSection() {
               </Select>
             </div>
           </div>
-          <div className="flex items-end gap-2">
-            <div className="relative flex-1 lg:w-64">
+          <div className="flex w-full items-center gap-2 lg:w-auto">
+            <div className="relative min-w-0 flex-1 lg:w-64">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 placeholder="Search student / receipt no…"
@@ -626,7 +614,7 @@ export function FeesSection() {
               />
             </div>
             {hasFilters && (
-              <Button variant="ghost" size="sm" onClick={clearFilters} className="gap-1.5">
+              <Button variant="ghost" size="sm" onClick={clearFilters} className="gap-1.5 shrink-0">
                 <X className="h-4 w-4" /> Clear
               </Button>
             )}
@@ -635,7 +623,7 @@ export function FeesSection() {
       </Card>
 
       {/* Tabs + Table */}
-      <Card className="p-0">
+      <Card className="min-w-0 p-0">
         <div className="flex flex-col gap-3 border-b p-4 sm:flex-row sm:items-center sm:justify-between">
           <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)}>
             <TabsList>
@@ -687,8 +675,10 @@ export function FeesSection() {
             />
           </div>
         ) : (
-          <div className="scroll-thin max-h-[60vh] overflow-y-auto">
-            <Table className="table-zebra">
+          // overflow-auto → table scrolls inside the card, not the whole page
+          <div className="scroll-thin max-h-[60vh] overflow-auto">
+            {/* min-w forces internal horizontal scroll on narrow screens */}
+            <Table className="table-zebra min-w-[1000px]">
               <TableHeader className="sticky top-0 z-10 bg-muted/80 backdrop-blur">
                 <TableRow>
                   <TableHead className="w-[120px]">Receipt No</TableHead>
@@ -809,11 +799,7 @@ export function FeesSection() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-44">
-                            <DropdownMenuItem
-                              onClick={() => {
-                                setEditTarget(p)
-                              }}
-                            >
+                            <DropdownMenuItem onClick={() => setEditTarget(p)}>
                               <Pencil className="mr-2 h-4 w-4" /> Record / Edit
                             </DropdownMenuItem>
                             <DropdownMenuItem onClick={() => setReceiptTarget(p)}>
@@ -872,15 +858,10 @@ export function FeesSection() {
         />
       )}
 
-      {/* Receipt print dialog */}
       {receiptTarget && (
-        <ReceiptDialog
-          payment={receiptTarget}
-          onClose={() => setReceiptTarget(null)}
-        />
+        <ReceiptDialog payment={receiptTarget} onClose={() => setReceiptTarget(null)} />
       )}
 
-      {/* Student fee statement (all months, printable) */}
       {statementTarget && (
         <StudentStatementDialog
           studentId={statementTarget.student.id}
@@ -888,17 +869,12 @@ export function FeesSection() {
         />
       )}
 
-      {/* WhatsApp reminder / receipt share */}
       {whatsappTarget && (
         <WhatsAppDialog payment={whatsappTarget} onClose={() => setWhatsappTarget(null)} />
       )}
 
-      {/* Bulk WhatsApp blast to all outstanding guardians */}
-      {blastOpen && (
-        <BulkWhatsAppDialog month={month} onClose={() => setBlastOpen(false)} />
-      )}
+      {blastOpen && <BulkWhatsAppDialog month={month} onClose={() => setBlastOpen(false)} />}
 
-      {/* Delete confirm */}
       <ConfirmDialog
         open={!!deleteTarget}
         onOpenChange={(v) => !v && setDeleteTarget(null)}
@@ -920,7 +896,6 @@ export function FeesSection() {
         }}
       />
 
-      {/* Bulk generate dialog */}
       <BulkGenerateDialog
         open={bulkOpen}
         onOpenChange={setBulkOpen}
@@ -979,7 +954,6 @@ function PaymentDialog({
 
   const isEdit = mode === 'edit' && !!payment
 
-  // ─── Billable programmes (active list + legacy programmes on the bill) ─
   const allPrograms = useMemo<ProgramRow[]>(() => {
     const map = new Map<string, ProgramRow>()
     for (const p of programs) map.set(p.id, p)
@@ -1018,13 +992,11 @@ function PaymentDialog({
     [allPrograms, form.programIds],
   )
 
-  // Bill total = Σ selected programme monthly fees (server recomputes the same)
   const totalAmount = useMemo(
     () => selectedPrograms.reduce((sum, p) => sum + (p.monthlyFee || 0), 0),
     [selectedPrograms],
   )
 
-  // ─── Programme checkbox toggles / quick actions ──────────────────
   const toggleProgram = useCallback((id: string) => {
     setForm((f) => ({
       ...f,
@@ -1042,7 +1014,6 @@ function PaymentDialog({
     setForm((f) => ({ ...f, programIds: [] }))
   }, [])
 
-  // ─── Resolve selected student for edit mode ───────────────────────────
   useEffect(() => {
     if (!isEdit || !payment) return
     let alive = true
@@ -1062,7 +1033,6 @@ function PaymentDialog({
     }
   }, [isEdit, payment])
 
-  // ─── Debounced student search ────────────────────────────────────────
   useEffect(() => {
     if (studentQuery.trim().length < 2) {
       setStudents([])
@@ -1070,9 +1040,7 @@ function PaymentDialog({
     }
     let alive = true
     const h = setTimeout(() => {
-      api<{ data: StudentRow[] }>(
-        `/api/students?q=${encodeURIComponent(studentQuery)}&limit=10`,
-      )
+      api<{ data: StudentRow[] }>(`/api/students?q=${encodeURIComponent(studentQuery)}&limit=10`)
         .then((r) => alive && setStudents(r.data || []))
         .catch(() => alive && setStudents([]))
     }, 250)
@@ -1082,7 +1050,6 @@ function PaymentDialog({
     }
   }, [studentQuery])
 
-  // ─── When student changes, auto-check their enrolled programmes ───────
   const handleSelectStudent = useCallback(
     (s: StudentRow) => {
       setSelectedStudent(s)
@@ -1104,7 +1071,6 @@ function PaymentDialog({
     [programs],
   )
 
-  // ─── Submit ───────────────────────────────────────────────────────────
   const handleSubmit = async () => {
     if (!form.studentId) {
       toast.error('Please select a student')
@@ -1157,7 +1123,8 @@ function PaymentDialog({
 
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-2xl">
+      {/* w-[95vw] ensures dialog fits on mobile; max-w-2xl caps desktop */}
+      <DialogContent className="w-[95vw] max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Wallet className="h-5 w-5 text-primary" />
@@ -1171,20 +1138,19 @@ function PaymentDialog({
         </DialogHeader>
 
         <div className="grid gap-4 py-2">
-          {/* Student picker */}
           <div className="flex flex-col gap-1.5">
             <Label>Student *</Label>
             {selectedStudent ? (
               <div className="flex items-center justify-between gap-2 rounded-lg border p-2.5">
-                <div className="flex items-center gap-2.5">
-                  <Avatar className="h-9 w-9">
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <Avatar className="h-9 w-9 shrink-0">
                     <AvatarFallback className={avatarColor(selectedStudent.fullName)}>
                       {initials(selectedStudent.fullName)}
                     </AvatarFallback>
                   </Avatar>
-                  <div>
-                    <p className="text-sm font-medium">{selectedStudent.fullName}</p>
-                    <p className="font-mono text-[11px] text-muted-foreground">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{selectedStudent.fullName}</p>
+                    <p className="truncate font-mono text-[11px] text-muted-foreground">
                       {selectedStudent.studentId}
                     </p>
                   </div>
@@ -1199,6 +1165,7 @@ function PaymentDialog({
                     }
                   }}
                   disabled={isEdit}
+                  className="shrink-0"
                 >
                   {isEdit ? 'Locked' : 'Change'}
                 </Button>
@@ -1224,14 +1191,14 @@ function PaymentDialog({
                         onClick={() => handleSelectStudent(s)}
                         className="flex w-full items-center gap-2.5 border-b border-border/50 p-2.5 text-left transition-colors last:border-0 hover:bg-muted/50"
                       >
-                        <Avatar className="h-8 w-8">
+                        <Avatar className="h-8 w-8 shrink-0">
                           <AvatarFallback className={avatarColor(s.fullName)}>
                             {initials(s.fullName)}
                           </AvatarFallback>
                         </Avatar>
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-sm font-medium">{s.fullName}</p>
-                          <p className="font-mono text-[10px] text-muted-foreground">
+                          <p className="truncate font-mono text-[10px] text-muted-foreground">
                             {s.studentId} · {s.ageGroup ?? '—'}
                           </p>
                         </div>
@@ -1255,7 +1222,6 @@ function PaymentDialog({
             )}
           </div>
 
-          {/* Month + Method */}
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="flex flex-col gap-1.5">
               <Label>Month (YYYY-MM) *</Label>
@@ -1285,7 +1251,6 @@ function PaymentDialog({
             </div>
           </div>
 
-          {/* Programmes multi-select (one bill, several programmes) */}
           <div className="flex flex-col gap-1.5">
             <div className="flex items-center justify-between gap-2">
               <Label>Programmes *</Label>
@@ -1355,7 +1320,6 @@ function PaymentDialog({
             </div>
           </div>
 
-          {/* Bill summary */}
           <div className="rounded-lg border bg-muted/30 p-3">
             <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
               Bill summary
@@ -1390,7 +1354,6 @@ function PaymentDialog({
             )}
           </div>
 
-          {/* Paid amount + dates */}
           <div className="grid gap-4 sm:grid-cols-3">
             <div className="flex flex-col gap-1.5">
               <div className="flex items-center justify-between gap-2">
@@ -1433,7 +1396,6 @@ function PaymentDialog({
             </div>
           </div>
 
-          {/* Balance hint */}
           {balance > 0 ? (
             <div className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
               Outstanding balance: <span className="font-semibold">{currency(balance)}</span>{' '}
@@ -1447,7 +1409,6 @@ function PaymentDialog({
             </div>
           ) : null}
 
-          {/* Note */}
           <div className="flex flex-col gap-1.5">
             <Label>Note</Label>
             <Textarea
@@ -1529,7 +1490,6 @@ function WhatsAppDialog({ payment, onClose }: { payment: PaymentRow; onClose: ()
   }, [payment, hasBalance, balance, guardian?.name, school.name, school.phone])
 
   const [message, setMessage] = useState(defaultMessage)
-  // Re-prefill when the selected guardian changes
   useEffect(() => {
     setMessage(defaultMessage)
   }, [defaultMessage])
@@ -1550,7 +1510,7 @@ function WhatsAppDialog({ payment, onClose }: { payment: PaymentRow; onClose: ()
 
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="flex max-h-[85vh] flex-col overflow-hidden sm:max-w-lg">
+      <DialogContent className="flex w-[95vw] max-h-[85vh] flex-col overflow-hidden sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
@@ -1571,7 +1531,6 @@ function WhatsAppDialog({ payment, onClose }: { payment: PaymentRow; onClose: ()
         </DialogHeader>
 
         <div className="scroll-thin -mx-1 flex-1 space-y-4 overflow-y-auto px-1">
-          {/* Guardian picker */}
           {guardians.length === 0 ? (
             <div className="rounded-lg border border-dashed border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-300">
               No guardian phone numbers on file for this student. Add a guardian with a phone
@@ -1631,7 +1590,7 @@ function WhatsAppDialog({ payment, onClose }: { payment: PaymentRow; onClose: ()
                   {guardian.name}
                   {guardian.relationship ? ` · ${guardian.relationship}` : ''}
                 </p>
-                <p className="font-mono text-[10px] text-muted-foreground">{guardian.phone}</p>
+                <p className="truncate font-mono text-[10px] text-muted-foreground">{guardian.phone}</p>
               </div>
               {waPhone && (
                 <Badge
@@ -1644,7 +1603,6 @@ function WhatsAppDialog({ payment, onClose }: { payment: PaymentRow; onClose: ()
             </div>
           ) : null}
 
-          {/* Editable message */}
           <div className="grid gap-1.5">
             <div className="flex items-center justify-between">
               <Label className="text-xs text-muted-foreground">Message</Label>
@@ -1693,10 +1651,7 @@ function WhatsAppDialog({ payment, onClose }: { payment: PaymentRow; onClose: ()
   )
 }
 
-// ─── Bulk WhatsApp blast (all outstanding guardians for the month) ─────────
-// Server groups every outstanding bill per guardian phone; the admin walks the
-// queue row by row: copy the combined message or open wa.me per family. Rows
-// already contacted get a "Contacted" tick so nothing is sent twice.
+// ─── Bulk WhatsApp blast ───────────────────────────────────────────────────
 interface BlastBill {
   id: string
   receiptNo: string | null
@@ -1754,9 +1709,7 @@ function blastMessage(
       if (b.lines.length > 1 || (b.lines[0] && b.lines[0].description !== 'Tuition fee')) {
         for (const l of b.lines) lines.push(`• ${l.description}: LKR ${l.amount.toLocaleString()}`)
       }
-      lines.push(
-        `• Bill ${b.receiptNo ?? ''} — balance: *LKR ${b.balance.toLocaleString()}*`,
-      )
+      lines.push(`• Bill ${b.receiptNo ?? ''} — balance: *LKR ${b.balance.toLocaleString()}*`)
     }
   }
   lines.push(
@@ -1781,7 +1734,6 @@ function BulkWhatsAppDialog({ month, onClose }: { month: string; onClose: () => 
 
   useEffect(() => {
     let alive = true
-    // Async-only state setup — satisfies react-hooks/set-state-in-effect
     Promise.resolve().then(() => {
       if (!alive) return
       setLoading(true)
@@ -1821,7 +1773,6 @@ function BulkWhatsAppDialog({ month, onClose }: { month: string; onClose: () => 
     }
   }
 
-  // First un-contacted guardian — powers the "Open next" queue button
   const nextGuardian = data?.guardians.find((g) => !sent.has(g.phone)) ?? null
   const contacted = sent.size
   const queueTotal = data?.guardians.length ?? 0
@@ -1833,7 +1784,7 @@ function BulkWhatsAppDialog({ month, onClose }: { month: string; onClose: () => 
 
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="flex max-h-[88vh] flex-col overflow-hidden sm:max-w-2xl">
+      <DialogContent className="flex w-[95vw] max-h-[88vh] flex-col overflow-hidden sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
@@ -1871,7 +1822,6 @@ function BulkWhatsAppDialog({ month, onClose }: { month: string; onClose: () => 
           </div>
         ) : (
           <>
-            {/* Queue summary + progress */}
             <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-muted/30 p-3">
               <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-1 text-xs">
                 <span className="font-semibold text-foreground">{queueTotal} families</span>
@@ -1893,7 +1843,6 @@ function BulkWhatsAppDialog({ month, onClose }: { month: string; onClose: () => 
               </div>
             </div>
 
-            {/* Guardian queue */}
             <div className="scroll-thin -mx-1 flex-1 space-y-2 overflow-y-auto px-1">
               {data.guardians.map((g) => {
                 const isSent = sent.has(g.phone)
@@ -1921,7 +1870,6 @@ function BulkWhatsAppDialog({ month, onClose }: { month: string; onClose: () => 
                           <p className="truncate text-sm font-semibold">
                             {g.guardianName || 'Unknown guardian'}
                           </p>
-                          {/* Balance shown inline on mobile (right column hidden) */}
                           <span className="text-sm font-bold tabular-nums text-red-600 dark:text-red-400 sm:hidden">
                             {currency(g.totalBalance)}
                           </span>
@@ -1939,10 +1887,9 @@ function BulkWhatsAppDialog({ month, onClose }: { month: string; onClose: () => 
                             </Badge>
                           )}
                         </div>
-                        <p className="font-mono text-[11px] text-muted-foreground">
+                        <p className="truncate font-mono text-[11px] text-muted-foreground">
                           +{g.phone} · {g.billCount} bill{g.billCount > 1 ? 's' : ''}
                         </p>
-                        {/* Students + balances */}
                         <div className="mt-1.5 flex flex-wrap gap-1">
                           {g.students.map((s) => (
                             <span
@@ -1956,7 +1903,6 @@ function BulkWhatsAppDialog({ month, onClose }: { month: string; onClose: () => 
                             </span>
                           ))}
                         </div>
-                        {/* Mobile actions row (desktop keeps its right column) */}
                         <div className="mt-2 flex gap-1.5 sm:hidden">
                           <Button
                             variant="outline"
@@ -2004,7 +1950,6 @@ function BulkWhatsAppDialog({ month, onClose }: { month: string; onClose: () => 
                 )
               })}
 
-              {/* Unreachable — data-quality follow-up */}
               {data.unreachable.length > 0 && (
                 <div className="rounded-xl border border-dashed border-amber-500/40 bg-amber-500/5 p-3">
                   <p className="flex items-center gap-1.5 text-xs font-semibold text-amber-700 dark:text-amber-300">
@@ -2044,10 +1989,7 @@ function BulkWhatsAppDialog({ month, onClose }: { month: string; onClose: () => 
             Close
           </Button>
           {nextGuardian ? (
-            <Button
-              className="gap-2 bg-emerald-600 hover:bg-emerald-700"
-              onClick={openNext}
-            >
+            <Button className="gap-2 bg-emerald-600 hover:bg-emerald-700" onClick={openNext}>
               <MessageCircle className="h-4 w-4" />
               Open next ({contacted + 1}/{queueTotal})
             </Button>
@@ -2083,7 +2025,7 @@ function ReceiptDialog({ payment, onClose }: ReceiptDialogProps) {
 
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-md p-0">
+      <DialogContent className="w-[95vw] max-w-md max-h-[90vh] overflow-y-auto p-0">
         <DialogHeader className="sr-only">
           <DialogTitle>Receipt {payment.receiptNo}</DialogTitle>
           <DialogDescription>Printable receipt for the selected payment.</DialogDescription>
@@ -2115,7 +2057,6 @@ function ReceiptDialog({ payment, onClose }: ReceiptDialogProps) {
           </div>
 
           <div className="space-y-4 p-4">
-            {/* Receipt meta */}
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -2131,7 +2072,6 @@ function ReceiptDialog({ payment, onClose }: ReceiptDialogProps) {
               </div>
             </div>
 
-            {/* Student */}
             <div className="rounded-lg bg-muted/40 p-3">
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
                 Student
@@ -2151,7 +2091,6 @@ function ReceiptDialog({ payment, onClose }: ReceiptDialogProps) {
               </div>
             </div>
 
-            {/* Line items */}
             <div className="space-y-1.5 border-y py-3 text-sm">
               {billLines(payment).map((item, i) => (
                 <div key={`${item.key}-${i}`} className="flex justify-between gap-2">
@@ -2209,7 +2148,6 @@ function ReceiptDialog({ payment, onClose }: ReceiptDialogProps) {
               </div>
             </div>
 
-            {/* Status + PAID stamp */}
             <div className="flex items-center justify-between">
               <Badge
                 variant="outline"
@@ -2343,7 +2281,6 @@ function BulkGenerateDialog({
     if (!open) return
     const [y, m] = defaultMonth.split('-').map(Number)
     const dd = `${y}-${String(m).padStart(2, '0')}-10`
-    // Defer to avoid synchronous setState in effect body
     Promise.resolve().then(() => {
       setTargetMonth(defaultMonth)
       setDueDate(dd)
@@ -2374,7 +2311,7 @@ function BulkGenerateDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+      <DialogContent className="w-[95vw] max-h-[90vh] overflow-y-auto sm:max-w-lg">
         {step === 'setup' ? (
           <>
             <DialogHeader>
@@ -2494,7 +2431,6 @@ function BulkGenerateDialog({
 
             {!previewError && preview && t && (
               <>
-                {/* Summary chips */}
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                   <div className="rounded-lg border bg-emerald-500/5 p-2.5 text-center">
                     <p className="text-lg font-bold tabular-nums text-emerald-700 dark:text-emerald-400">
@@ -2528,7 +2464,6 @@ function BulkGenerateDialog({
                   </div>
                 </div>
 
-                {/* Per-student bill drafts */}
                 <div className="grid gap-1.5">
                   <p className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
                     <FileText className="h-3.5 w-3.5" />
@@ -2608,7 +2543,6 @@ function BulkGenerateDialog({
                   )}
                 </div>
 
-                {/* Already-billed collapsible */}
                 {preview.skipped.length > 0 && (
                   <div className="rounded-lg border border-amber-500/30 bg-amber-500/5">
                     <button
@@ -2649,7 +2583,6 @@ function BulkGenerateDialog({
                   </div>
                 )}
 
-                {/* No-programme students */}
                 {preview.noProgrammes.length > 0 && (
                   <div className="flex items-start gap-2 rounded-lg border border-sky-500/30 bg-sky-500/5 p-3 text-xs">
                     <Users className="mt-0.5 h-4 w-4 shrink-0 text-sky-600 dark:text-sky-400" />
@@ -2713,7 +2646,7 @@ function BulkGenerateDialog({
   )
 }
 
-// ─── Student fee statement (all billed months, printable) ──────────────────
+// ─── Student fee statement ─────────────────────────────────────────────────
 interface StatementLine {
   description: string
   amount: number
@@ -2793,7 +2726,7 @@ function StudentStatementDialog({
 
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto scroll-thin sm:max-w-xl">
+      <DialogContent className="w-[95vw] max-h-[90vh] overflow-y-auto scroll-thin sm:max-w-xl">
         <DialogHeader className="sr-only">
           <DialogTitle>Fee statement</DialogTitle>
           <DialogDescription>
@@ -2816,7 +2749,6 @@ function StudentStatementDialog({
         ) : (
           <>
             <div className="statement-print rounded-lg border">
-              {/* Header */}
               <div className="flex items-center justify-between gap-3 border-b p-4">
                 <div className="flex items-center gap-3">
                   <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-lg ring-1 ring-border">
@@ -2842,7 +2774,6 @@ function StudentStatementDialog({
                 </div>
               </div>
 
-              {/* Student meta */}
               <div className="grid grid-cols-2 gap-3 border-b p-4 sm:grid-cols-4">
                 <div>
                   <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Student</p>
@@ -2887,7 +2818,6 @@ function StudentStatementDialog({
                 </div>
               </div>
 
-              {/* Months table */}
               <div className="max-h-[46vh] overflow-y-auto scroll-thin">
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-muted/70 backdrop-blur">
@@ -2961,7 +2891,6 @@ function StudentStatementDialog({
                 </table>
               </div>
 
-              {/* Totals */}
               <div className="space-y-1 border-t bg-muted/30 p-4 text-sm">
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Total billed ({data.totals.billCount} bills)</span>
