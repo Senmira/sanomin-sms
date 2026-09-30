@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import {
   Users,
@@ -36,10 +36,11 @@ import {
   Clock,
   History,
   Printer,
+  ImagePlus,
 } from 'lucide-react'
 
 import { api } from '@/lib/api'
-import { getSchoolInfo } from '@/lib/school'
+import { getSchoolInfo, useSchoolInfo } from '@/lib/school'
 import {
   TeacherRow,
   GENDERS,
@@ -59,11 +60,13 @@ import {
   currency,
   currencyCompact,
 } from '@/lib/format'
+import { fileToCompressedDataUrl } from '@/lib/image'
 
 import { SectionHeader } from '@/components/shared/section-header'
 import { StatCard } from '@/components/shared/stat-card'
 import { EmptyState } from '@/components/shared/empty-state'
 import { ConfirmDialog } from '@/components/shared/confirm-dialog'
+import { Barcode } from '@/components/shared/barcode'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -71,6 +74,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { Checkbox } from '@/components/ui/checkbox'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import {
   Select,
@@ -108,6 +112,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 const PAGE_SIZE = 20
+const CARDS_PER_PAGE = 10
 
 function toDateInput(iso?: string | null): string {
   if (!iso) return ''
@@ -120,6 +125,17 @@ function csvEscape(v: unknown): string {
   const s = String(v ?? '')
   if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`
   return s
+}
+
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+  return out
+}
+
+/** Barcode value used on ID cards — fingerprint when present, else teacher ID. */
+function teacherBarcode(t: Pick<TeacherRow, 'fingerprintId' | 'teacherId'>): string {
+  return t.fingerprintId || t.teacherId
 }
 
 function exportTeachersCsv(rows: TeacherRow[]): void {
@@ -180,6 +196,162 @@ const STATUS_VARIANT: Record<
   'On Leave': 'outline',
 }
 
+// ─── Print CSS (single + bulk) ─────────────────────────────────────────────
+const PRINT_CSS = `
+@media print {
+  body * { visibility: hidden !important; }
+
+  @page {
+    size: A4 portrait;
+    margin: 0;
+  }
+
+  body:not(.bulk-print-mode) .printable-id-card,
+  body:not(.bulk-print-mode) .printable-id-card * {
+    visibility: visible !important;
+  }
+  body:not(.bulk-print-mode) .printable-id-card {
+    position: absolute !important;
+    top: 8mm !important;
+    left: 8mm !important;
+    right: auto !important;
+    bottom: auto !important;
+    transform: none !important;
+    width: 85.6mm !important;
+    height: 54mm !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+    border-radius: 3mm !important;
+    overflow: hidden !important;
+  }
+  body:not(.bulk-print-mode) .printable-id-card .p-4 { padding: 2mm !important; }
+  body:not(.bulk-print-mode) .printable-id-card .size-24 {
+    width: 18mm !important;
+    height: 18mm !important;
+  }
+  body:not(.bulk-print-mode) .no-print { display: none !important; }
+
+  body.bulk-print-mode .printable-id-card,
+  body.bulk-print-mode .no-print,
+  body.bulk-print-mode .dialog-backdrop-hide {
+    display: none !important;
+  }
+  body.bulk-print-mode .bulk-print-container,
+  body.bulk-print-mode .bulk-print-container * {
+    visibility: visible !important;
+  }
+  body.bulk-print-mode .bulk-print-container {
+    display: block !important;
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 210mm !important;
+  }
+  body.bulk-print-mode .bulk-print-page {
+    display: grid !important;
+    grid-template-columns: repeat(2, 90mm);
+    grid-template-rows: repeat(5, 52mm);
+    gap: 4mm 3mm;
+    padding: 6mm 12mm;
+    width: 210mm;
+    height: 297mm;
+    box-sizing: border-box;
+    page-break-after: always;
+    page-break-inside: avoid;
+    break-after: page;
+  }
+  body.bulk-print-mode .bulk-print-page:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+  body.bulk-print-mode .bulk-print-card {
+    width: 90mm;
+    height: 52mm;
+    border: 0.4mm solid #a1a1aa;
+    border-radius: 3mm;
+    overflow: hidden;
+    page-break-inside: avoid;
+    break-inside: avoid;
+    background: white;
+    display: flex;
+    flex-direction: column;
+  }
+}
+
+.bulk-print-container { display: none; }
+
+.bulk-print-card .bkh {
+  display: flex;
+  align-items: center;
+  gap: 2mm;
+  padding: 1.5mm 2.5mm;
+  background: linear-gradient(135deg, #1e40af, #7c3aed 55%, #dc2626);
+  color: white;
+  flex-shrink: 0;
+}
+.bulk-print-card .bkh img {
+  height: 6mm; width: 6mm;
+  border-radius: 50%;
+  background: white;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+.bulk-print-card .bkh-name { font-size: 2.8mm; font-weight: 700; line-height: 1.1; }
+.bulk-print-card .bkh-sub { font-size: 2mm; opacity: 0.9; line-height: 1.1; }
+.bulk-print-card .bkb {
+  display: flex;
+  gap: 3mm;
+  padding: 2mm 2.5mm;
+  flex: 1;
+  align-items: center;
+  min-height: 0;
+}
+.bulk-print-card .bkp {
+  height: 20mm;
+  width: 20mm;
+  border-radius: 1mm;
+  border: 0.3mm solid #d4d4d8;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: #f3f4f6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  color: #7c3aed;
+  font-size: 5.5mm;
+}
+.bulk-print-card .bki { min-width: 0; flex: 1; }
+.bulk-print-card .bkn {
+  font-size: 3.2mm; font-weight: 700; line-height: 1.15;
+  word-break: break-word;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.bulk-print-card .bk-id {
+  font-size: 2.4mm;
+  color: #52525b;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  margin-top: 0.8mm;
+  letter-spacing: 0.2mm;
+}
+.bulk-print-card .bkf {
+  border-top: 0.3mm solid #e4e4e7;
+  padding: 0.8mm 2mm 1.2mm;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 0.2mm;
+}
+.bulk-print-card .bkf .barcode-wrap svg { height: 6mm !important; width: auto !important; }
+.bulk-print-card .bkb-txt {
+  font-size: 2mm;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.6mm;
+}
+`
+
 // ─── List response shape ───────────────────────────────────────────────────
 interface ListResponse {
   data: TeacherRow[]
@@ -195,11 +367,11 @@ interface ListResponse {
   }
 }
 
-// ─── Type filter tabs (All / Internal / External) ──────────────────────────
 type TypeFilter = 'All' | 'Internal' | 'External'
 
 // ─── Main section component ────────────────────────────────────────────────
 export function TeachersSection() {
+  const school = useSchoolInfo()
   const [rows, setRows] = useState<TeacherRow[]>([])
   const [total, setTotal] = useState(0)
   const [stats, setStats] = useState({
@@ -212,19 +384,25 @@ export function TeachersSection() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // filters
   const [q, setQ] = useState('')
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('All')
   const [status, setStatus] = useState('')
   const [page, setPage] = useState(1)
 
-  // dialog state
+  // Selection + bulk print
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [bulkPrintTeachers, setBulkPrintTeachers] = useState<TeacherRow[]>([])
+  const bulkPrintRef = useRef(false)
+
+  // Dialogs
   const [addEditOpen, setAddEditOpen] = useState(false)
   const [editing, setEditing] = useState<TeacherRow | null>(null)
   const [profileOpen, setProfileOpen] = useState(false)
   const [profileTeacher, setProfileTeacher] = useState<TeacherRow | null>(null)
   const [fpOpen, setFpOpen] = useState(false)
   const [fpTarget, setFpTarget] = useState<TeacherRow | null>(null)
+  const [idCardOpen, setIdCardOpen] = useState(false)
+  const [idCardTeacher, setIdCardTeacher] = useState<TeacherRow | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<TeacherRow | null>(null)
 
   const hasFilters = Boolean(q || status || typeFilter !== 'All')
@@ -260,7 +438,6 @@ export function TeachersSection() {
     return p.toString()
   }, [q, typeFilter, status, page])
 
-  // Fetch list — debounced via setTimeout; setState only inside async callback
   useEffect(() => {
     let alive = true
     const t = setTimeout(() => {
@@ -306,7 +483,37 @@ export function TeachersSection() {
       })
   }, [queryParams])
 
-  // Action handlers
+  // ─── Selection helpers ────────────────────────────────────────────────
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
+
+  const visibleIds = useMemo(() => rows.map((r) => r.id), [rows])
+  const allVisibleSelected =
+    visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id))
+  const someVisibleSelected =
+    !allVisibleSelected && visibleIds.some((id) => selectedIds.has(id))
+
+  const toggleSelectAllVisible = useCallback(() => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (visibleIds.every((id) => next.has(id))) {
+        for (const id of visibleIds) next.delete(id)
+      } else {
+        for (const id of visibleIds) next.add(id)
+      }
+      return next
+    })
+  }, [visibleIds])
+
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), [])
+
+  // ─── Openers ──────────────────────────────────────────────────────────
   const openAdd = useCallback(() => {
     setEditing(null)
     setAddEditOpen(true)
@@ -327,12 +534,22 @@ export function TeachersSection() {
     setFpOpen(true)
   }, [])
 
+  const openIdCard = useCallback((t: TeacherRow) => {
+    setIdCardTeacher(t)
+    setIdCardOpen(true)
+  }, [])
+
   const handleDelete = useCallback(async () => {
     if (!deleteTarget) return
     try {
       await api(`/api/teachers/${deleteTarget.id}`, { method: 'DELETE' })
       toast.success(`${deleteTarget.fullName} deleted`)
       setDeleteTarget(null)
+      setSelectedIds((prev) => {
+        const next = new Set(prev)
+        next.delete(deleteTarget.id)
+        return next
+      })
       reload()
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Delete failed'
@@ -340,13 +557,64 @@ export function TeachersSection() {
     }
   }, [deleteTarget, reload])
 
+  // ─── Bulk print ───────────────────────────────────────────────────────
+  const startBulkPrint = useCallback((teachers: TeacherRow[]) => {
+    if (teachers.length === 0) {
+      toast.error('Select at least one teacher to print')
+      return
+    }
+    bulkPrintRef.current = true
+    setBulkPrintTeachers(teachers)
+  }, [])
+
+  useEffect(() => {
+    if (bulkPrintTeachers.length === 0) return
+    if (!bulkPrintRef.current) return
+
+    document.body.classList.add('bulk-print-mode')
+
+    const run = async () => {
+      await new Promise((r) => setTimeout(r, 350))
+
+      const imgs = Array.from(
+        document.querySelectorAll<HTMLImageElement>('.bulk-print-container img'),
+      )
+      await Promise.all(
+        imgs.map((img) =>
+          img.complete
+            ? Promise.resolve()
+            : new Promise<void>((resolve) => {
+                img.addEventListener('load', () => resolve(), { once: true })
+                img.addEventListener('error', () => resolve(), { once: true })
+              }),
+        ),
+      )
+
+      window.print()
+    }
+    run()
+
+    const cleanup = () => {
+      bulkPrintRef.current = false
+      document.body.classList.remove('bulk-print-mode')
+      setBulkPrintTeachers([])
+    }
+    window.addEventListener('afterprint', cleanup)
+    return () => {
+      window.removeEventListener('afterprint', cleanup)
+      document.body.classList.remove('bulk-print-mode')
+    }
+  }, [bulkPrintTeachers])
+
+  const selectedTeachers = useMemo(
+    () => rows.filter((r) => selectedIds.has(r.id)),
+    [rows, selectedIds],
+  )
+
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
   const showingFrom = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1
   const showingTo = Math.min(total, page * PAGE_SIZE)
 
-  // Σ net take-home over all loaded teachers. Rate-only external teachers
-  // (no basic salary / allowances) fall back to their monthly tuition rate,
-  // since statutory EPF/ETF does not apply to them.
   const monthlyPayroll = useMemo(
     () =>
       rows.reduce((sum, t) => {
@@ -360,12 +628,25 @@ export function TeachersSection() {
 
   return (
     <div className="flex flex-col gap-6">
+      <style dangerouslySetInnerHTML={{ __html: PRINT_CSS }} />
+
       <SectionHeader
         title="Teachers"
         description="Manage internal staff and external tuition teachers. Track fingerprints, classes, and contact details."
         icon={<Users className="h-5 w-5" />}
         actions={
-          <>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {selectedIds.size > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => startBulkPrint(selectedTeachers)}
+                className="gap-2 border-primary/40 text-primary hover:bg-primary/5"
+              >
+                <Printer className="h-4 w-4" />
+                Print {selectedIds.size} ID card{selectedIds.size === 1 ? '' : 's'}
+              </Button>
+            )}
             <Button
               variant="outline"
               size="sm"
@@ -379,7 +660,7 @@ export function TeachersSection() {
               <Plus className="h-4 w-4" />
               Add Teacher
             </Button>
-          </>
+          </div>
         }
       />
 
@@ -423,7 +704,7 @@ export function TeachersSection() {
         />
       </div>
 
-      {/* Type tabs (segmented control) */}
+      {/* Type tabs */}
       <Tabs
         value={typeFilter}
         onValueChange={(v) => setTypeTab(v as TypeFilter)}
@@ -434,6 +715,29 @@ export function TeachersSection() {
           <TabsTrigger value="External">External</TabsTrigger>
         </TabsList>
       </Tabs>
+
+      {/* Selection hint strip */}
+      {selectedIds.size > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-xs">
+          <span className="font-medium text-primary">
+            {selectedIds.size} teacher{selectedIds.size === 1 ? '' : 's'} selected
+          </span>
+          <span className="text-muted-foreground">
+            · {Math.ceil(selectedIds.size / CARDS_PER_PAGE)} A4 page
+            {Math.ceil(selectedIds.size / CARDS_PER_PAGE) === 1 ? '' : 's'} ·{' '}
+            {CARDS_PER_PAGE} cards per sheet
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={clearSelection}
+            className="ml-auto h-6 gap-1 px-2 text-[11px]"
+          >
+            <X className="h-3 w-3" />
+            Clear selection
+          </Button>
+        </div>
+      )}
 
       {/* Toolbar */}
       <div className="flex flex-col gap-3 rounded-xl border bg-card p-3 shadow-sm sm:flex-row sm:items-center sm:gap-2 sm:p-4">
@@ -483,6 +787,19 @@ export function TeachersSection() {
           <Table className="table-zebra">
             <TableHeader className="sticky top-0 z-10 bg-muted/80 backdrop-blur">
               <TableRow>
+                <TableHead className="w-10 pr-0">
+                  <Checkbox
+                    checked={
+                      allVisibleSelected
+                        ? true
+                        : someVisibleSelected
+                          ? 'indeterminate'
+                          : false
+                    }
+                    onCheckedChange={toggleSelectAllVisible}
+                    aria-label="Select all visible teachers"
+                  />
+                </TableHead>
                 <TableHead className="min-w-[220px]">Teacher</TableHead>
                 <TableHead>Type</TableHead>
                 <TableHead>Specialization</TableHead>
@@ -499,6 +816,9 @@ export function TeachersSection() {
               {loading ? (
                 Array.from({ length: 7 }).map((_, i) => (
                   <TableRow key={`sk-${i}`}>
+                    <TableCell className="pr-0">
+                      <Skeleton className="h-4 w-4 rounded" />
+                    </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-3">
                         <Skeleton className="h-9 w-9 rounded-full" />
@@ -542,7 +862,7 @@ export function TeachersSection() {
                 ))
               ) : rows.length === 0 ? (
                 <TableRow className="hover:bg-transparent">
-                  <TableCell colSpan={10} className="p-0">
+                  <TableCell colSpan={11} className="p-0">
                     <EmptyState
                       icon={Users}
                       title={hasFilters ? 'No matching teachers' : 'No teachers yet'}
@@ -566,8 +886,11 @@ export function TeachersSection() {
                   <TeacherTableRow
                     key={t.id}
                     teacher={t}
+                    isSelected={selectedIds.has(t.id)}
+                    onToggleSelect={() => toggleSelect(t.id)}
                     onView={() => openProfile(t)}
                     onEdit={() => openEdit(t)}
+                    onPrintId={() => openIdCard(t)}
                     onManageFingerprint={() => openFingerprint(t)}
                     onDelete={() => setDeleteTarget(t)}
                   />
@@ -577,7 +900,6 @@ export function TeachersSection() {
           </Table>
         </div>
 
-        {/* Pagination */}
         {!loading && rows.length > 0 && (
           <div className="flex flex-col items-center justify-between gap-2 border-t bg-muted/40 px-4 py-2.5 sm:flex-row">
             <p className="text-xs text-muted-foreground">
@@ -611,6 +933,19 @@ export function TeachersSection() {
         )}
       </div>
 
+      {/* Hidden bulk-print container */}
+      {bulkPrintTeachers.length > 0 && (
+        <div className="bulk-print-container" aria-hidden>
+          {chunk(bulkPrintTeachers, CARDS_PER_PAGE).map((pageTeachers, pageIdx) => (
+            <div key={pageIdx} className="bulk-print-page">
+              {pageTeachers.map((t) => (
+                <BulkIdCard key={t.id} teacher={t} school={school} />
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Dialogs */}
       {addEditOpen && (
         <AddEditTeacherDialog
@@ -636,6 +971,10 @@ export function TeachersSection() {
             setProfileOpen(false)
             openFingerprint(profileTeacher)
           }}
+          onPrintId={() => {
+            setProfileOpen(false)
+            openIdCard(profileTeacher)
+          }}
         />
       )}
 
@@ -648,6 +987,13 @@ export function TeachersSection() {
             setFpOpen(false)
             reload()
           }}
+        />
+      )}
+
+      {idCardOpen && idCardTeacher && (
+        <IdCardDialog
+          teacher={idCardTeacher}
+          onClose={() => setIdCardOpen(false)}
         />
       )}
 
@@ -670,14 +1016,20 @@ export function TeachersSection() {
 // ─── Teacher table row ─────────────────────────────────────────────────────
 function TeacherTableRow({
   teacher,
+  isSelected,
+  onToggleSelect,
   onView,
   onEdit,
+  onPrintId,
   onManageFingerprint,
   onDelete,
 }: {
   teacher: TeacherRow
+  isSelected: boolean
+  onToggleSelect: () => void
   onView: () => void
   onEdit: () => void
+  onPrintId: () => void
   onManageFingerprint: () => void
   onDelete: () => void
 }) {
@@ -693,14 +1045,32 @@ function TeacherTableRow({
   const grossPay = rateOnlyExternal ? teacher.monthlyRate : sb.gross
 
   return (
-    <TableRow className="cursor-pointer" onClick={onView}>
+    <TableRow
+      className={`cursor-pointer ${isSelected ? 'bg-primary/5' : ''}`}
+      onClick={onView}
+    >
+      <TableCell className="pr-0" onClick={(e) => e.stopPropagation()}>
+        <Checkbox
+          checked={isSelected}
+          onCheckedChange={onToggleSelect}
+          aria-label={`Select ${teacher.fullName}`}
+        />
+      </TableCell>
       <TableCell>
         <div className="flex items-center gap-3">
-          <Avatar className="size-9 ring-1 ring-border">
-            <AvatarFallback className={avatarColor(teacher.fullName)}>
-              {initials(teacher.fullName)}
-            </AvatarFallback>
-          </Avatar>
+          {teacher.photoUrl ? (
+            <img
+              src={teacher.photoUrl}
+              alt={teacher.fullName}
+              className="size-9 rounded-full object-cover ring-1 ring-border"
+            />
+          ) : (
+            <Avatar className="size-9 ring-1 ring-border">
+              <AvatarFallback className={avatarColor(teacher.fullName)}>
+                {initials(teacher.fullName)}
+              </AvatarFallback>
+            </Avatar>
+          )}
           <div className="min-w-0">
             <div className="truncate font-medium text-foreground">
               {teacher.fullName}
@@ -841,6 +1211,10 @@ function TeacherTableRow({
                 <Pencil className="mr-2 h-4 w-4" />
                 Edit
               </DropdownMenuItem>
+              <DropdownMenuItem onClick={onPrintId}>
+                <Printer className="mr-2 h-4 w-4" />
+                Print ID card
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={onManageFingerprint}>
                 <Fingerprint className="mr-2 h-4 w-4" />
                 Manage fingerprint
@@ -929,7 +1303,6 @@ function formFromTeacher(t: TeacherRow): FormState {
   }
 }
 
-// Generate a random FP-{4-digit} fingerprint id (demo only)
 function randomFingerprintId(): string {
   const n = Math.floor(1000 + Math.random() * 9000)
   return `FP-${n}`
@@ -944,17 +1317,17 @@ function AddEditTeacherDialog({
   onClose: () => void
   onSaved: (msg: string) => void
 }) {
-  // Lazy initial state — runs once when dialog mounts
   const [form, setForm] = useState<FormState>(() =>
     teacher ? formFromTeacher(teacher) : emptyForm(),
   )
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const [photoProcessing, setPhotoProcessing] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const isEdit = teacher !== null
   const isExternal = form.type === 'External'
 
-  // Live salary breakdown — recomputed on every keystroke
   const sb = salaryBreakdown(
     Number(form.basicSalary || 0),
     Number(form.allowances || 0),
@@ -963,6 +1336,29 @@ function AddEditTeacherDialog({
   const updateField = <K extends keyof FormState>(key: K, value: FormState[K]) => {
     setForm((f) => ({ ...f, [key]: value }))
   }
+
+  const handlePhotoChange = useCallback(async (file: File | null) => {
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      toast.error('Please choose an image file')
+      return
+    }
+    setPhotoProcessing(true)
+    try {
+      const dataUrl = await fileToCompressedDataUrl(file, 400, 0.85)
+      setForm((f) => ({ ...f, photoUrl: dataUrl }))
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to process image'
+      toast.error(msg)
+    } finally {
+      setPhotoProcessing(false)
+    }
+  }, [])
+
+  const clearPhoto = useCallback(() => {
+    setForm((f) => ({ ...f, photoUrl: '' }))
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }, [])
 
   const handleSubmit = async () => {
     setErr(null)
@@ -1053,6 +1449,65 @@ function AddEditTeacherDialog({
         )}
 
         <div className="grid gap-4 py-1">
+          {/* Photo uploader */}
+          <div className="grid gap-1.5">
+            <Label>Teacher photo (optional)</Label>
+            <div className="flex items-center gap-3 rounded-lg border border-dashed bg-muted/20 p-3">
+              {form.photoUrl ? (
+                <img
+                  src={form.photoUrl}
+                  alt="Preview"
+                  className="size-20 shrink-0 rounded-lg object-cover ring-1 ring-border"
+                />
+              ) : (
+                <div className="flex size-20 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground ring-1 ring-border">
+                  <ImagePlus className="h-7 w-7" />
+                </div>
+              )}
+              <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => handlePhotoChange(e.target.files?.[0] ?? null)}
+                />
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={photoProcessing}
+                    onClick={() => fileInputRef.current?.click()}
+                    className="gap-1.5"
+                  >
+                    {photoProcessing ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <ImagePlus className="h-3.5 w-3.5" />
+                    )}
+                    {form.photoUrl ? 'Replace photo' : 'Choose photo'}
+                  </Button>
+                  {form.photoUrl && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={clearPhoto}
+                      className="gap-1.5 text-destructive hover:text-destructive"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                      Remove
+                    </Button>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Upload a photo from your computer (JPEG/PNG, auto-compressed).
+                </p>
+              </div>
+            </div>
+          </div>
+
           {/* Identity */}
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Full name *" className="sm:col-span-2">
@@ -1190,13 +1645,6 @@ function AddEditTeacherDialog({
                 placeholder="0"
               />
             </Field>
-            <Field label="Photo URL (optional)">
-              <Input
-                value={form.photoUrl}
-                onChange={(e) => updateField('photoUrl', e.target.value)}
-                placeholder="https://…/photo.jpg"
-              />
-            </Field>
             <Field label="Fingerprint ID" className="sm:col-span-2">
               <div className="flex gap-2">
                 <Input
@@ -1282,7 +1730,6 @@ function AddEditTeacherDialog({
               </Field>
             </div>
 
-            {/* Live breakdown */}
             <div className="mt-3 rounded-md border bg-background p-3">
               <div className="grid gap-1.5 text-sm">
                 <BreakdownRow
@@ -1362,7 +1809,6 @@ function Field({
   )
 }
 
-// One label/value line inside the salary breakdown panel
 function BreakdownRow({
   label,
   value,
@@ -1411,7 +1857,6 @@ function ManageFingerprintDialog({
     setScanning(true)
     setStage('scanning')
     setErr(null)
-    // Simulate the fingerprint reader taking ~1.8s to capture the template
     setTimeout(() => {
       const generated = randomFingerprintId()
       setNewFp(generated)
@@ -1461,7 +1906,6 @@ function ManageFingerprintDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {/* Identity strip */}
         <div className="flex items-center gap-3 rounded-lg border bg-muted/30 p-3">
           <Avatar className="size-10 ring-1 ring-border">
             <AvatarFallback className={avatarColor(teacher.fullName)}>
@@ -1476,10 +1920,8 @@ function ManageFingerprintDialog({
           </div>
         </div>
 
-        {/* Simulated scanner panel */}
         <div className="flex flex-col items-center gap-4 rounded-xl border bg-gradient-to-br from-muted/40 to-background p-6">
           <div className="relative flex size-28 items-center justify-center">
-            {/* Pulse rings while scanning */}
             {scanning && (
               <>
                 <span className="absolute inset-0 rounded-full animate-pulse-ring" />
@@ -1509,7 +1951,6 @@ function ManageFingerprintDialog({
             </div>
           </div>
 
-          {/* Status text */}
           <div className="text-center">
             {stage === 'idle' && (
               <>
@@ -1559,7 +2000,6 @@ function ManageFingerprintDialog({
             </div>
           )}
 
-          {/* Action buttons */}
           <div className="flex w-full flex-col gap-2">
             {stage !== 'enrolled' ? (
               <Button
@@ -1628,7 +2068,6 @@ function ManageFingerprintDialog({
           </div>
         </div>
 
-        {/* Simulation disclaimer */}
         <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-amber-700 dark:text-amber-400">
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>
@@ -1668,7 +2107,6 @@ interface TeacherDetail extends TeacherRow {
   classes: ClassDetail[]
 }
 
-/** "2026-09" → "Sep 2026" */
 function payrollMonthLabel(m: string): string {
   const [y, mm] = m.split('-').map((n) => parseInt(n, 10))
   if (isNaN(y) || isNaN(mm)) return m
@@ -1678,9 +2116,7 @@ function payrollMonthLabel(m: string): string {
   })
 }
 
-// ─── Payslip print / save-as-PDF ───────────────────────────────────────────
-// Opens a print-ready payslip window for one payroll month entry. Users can
-// print it or save it as PDF via the browser print dialog.
+// ─── Payslip print (unchanged) ─────────────────────────────────────────────
 async function printPayslip(
   teacher: { fullName: string; teacherId: string; type: string; epfNo?: string | null },
   entry: {
@@ -1701,14 +2137,11 @@ async function printPayslip(
     toast.error('Pop-up blocked — allow pop-ups to print payslips.')
     return
   }
-  // Institute branding from Settings (single cached fetch per session)
   const school = await getSchoolInfo()
   const lkr = (n: number) =>
     `LKR ${Number(n || 0).toLocaleString('en-LK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
   const epfNo = teacher.epfNo ? String(teacher.epfNo) : '—'
   const paid = entry.status === 'Paid'
-  // EPF employee is 8% of basic → recover basic; when absent (external
-  // rate-only teachers) the whole gross is shown as the rate.
   const basic = entry.epfEmployee > 0 ? entry.epfEmployee / 0.08 : 0
   const basicRow = basic > 0 ? basic : entry.gross
   const allowRow = Math.max(0, entry.gross - basicRow)
@@ -1796,16 +2229,16 @@ function ProfileDialog({
   onClose,
   onEdit,
   onManageFingerprint,
+  onPrintId,
 }: {
   teacher: TeacherRow
   onClose: () => void
   onEdit: () => void
   onManageFingerprint: () => void
+  onPrintId: () => void
 }) {
-  // Fetch the full profile (with class details: endTime, room, program) on mount
   const [detail, setDetail] = useState<TeacherDetail | null>(null)
   const [loadErr, setLoadErr] = useState(false)
-  // Salary history (paid/pending payroll records across months)
   const [history, setHistory] = useState<PayrollHistoryResponse | null>(null)
   const [historyErr, setHistoryErr] = useState(false)
 
@@ -1839,10 +2272,7 @@ function ProfileDialog({
     .map((s) => s.trim())
     .filter(Boolean)
 
-  // Cast: the list endpoint's classes lack program/room/endTime; the detail
-  // endpoint (preferred) returns full ClassDetail rows.
-  const classesList = (detail?.classes ?? teacher.classes ??
-    []) as ClassDetail[]
+  const classesList = (detail?.classes ?? teacher.classes ?? []) as ClassDetail[]
 
   const sb = salaryBreakdown(teacher.basicSalary, teacher.allowances)
 
@@ -1856,15 +2286,22 @@ function ProfileDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {/* Identity header */}
         <div className="flex flex-col gap-4 rounded-lg border bg-muted/30 p-4 sm:flex-row sm:items-center">
-          <Avatar className="size-16 ring-2 ring-border">
-            <AvatarFallback
-              className={`text-lg font-semibold ${avatarColor(teacher.fullName)}`}
-            >
-              {initials(teacher.fullName)}
-            </AvatarFallback>
-          </Avatar>
+          {teacher.photoUrl ? (
+            <img
+              src={teacher.photoUrl}
+              alt={teacher.fullName}
+              className="size-16 rounded-full object-cover ring-2 ring-border"
+            />
+          ) : (
+            <Avatar className="size-16 ring-2 ring-border">
+              <AvatarFallback
+                className={`text-lg font-semibold ${avatarColor(teacher.fullName)}`}
+              >
+                {initials(teacher.fullName)}
+              </AvatarFallback>
+            </Avatar>
+          )}
           <div className="min-w-0 flex-1">
             <h3 className="text-lg font-semibold">{teacher.fullName}</h3>
             <div className="mt-0.5 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
@@ -1927,6 +2364,10 @@ function ProfileDialog({
             <Button variant="outline" size="sm" onClick={onEdit}>
               <Pencil className="h-4 w-4" />
               Edit
+            </Button>
+            <Button variant="outline" size="sm" onClick={onPrintId}>
+              <IdCard className="h-4 w-4" />
+              ID Card
             </Button>
             <Button variant="outline" size="sm" onClick={onManageFingerprint}>
               <Fingerprint className="h-4 w-4" />
@@ -2048,7 +2489,6 @@ function ProfileDialog({
               />
             </div>
 
-            {/* Specializations callout */}
             {specs.length > 0 && (
               <div className="mt-4 rounded-md border bg-muted/20 p-3">
                 <div className="mb-1.5 flex items-center gap-1.5 text-sm font-medium">
@@ -2155,7 +2595,6 @@ function ProfileDialog({
               />
             ) : (
               <div className="space-y-3">
-                {/* Summary strip */}
                 <div className="grid grid-cols-2 gap-3">
                   <div className="rounded-lg border bg-muted/20 p-3">
                     <p className="text-xs text-muted-foreground">Paid to date</p>
@@ -2185,7 +2624,6 @@ function ProfileDialog({
                   </div>
                 </div>
 
-                {/* History rows */}
                 <div className="scroll-thin max-h-64 space-y-2 overflow-y-auto pr-1">
                   {history.history.map((h) => {
                     const paid = h.status === 'Paid'
@@ -2218,7 +2656,7 @@ function ProfileDialog({
                           </p>
                           {h.note && (
                             <p className="truncate text-[11px] italic text-muted-foreground">
-                              “{h.note}”
+                              "{h.note}"
                             </p>
                           )}
                         </div>
@@ -2294,6 +2732,160 @@ function DetailItem({
         {sub && (
           <p className="truncate text-[11px] text-muted-foreground">{sub}</p>
         )}
+      </div>
+    </div>
+  )
+}
+
+// ─── Single ID card dialog — same look as students ─────────────────────────
+function IdCardDialog({
+  teacher,
+  onClose,
+}: {
+  teacher: TeacherRow
+  onClose: () => void
+}) {
+  const school = useSchoolInfo()
+
+  const handlePrint = () => {
+    if (typeof window !== 'undefined') window.print()
+  }
+
+  const isInternal = teacher.type === 'Internal'
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="w-[95vw] sm:max-w-md">
+        <DialogHeader className="no-print">
+          <DialogTitle>Teacher ID card</DialogTitle>
+          <DialogDescription>
+            Preview the printable ID card for {teacher.fullName}.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="printable-id-card mx-auto w-full max-w-sm overflow-hidden rounded-xl border bg-white text-foreground shadow-md">
+          {/* Header */}
+          <div
+            className="flex items-center gap-3 px-4 py-3 text-white"
+            style={{
+              background:
+                'linear-gradient(135deg, #1e40af 0%, #7c3aed 50%, #dc2626 100%)',
+            }}
+          >
+            <img
+              src={school.logoUrl}
+              alt="School logo"
+              className="size-10 rounded-full bg-white object-cover ring-2 ring-white/40"
+            />
+            <div className="min-w-0">
+              <p className="text-sm font-bold leading-tight">
+                {school.shortName} {school.subtitle.split(' ')[0] || ''}
+              </p>
+              <p className="text-xs opacity-90 leading-tight">
+                {school.subtitle.split(' ').slice(1).join(' ') || school.subtitle}
+              </p>
+            </div>
+          </div>
+
+          {/* Photo + identity — squared, larger photo */}
+          <div className="flex gap-4 p-4">
+            {teacher.photoUrl ? (
+              <img
+                src={teacher.photoUrl}
+                alt={teacher.fullName}
+                className="size-24 shrink-0 rounded-lg border-2 border-border object-cover"
+              />
+            ) : (
+              <div
+                className={`flex size-24 shrink-0 items-center justify-center rounded-lg border-2 border-border text-2xl font-bold ${avatarColor(teacher.fullName)}`}
+              >
+                {initials(teacher.fullName)}
+              </div>
+            )}
+            <div className="flex min-w-0 flex-1 flex-col justify-center">
+              <p className="truncate text-base font-bold leading-tight">
+                {teacher.fullName}
+              </p>
+              <p className="mt-1 font-mono text-xs text-muted-foreground">
+                {teacher.teacherId}
+              </p>
+              <div className="mt-1.5">
+                {isInternal ? (
+                  <span
+                    className="inline-flex items-center gap-1 rounded-full border border-blue-300 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700"
+                  >
+                    <Building2 className="h-2.5 w-2.5" />
+                    Internal Staff
+                  </span>
+                ) : (
+                  <span
+                    className="inline-flex items-center gap-1 rounded-full border border-purple-300 bg-purple-50 px-2 py-0.5 text-[10px] font-semibold text-purple-700"
+                  >
+                    <Briefcase className="h-2.5 w-2.5" />
+                    External Tuition
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Barcode */}
+          <div className="flex flex-col items-center gap-1 border-t bg-muted/20 px-4 py-3">
+            <Barcode value={teacherBarcode(teacher)} height={40} showText={false} />
+            <span className="font-mono text-[11px] tracking-[0.18em]">
+              {teacherBarcode(teacher)}
+            </span>
+          </div>
+        </div>
+
+        <DialogFooter className="no-print">
+          <Button variant="outline" onClick={onClose}>
+            Close
+          </Button>
+          <Button onClick={handlePrint}>
+            <Printer className="h-4 w-4" />
+            Print
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ─── Bulk ID card ──────────────────────────────────────────────────────────
+function BulkIdCard({
+  teacher,
+  school,
+}: {
+  teacher: TeacherRow
+  school: ReturnType<typeof useSchoolInfo>
+}) {
+  const code = teacherBarcode(teacher)
+  return (
+    <div className="bulk-print-card">
+      <div className="bkh">
+        <img src={school.logoUrl} alt="" />
+        <div className="min-w-0">
+          <div className="bkh-name truncate">{school.shortName}</div>
+          <div className="bkh-sub truncate">{school.subtitle}</div>
+        </div>
+      </div>
+      <div className="bkb">
+        {teacher.photoUrl ? (
+          <img src={teacher.photoUrl} alt="" className="bkp" />
+        ) : (
+          <div className="bkp">{initials(teacher.fullName)}</div>
+        )}
+        <div className="bki">
+          <div className="bkn">{teacher.fullName}</div>
+          <div className="bk-id">{teacher.teacherId}</div>
+        </div>
+      </div>
+      <div className="bkf">
+        <div className="barcode-wrap">
+          <Barcode value={code} height={30} showText={false} />
+        </div>
+        <div className="bkb-txt">{code}</div>
       </div>
     </div>
   )
