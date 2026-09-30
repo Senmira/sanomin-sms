@@ -115,6 +115,192 @@ function typeBadgeClasses(type: string): string {
     : 'border-transparent bg-primary/10 text-primary'
 }
 
+// ─── Print helpers (self-contained popup windows) ─────────────────────────
+type SchoolInfoShape = ReturnType<typeof useSchoolInfo>
+
+const PRINT_STATUS_COLORS: Record<string, { bg: string; fg: string }> = {
+  Paid: { bg: '#d1fae5', fg: '#065f46' },
+  Pending: { bg: '#fef3c7', fg: '#92400e' },
+}
+
+function escapeHtml(s: string | null | undefined): string {
+  if (s == null) return ''
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function lkrPrint(n: number): string {
+  return `LKR ${Number(n || 0).toLocaleString('en-LK', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`
+}
+
+function printPayslipDocument(row: PayrollRow, school: SchoolInfoShape): void {
+  const win = window.open('', '_blank', 'width=860,height=1000')
+  if (!win) {
+    toast.error('Pop-up blocked — allow pop-ups to print payslips.')
+    return
+  }
+
+  const sc = PRINT_STATUS_COLORS[row.status] ?? PRINT_STATUS_COLORS.Pending
+  const generated = new Date().toLocaleString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+  const epfEmployeeLine =
+    row.epfEmployee > 0 ? `− ${lkrPrint(row.epfEmployee)}` : lkrPrint(0)
+
+  win.document.write(`<!doctype html>
+<html><head><meta charset="utf-8" />
+<title>Payslip — ${escapeHtml(row.teacher.fullName)} — ${escapeHtml(monthLabel(row.month))}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, Helvetica, sans-serif; background: #f1f5f9; color: #0f172a; padding: 24px; }
+  .sheet { max-width: 560px; margin: 0 auto; background: #fff; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden; }
+  .head { display: flex; justify-content: space-between; align-items: center; padding: 18px 24px; border-bottom: 1px solid #e2e8f0; gap: 12px; }
+  .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .brand img { width: 42px; height: 42px; border-radius: 8px; object-fit: cover; border: 1px solid #e2e8f0; flex-shrink: 0; }
+  .brand-name { font-size: 14px; font-weight: 700; line-height: 1.2; }
+  .brand-sub { font-size: 10px; text-transform: uppercase; letter-spacing: 1.4px; color: #64748b; margin-top: 2px; }
+  .brand-meta { font-size: 10px; color: #94a3b8; margin-top: 3px; }
+  .slip-block { text-align: right; flex-shrink: 0; }
+  .slip-block h2 { font-size: 15px; font-weight: 800; letter-spacing: 3px; text-transform: uppercase; }
+  .slip-block p { font-size: 10px; color: #64748b; margin-top: 3px; }
+  .body { padding: 20px 24px; }
+  .employee-box { background: #f8fafc; border-radius: 8px; padding: 12px; margin-bottom: 16px; }
+  .employee-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; }
+  .field-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #64748b; }
+  .badge { display: inline-block; padding: 3px 12px; border-radius: 999px; font-size: 11px; font-weight: 700; background: ${sc.bg}; color: ${sc.fg}; }
+  .employee-name { font-size: 14px; font-weight: 700; }
+  .employee-meta { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: #64748b; margin-top: 2px; }
+  .lines { border-top: 1px solid #e2e8f0; border-bottom: 1px solid #e2e8f0; padding: 12px 0; margin-bottom: 16px; }
+  .line { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; padding: 4px 0; }
+  .line-label { color: #64748b; }
+  .line-value { font-variant-numeric: tabular-nums; font-weight: 500; }
+  .line.subtotal { border-top: 1px solid #e2e8f0; margin-top: 6px; padding-top: 8px; }
+  .line.subtotal .line-value { font-weight: 700; }
+  .line.epf .line-value { color: #dc2626; font-weight: 600; }
+  .line.net { border-top: 1px solid #e2e8f0; margin-top: 8px; padding-top: 12px; }
+  .line.net .line-label { font-size: 14px; font-weight: 700; color: #0f172a; }
+  .line.net .line-value { font-size: 16px; font-weight: 800; color: #059669; }
+  .employer-box { background: #f8fafc; border-radius: 8px; padding: 12px; margin-bottom: 16px; }
+  .employer-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; }
+  .tag-purple { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 10px; font-weight: 600; background: #ede9fe; color: #6d28d9; }
+  .payment-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+  .payment-grid .val { font-size: 13px; font-weight: 600; margin-top: 3px; }
+  .note-box { background: #f8fafc; border-radius: 8px; padding: 10px 12px; font-size: 12px; color: #475569; margin-bottom: 16px; }
+  .note-box strong { color: #0f172a; }
+  .signatures { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 48px; padding-top: 8px; }
+  .sig { border-top: 1px solid #94a3b8; padding-top: 6px; font-size: 10px; color: #64748b; text-align: center; }
+  .footer { text-align: center; font-size: 10px; color: #94a3b8; padding-top: 12px; }
+  @media print {
+    body { background: #fff; padding: 0; }
+    .sheet { border: none; border-radius: 0; max-width: none; }
+  }
+</style></head>
+<body>
+  <div class="sheet">
+    <div class="head">
+      <div class="brand">
+        <img src="${escapeHtml(school.logoUrl)}" alt="${escapeHtml(school.shortName)}" />
+        <div>
+          <div class="brand-name">${escapeHtml(school.shortName)}</div>
+          <div class="brand-sub">${escapeHtml(school.subtitle)}</div>
+          <div class="brand-meta">${escapeHtml([school.address, school.phone].filter(Boolean).join(' · '))}</div>
+        </div>
+      </div>
+      <div class="slip-block">
+        <h2>Payslip</h2>
+        <p>${escapeHtml(monthLabel(row.month))}</p>
+      </div>
+    </div>
+
+    <div class="body">
+      <div class="employee-box">
+        <div class="employee-header">
+          <span class="field-label">Employee</span>
+          <span class="badge">${escapeHtml(row.status)}</span>
+        </div>
+        <div class="employee-name">${escapeHtml(row.teacher.fullName)}</div>
+        <div class="employee-meta">${escapeHtml(row.teacher.teacherId)} · ${escapeHtml(row.teacher.type)}${row.teacher.epfNo ? ` · EPF #${escapeHtml(row.teacher.epfNo)}` : ''}</div>
+      </div>
+
+      <div class="lines">
+        <div class="line">
+          <span class="line-label">Basic salary</span>
+          <span class="line-value">${lkrPrint(row.basicSalary)}</span>
+        </div>
+        <div class="line">
+          <span class="line-label">Allowances</span>
+          <span class="line-value">${lkrPrint(row.allowances)}</span>
+        </div>
+        <div class="line subtotal">
+          <span class="line-label">Gross earnings</span>
+          <span class="line-value">${lkrPrint(row.gross)}</span>
+        </div>
+        <div class="line epf">
+          <span class="line-label">EPF employee (−8% of basic)</span>
+          <span class="line-value">${epfEmployeeLine}</span>
+        </div>
+        <div class="line net">
+          <span class="line-label">NET PAY</span>
+          <span class="line-value">${lkrPrint(row.netSalary)}</span>
+        </div>
+      </div>
+
+      <div class="employer-box">
+        <div class="employer-header">
+          <span class="field-label">Employer contributions</span>
+          <span class="tag-purple">paid by institute</span>
+        </div>
+        <div class="line">
+          <span class="line-label">EPF employer (12%)</span>
+          <span class="line-value">${lkrPrint(row.epfEmployer)}</span>
+        </div>
+        <div class="line">
+          <span class="line-label">ETF employer (3%)</span>
+          <span class="line-value">${lkrPrint(row.etfEmployer)}</span>
+        </div>
+        <div class="line subtotal">
+          <span class="line-label">Total institute cost</span>
+          <span class="line-value">${lkrPrint(row.employerCost)}</span>
+        </div>
+      </div>
+
+      <div class="payment-grid">
+        <div>
+          <div class="field-label">Payment method</div>
+          <div class="val">${escapeHtml(row.method ?? '—')}</div>
+        </div>
+        <div>
+          <div class="field-label">Paid date</div>
+          <div class="val">${escapeHtml(row.paidDate ? fmtDate(row.paidDate) : '—')}</div>
+        </div>
+      </div>
+
+      ${row.note ? `<div class="note-box"><strong>Note:</strong> ${escapeHtml(row.note)}</div>` : ''}
+
+      <div class="signatures">
+        <div class="sig">Teacher</div>
+        <div class="sig">Authorised</div>
+      </div>
+
+      <div class="footer">This is a computer-generated payslip. Generated ${escapeHtml(generated)}</div>
+    </div>
+  </div>
+  <script>window.onload = function () { setTimeout(function () { window.print(); }, 250); };</script>
+</body></html>`)
+  win.document.close()
+}
+
 // ─── Response shape ────────────────────────────────────────────────────────
 interface PayrollListResponse {
   month: string
@@ -147,14 +333,13 @@ export function PayrollSection() {
   const [pendingTarget, setPendingTarget] = useState<PayrollRow | null>(null)
   const [payslipTarget, setPayslipTarget] = useState<PayrollRow | null>(null)
 
-  // Quick salary setup for teachers with no salary configured (banner)
   const [salaryOpen, setSalaryOpen] = useState(false)
   const [salaryDrafts, setSalaryDrafts] = useState<
     Record<string, { basic: string; allow: string; epf: string }>
-  >( {})
+  >({})
   const [savingSalaries, setSavingSalaries] = useState(false)
 
-  // ─── Load payroll register for the selected month + status ─────────────
+  // ─── Load payroll register ─────────────────────────────────────────────
   const reloadRef = useRef<() => void>(() => {})
 
   useEffect(() => {
@@ -184,10 +369,7 @@ export function PayrollSection() {
         })
     }
 
-    // Expose for action handlers (pay / mark pending) to re-fetch on demand.
     reloadRef.current = run
-    // Defer the first invocation so we don't call setState synchronously in
-    // the effect body (satisfies react-hooks/set-state-in-effect lint rule).
     const t = setTimeout(run, 0)
     return () => {
       alive = false
@@ -197,7 +379,7 @@ export function PayrollSection() {
 
   const fetchRegister = useCallback(() => reloadRef.current(), [])
 
-  // ─── Client-side search filter (name / teacher ID) ──────────────────────
+  // ─── Search filter ─────────────────────────────────────────────────────
   const visibleRows = useMemo(() => {
     const q = search.trim().toLowerCase()
     if (!q) return rows
@@ -208,7 +390,7 @@ export function PayrollSection() {
     )
   }, [rows, search])
 
-  // ─── Selection (only Pending rows are selectable) ───────────────────────
+  // ─── Selection ─────────────────────────────────────────────────────────
   const pendingIds = useMemo(
     () => visibleRows.filter((r) => r.status === 'Pending').map((r) => r.teacher.id),
     [visibleRows],
@@ -245,7 +427,7 @@ export function PayrollSection() {
     })
   }, [pendingIds])
 
-  // ─── Totals for the register footer ─────────────────────────────────────
+  // ─── Footer totals ─────────────────────────────────────────────────────
   const sumBasic = useMemo(
     () => visibleRows.reduce((s, r) => s + r.basicSalary, 0),
     [visibleRows],
@@ -255,10 +437,9 @@ export function PayrollSection() {
     [visibleRows],
   )
 
-  // Teachers with no salary configured (net LKR 0) — surface a fix-it banner
   const noSalaryRows = useMemo(() => rows.filter((r) => r.netSalary <= 0), [rows])
 
-  // ─── Quick salary setup (banner dialog) ──────────────────────────────────
+  // ─── Quick salary setup ────────────────────────────────────────────────
   const openSalaryDialog = useCallback(() => {
     const drafts: Record<string, { basic: string; allow: string; epf: string }> = {}
     for (const r of noSalaryRows) {
@@ -320,7 +501,7 @@ export function PayrollSection() {
     }
   }, [draftsWithValue, noSalaryRows, fetchRegister])
 
-  // ─── CSV export ─────────────────────────────────────────────────────────
+  // ─── CSV export ────────────────────────────────────────────────────────
   const exportCsv = useCallback(() => {
     const headers = [
       'Teacher ID',
@@ -392,7 +573,7 @@ export function PayrollSection() {
         description="Monthly teacher salaries · EPF/ETF & payslips"
         icon={<Banknote className="h-5 w-5" />}
         actions={
-          <>
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <Button variant="outline" size="sm" onClick={exportCsv} className="gap-2">
               <Download className="h-4 w-4" /> Export CSV
             </Button>
@@ -406,12 +587,12 @@ export function PayrollSection() {
               Pay selected
               {selectedPendingRows.length > 0 && ` (${selectedPendingRows.length})`}
             </Button>
-          </>
+          </div>
         }
       />
 
       {/* Stats strip */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         {summary ? (
           <>
             <StatCard
@@ -448,14 +629,14 @@ export function PayrollSection() {
         )}
       </div>
 
-      {/* Month selector + search + status filter */}
-      <Card className="p-4">
+      {/* Filters */}
+      <Card className="min-w-0 p-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-          <div className="flex flex-wrap items-end gap-3">
+          <div className="grid grid-cols-2 gap-3 sm:flex sm:flex-wrap sm:items-end">
             <div className="flex flex-col gap-1.5">
               <Label className="text-xs text-muted-foreground">Billing month</Label>
               <Select value={month} onValueChange={setMonth}>
-                <SelectTrigger className="w-[200px]">
+                <SelectTrigger className="w-full sm:w-[200px]">
                   <SelectValue placeholder="Select month" />
                 </SelectTrigger>
                 <SelectContent>
@@ -470,7 +651,7 @@ export function PayrollSection() {
             <div className="flex flex-col gap-1.5">
               <Label className="text-xs text-muted-foreground">Status</Label>
               <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-[140px]">
+                <SelectTrigger className="w-full sm:w-[140px]">
                   <SelectValue placeholder="All statuses" />
                 </SelectTrigger>
                 <SelectContent>
@@ -481,8 +662,8 @@ export function PayrollSection() {
               </Select>
             </div>
           </div>
-          <div className="flex items-end gap-2">
-            <div className="relative flex-1 lg:w-64">
+          <div className="flex w-full items-center gap-2 lg:w-auto">
+            <div className="relative min-w-0 flex-1 lg:w-64">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 placeholder="Search teacher / ID…"
@@ -496,7 +677,7 @@ export function PayrollSection() {
                 variant="ghost"
                 size="sm"
                 onClick={() => setSearch('')}
-                className="gap-1.5"
+                className="shrink-0 gap-1.5"
               >
                 <X className="h-4 w-4" /> Clear
               </Button>
@@ -510,7 +691,7 @@ export function PayrollSection() {
         </p>
       </Card>
 
-      {/* Zero-salary fix-it banner */}
+      {/* Zero-salary banner */}
       {!loading && !error && noSalaryRows.length > 0 && (
         <div
           role="status"
@@ -534,29 +715,31 @@ export function PayrollSection() {
               the Teachers section.
             </p>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="shrink-0 border-amber-500/40 text-amber-800 hover:bg-amber-500/20 hover:text-amber-900 dark:text-amber-200 dark:hover:text-amber-100"
-            onClick={openSalaryDialog}
-          >
-            <Pencil className="h-4 w-4" />
-            Set salaries now
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="shrink-0 border-amber-500/40 text-amber-800 hover:bg-amber-500/20 hover:text-amber-900 dark:text-amber-200 dark:hover:text-amber-100"
-            onClick={() => setSection('teachers')}
-          >
-            Go to Teachers
-            <ArrowRight className="h-4 w-4" />
-          </Button>
+          <div className="flex flex-wrap gap-2 sm:flex-nowrap">
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1 border-amber-500/40 text-amber-800 hover:bg-amber-500/20 hover:text-amber-900 dark:text-amber-200 dark:hover:text-amber-100 sm:flex-none"
+              onClick={openSalaryDialog}
+            >
+              <Pencil className="h-4 w-4" />
+              Set salaries now
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1 border-amber-500/40 text-amber-800 hover:bg-amber-500/20 hover:text-amber-900 dark:text-amber-200 dark:hover:text-amber-100 sm:flex-none"
+              onClick={() => setSection('teachers')}
+            >
+              Go to Teachers
+              <ArrowRight className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
       )}
 
       {/* Register table */}
-      <Card className="p-0">
+      <Card className="min-w-0 p-0">
         {error ? (
           <div className="p-6">
             <EmptyState
@@ -589,7 +772,7 @@ export function PayrollSection() {
             />
           </div>
         ) : (
-          <div className="scroll-thin max-h-[62vh] overflow-y-auto">
+          <div className="scroll-thin max-h-[62vh] overflow-auto">
             <Table className="table-zebra min-w-[900px]">
               <TableHeader className="sticky top-0 z-10 bg-muted/80 backdrop-blur">
                 <TableRow>
@@ -794,7 +977,7 @@ export function PayrollSection() {
         )}
       </Card>
 
-      {/* Mark paid flow (bulk via "Pay selected" or single via row action) */}
+      {/* Mark paid */}
       {payTargets && payTargets.length > 0 && (
         <PayDialog
           month={month}
@@ -807,7 +990,7 @@ export function PayrollSection() {
         />
       )}
 
-      {/* Revert to pending confirm */}
+      {/* Revert to pending */}
       <ConfirmDialog
         open={!!pendingTarget}
         onOpenChange={(v) => !v && setPendingTarget(null)}
@@ -837,9 +1020,9 @@ export function PayrollSection() {
         }}
       />
 
-      {/* Quick salary setup dialog (from zero-salary banner) */}
+      {/* Quick salary setup */}
       <Dialog open={salaryOpen} onOpenChange={setSalaryOpen}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto scroll-thin sm:max-w-lg">
+        <DialogContent className="w-[95vw] max-h-[90vh] overflow-y-auto scroll-thin sm:max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400">
@@ -887,7 +1070,7 @@ export function PayrollSection() {
                       </p>
                     </div>
                   </div>
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                     <div className="grid gap-1">
                       <Label className="text-xs text-muted-foreground">Basic salary</Label>
                       <Input
@@ -952,7 +1135,7 @@ export function PayrollSection() {
   )
 }
 
-// ─── Pay dialog (confirm salaries as paid) ─────────────────────────────────
+// ─── Pay dialog ────────────────────────────────────────────────────────────
 interface PayDialogProps {
   month: string
   targets: PayrollRow[]
@@ -1003,7 +1186,7 @@ function PayDialog({ month, targets, onClose, onDone }: PayDialogProps) {
 
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="w-[95vw] max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -1018,7 +1201,6 @@ function PayDialog({ month, targets, onClose, onDone }: PayDialogProps) {
         </DialogHeader>
 
         <div className="grid gap-4 py-2">
-          {/* Teachers + total */}
           <div className="rounded-lg border bg-muted/30 p-3">
             <div className="scroll-thin max-h-36 space-y-1.5 overflow-y-auto">
               {targets.map((t) => (
@@ -1055,8 +1237,7 @@ function PayDialog({ month, targets, onClose, onDone }: PayDialogProps) {
             </div>
           </div>
 
-          {/* Method + paid date */}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="grid gap-1.5">
               <Label>Payment method</Label>
               <Select value={method} onValueChange={setMethod}>
@@ -1083,7 +1264,6 @@ function PayDialog({ month, targets, onClose, onDone }: PayDialogProps) {
             </div>
           </div>
 
-          {/* Note */}
           <div className="grid gap-1.5">
             <Label htmlFor="pay-note">Note (optional)</Label>
             <Textarea
@@ -1114,7 +1294,7 @@ function PayDialog({ month, targets, onClose, onDone }: PayDialogProps) {
   )
 }
 
-// ─── Payslip print dialog ──────────────────────────────────────────────────
+// ─── Payslip dialog — preview only; printing opens a self-contained popup ─
 interface PayslipDialogProps {
   row: PayrollRow
   onClose: () => void
@@ -1122,15 +1302,14 @@ interface PayslipDialogProps {
 
 function PayslipDialog({ row, onClose }: PayslipDialogProps) {
   const school = useSchoolInfo()
+
   const handlePrint = useCallback(() => {
-    if (typeof window !== 'undefined') {
-      window.print()
-    }
-  }, [])
+    printPayslipDocument(row, school)
+  }, [row, school])
 
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-md p-0">
+      <DialogContent className="w-[95vw] max-w-md max-h-[90vh] overflow-y-auto p-0 scroll-thin">
         <DialogHeader className="sr-only">
           <DialogTitle>Payslip — {row.teacher.fullName}</DialogTitle>
           <DialogDescription>
@@ -1138,28 +1317,28 @@ function PayslipDialog({ row, onClose }: PayslipDialogProps) {
           </DialogDescription>
         </DialogHeader>
 
-        <div className="payslip-print">
+        <div>
           {/* Institute header */}
           <div className="flex items-center justify-between gap-3 border-b p-4">
-            <div className="flex items-center gap-3">
-              <div className="relative h-10 w-10 overflow-hidden rounded-lg ring-1 ring-border">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-lg ring-1 ring-border">
                 <img
                   src={school.logoUrl}
                   alt={school.shortName}
                   className="h-full w-full object-cover"
                 />
               </div>
-              <div className="leading-tight">
-                <p className="text-sm font-bold">{school.shortName}</p>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              <div className="min-w-0 leading-tight">
+                <p className="truncate text-sm font-bold">{school.shortName}</p>
+                <p className="truncate text-[10px] uppercase tracking-wider text-muted-foreground">
                   {school.subtitle}
                 </p>
-                <p className="text-[9px] text-muted-foreground">
+                <p className="truncate text-[9px] text-muted-foreground">
                   {[school.address, school.phone].filter(Boolean).join(' · ')}
                 </p>
               </div>
             </div>
-            <div className="text-right">
+            <div className="shrink-0 text-right">
               <p className="text-sm font-extrabold uppercase tracking-widest">Payslip</p>
               <p className="text-[10px] text-muted-foreground">{monthLabel(row.month)}</p>
             </div>
@@ -1168,7 +1347,7 @@ function PayslipDialog({ row, onClose }: PayslipDialogProps) {
           <div className="space-y-4 p-4">
             {/* Teacher */}
             <div className="rounded-lg bg-muted/40 p-3">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-2">
                 <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
                   Employee
                 </p>
@@ -1180,14 +1359,14 @@ function PayslipDialog({ row, onClose }: PayslipDialogProps) {
                 </Badge>
               </div>
               <div className="mt-1 flex items-center gap-2.5">
-                <Avatar className="h-8 w-8">
+                <Avatar className="h-8 w-8 shrink-0">
                   <AvatarFallback className={avatarColor(row.teacher.fullName)}>
                     {initials(row.teacher.fullName)}
                   </AvatarFallback>
                 </Avatar>
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold">{row.teacher.fullName}</p>
-                  <p className="font-mono text-[10px] text-muted-foreground">
+                  <p className="truncate text-sm font-semibold">{row.teacher.fullName}</p>
+                  <p className="truncate font-mono text-[10px] text-muted-foreground">
                     {row.teacher.teacherId} · {row.teacher.type}
                     {row.teacher.epfNo ? ` · EPF #${row.teacher.epfNo}` : ''}
                   </p>
@@ -1197,27 +1376,31 @@ function PayslipDialog({ row, onClose }: PayslipDialogProps) {
 
             {/* Earnings & deductions */}
             <div className="space-y-1.5 border-y py-3 text-sm">
-              <div className="flex justify-between">
+              <div className="flex justify-between gap-2">
                 <span className="text-muted-foreground">Basic salary</span>
-                <span className="font-medium tabular-nums">{currency(row.basicSalary)}</span>
+                <span className="shrink-0 font-medium tabular-nums">
+                  {currency(row.basicSalary)}
+                </span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex justify-between gap-2">
                 <span className="text-muted-foreground">Allowances</span>
-                <span className="font-medium tabular-nums">{currency(row.allowances)}</span>
+                <span className="shrink-0 font-medium tabular-nums">
+                  {currency(row.allowances)}
+                </span>
               </div>
-              <div className="flex justify-between border-t pt-1.5">
+              <div className="flex justify-between gap-2 border-t pt-1.5">
                 <span className="text-muted-foreground">Gross earnings</span>
-                <span className="font-semibold tabular-nums">{currency(row.gross)}</span>
+                <span className="shrink-0 font-semibold tabular-nums">{currency(row.gross)}</span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex justify-between gap-2">
                 <span className="text-muted-foreground">EPF employee (−8% of basic)</span>
-                <span className="font-medium tabular-nums text-red-600 dark:text-red-400">
+                <span className="shrink-0 font-medium tabular-nums text-red-600 dark:text-red-400">
                   {row.epfEmployee > 0 ? `−${currency(row.epfEmployee)}` : currency(0)}
                 </span>
               </div>
-              <div className="flex justify-between border-t pt-2">
+              <div className="flex justify-between gap-2 border-t pt-2">
                 <span className="text-sm font-bold">NET PAY</span>
-                <span className="text-sm font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
+                <span className="shrink-0 text-sm font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
                   {currency(row.netSalary)}
                 </span>
               </div>
@@ -1225,7 +1408,7 @@ function PayslipDialog({ row, onClose }: PayslipDialogProps) {
 
             {/* Employer contributions */}
             <div className="rounded-lg bg-muted/40 p-3 text-sm">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-2">
                 <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
                   Employer contributions
                 </p>
@@ -1237,17 +1420,21 @@ function PayslipDialog({ row, onClose }: PayslipDialogProps) {
                 </Badge>
               </div>
               <div className="mt-2 space-y-1.5">
-                <div className="flex justify-between">
+                <div className="flex justify-between gap-2">
                   <span className="text-muted-foreground">EPF employer (12%)</span>
-                  <span className="font-medium tabular-nums">{currency(row.epfEmployer)}</span>
+                  <span className="shrink-0 font-medium tabular-nums">
+                    {currency(row.epfEmployer)}
+                  </span>
                 </div>
-                <div className="flex justify-between">
+                <div className="flex justify-between gap-2">
                   <span className="text-muted-foreground">ETF employer (3%)</span>
-                  <span className="font-medium tabular-nums">{currency(row.etfEmployer)}</span>
+                  <span className="shrink-0 font-medium tabular-nums">
+                    {currency(row.etfEmployer)}
+                  </span>
                 </div>
-                <div className="flex justify-between border-t pt-1.5">
+                <div className="flex justify-between gap-2 border-t pt-1.5">
                   <span className="text-muted-foreground">Total institute cost</span>
-                  <span className="font-semibold tabular-nums">
+                  <span className="shrink-0 font-semibold tabular-nums">
                     {currency(row.employerCost)}
                   </span>
                 </div>
@@ -1256,17 +1443,17 @@ function PayslipDialog({ row, onClose }: PayslipDialogProps) {
 
             {/* Payment info */}
             <div className="grid grid-cols-2 gap-3 text-sm">
-              <div>
+              <div className="min-w-0">
                 <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
                   Payment method
                 </p>
-                <p className="font-medium">{row.method ?? '—'}</p>
+                <p className="truncate font-medium">{row.method ?? '—'}</p>
               </div>
-              <div>
+              <div className="min-w-0">
                 <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
                   Paid date
                 </p>
-                <p className="font-medium tabular-nums">
+                <p className="truncate font-medium tabular-nums">
                   {row.paidDate ? fmtDate(row.paidDate) : '—'}
                 </p>
               </div>
