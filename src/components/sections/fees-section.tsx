@@ -185,6 +185,407 @@ function billLines(p: PaymentRow): BillLine[] {
   ]
 }
 
+// ─── Print helpers (self-contained popup windows) ─────────────────────────
+type SchoolInfoShape = ReturnType<typeof useSchoolInfo>
+
+function escapeHtml(s: string | null | undefined): string {
+  if (s == null) return ''
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function lkr(n: number): string {
+  return `LKR ${Number(n || 0).toLocaleString('en-LK', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`
+}
+
+const PRINT_STATUS_COLORS: Record<string, { bg: string; fg: string }> = {
+  Paid: { bg: '#d1fae5', fg: '#065f46' },
+  Partial: { bg: '#fef3c7', fg: '#92400e' },
+  Overdue: { bg: '#fee2e2', fg: '#991b1b' },
+  Pending: { bg: '#e2e8f0', fg: '#334155' },
+}
+
+function statusColor(s: string) {
+  return PRINT_STATUS_COLORS[s] ?? PRINT_STATUS_COLORS.Pending
+}
+
+function printReceiptDocument(payment: PaymentRow, school: SchoolInfoShape): void {
+  const win = window.open('', '_blank', 'width=860,height=1000')
+  if (!win) {
+    toast.error('Pop-up blocked — allow pop-ups to print receipts.')
+    return
+  }
+
+  const balance = Math.max(0, payment.amount - payment.paidAmount)
+  const isPaid = payment.status === 'Paid'
+  const lines = billLines(payment)
+  const sc = statusColor(payment.status)
+  const generated = new Date().toLocaleString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+
+  win.document.write(`<!doctype html>
+<html><head><meta charset="utf-8" />
+<title>Receipt ${escapeHtml(payment.receiptNo ?? '')} — ${escapeHtml(payment.student.fullName)}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, Helvetica, sans-serif; background: #f1f5f9; color: #0f172a; padding: 24px; }
+  .sheet { max-width: 520px; margin: 0 auto; background: #fff; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden; }
+  .head { display: flex; justify-content: space-between; align-items: center; padding: 18px 24px; border-bottom: 1px solid #e2e8f0; gap: 12px; }
+  .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .brand img { width: 42px; height: 42px; border-radius: 8px; object-fit: cover; border: 1px solid #e2e8f0; flex-shrink: 0; }
+  .brand-name { font-size: 14px; font-weight: 700; line-height: 1.2; }
+  .brand-sub { font-size: 10px; text-transform: uppercase; letter-spacing: 1.4px; color: #64748b; margin-top: 2px; }
+  .brand-meta { font-size: 10px; color: #94a3b8; margin-top: 3px; }
+  .badge-tag { display: inline-block; padding: 3px 10px; border-radius: 999px; border: 1px solid #cbd5e1; font-size: 10px; font-weight: 600; color: #334155; background: #f8fafc; flex-shrink: 0; }
+  .body { padding: 20px 24px; }
+  .row-between { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 16px; }
+  .field-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #64748b; margin-bottom: 2px; }
+  .field-value { font-size: 14px; font-weight: 700; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .field-value-plain { font-size: 14px; font-weight: 700; }
+  .student-box { background: #f8fafc; border-radius: 8px; padding: 12px; margin-bottom: 16px; }
+  .student-name { font-size: 14px; font-weight: 700; }
+  .student-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: #64748b; margin-top: 2px; }
+  .lines { border-top: 1px solid #e2e8f0; border-bottom: 1px solid #e2e8f0; padding: 12px 0; margin-bottom: 16px; }
+  .line { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; padding: 3px 0; }
+  .line-label { color: #64748b; display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .line-label span.t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .line-dot { width: 8px; height: 8px; border-radius: 999px; flex-shrink: 0; }
+  .line-value { font-variant-numeric: tabular-nums; font-weight: 500; white-space: nowrap; }
+  .line.total { border-top: 1px solid #e2e8f0; margin-top: 8px; padding-top: 8px; }
+  .line.total .line-value { font-weight: 700; }
+  .line.paid .line-value { color: #059669; font-weight: 700; }
+  .line.balance-due .line-value { color: #dc2626; font-weight: 700; }
+  .line.balance-clear .line-value { color: #059669; font-weight: 700; }
+  .status-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  .status-pill { display: inline-block; padding: 4px 14px; border-radius: 999px; font-size: 12px; font-weight: 700; background: ${sc.bg}; color: ${sc.fg}; }
+  .paid-stamp { transform: rotate(-12deg); display: inline-block; border: 2px solid #059669; color: #059669; padding: 4px 14px; border-radius: 6px; font-size: 20px; font-weight: 800; letter-spacing: 3px; text-transform: uppercase; }
+  .note-box { background: #f8fafc; border-radius: 8px; padding: 10px 12px; font-size: 12px; color: #475569; margin-bottom: 14px; }
+  .note-box strong { color: #0f172a; }
+  .footer { text-align: center; font-size: 10px; color: #94a3b8; padding-top: 10px; }
+  @media print { body { background: #fff; padding: 0; } .sheet { border: none; border-radius: 0; } }
+</style></head>
+<body>
+  <div class="sheet">
+    <div class="head">
+      <div class="brand">
+        <img src="${escapeHtml(school.logoUrl)}" alt="${escapeHtml(school.shortName)}" />
+        <div>
+          <div class="brand-name">${escapeHtml(school.shortName)}</div>
+          <div class="brand-sub">${escapeHtml(school.subtitle)}</div>
+          <div class="brand-meta">${escapeHtml([school.address, school.phone].filter(Boolean).join(' · '))}</div>
+        </div>
+      </div>
+      <span class="badge-tag">Payment Receipt</span>
+    </div>
+    <div class="body">
+      <div class="row-between">
+        <div>
+          <div class="field-label">Receipt No</div>
+          <div class="field-value">${escapeHtml(payment.receiptNo ?? '—')}</div>
+        </div>
+        <div style="text-align:right">
+          <div class="field-label">Billed Month</div>
+          <div class="field-value-plain">${escapeHtml(monthLabel(payment.month))}</div>
+        </div>
+      </div>
+
+      <div class="student-box">
+        <div class="field-label">Student</div>
+        <div class="student-name">${escapeHtml(payment.student.fullName)}</div>
+        <div class="student-id">${escapeHtml(payment.student.studentId)}</div>
+      </div>
+
+      <div class="lines">
+        ${lines
+          .map(
+            (l) => `
+          <div class="line">
+            <span class="line-label">
+              ${l.color ? `<span class="line-dot" style="background:${escapeHtml(l.color)}"></span>` : ''}
+              <span class="t">${escapeHtml(l.description)}</span>
+            </span>
+            <span class="line-value">${lkr(l.amount)}</span>
+          </div>`,
+          )
+          .join('')}
+        <div class="line total">
+          <span class="line-label"><span class="t">Total billed</span></span>
+          <span class="line-value">${lkr(payment.amount)}</span>
+        </div>
+        <div class="line paid">
+          <span class="line-label"><span class="t">Amount paid</span></span>
+          <span class="line-value">${lkr(payment.paidAmount)}</span>
+        </div>
+        <div class="line ${balance > 0 ? 'balance-due' : 'balance-clear'}">
+          <span class="line-label"><span class="t">Balance</span></span>
+          <span class="line-value">${lkr(balance)}</span>
+        </div>
+        <div class="line">
+          <span class="line-label"><span class="t">Method</span></span>
+          <span class="line-value">${escapeHtml(payment.method)}</span>
+        </div>
+        <div class="line">
+          <span class="line-label"><span class="t">Paid date</span></span>
+          <span class="line-value">${escapeHtml(payment.paidDate ? fmtDate(payment.paidDate) : '—')}</span>
+        </div>
+        <div class="line">
+          <span class="line-label"><span class="t">Due date</span></span>
+          <span class="line-value">${escapeHtml(payment.dueDate ? fmtDate(payment.dueDate) : '—')}</span>
+        </div>
+      </div>
+
+      <div class="status-row">
+        <span class="status-pill">${escapeHtml(payment.status)}</span>
+        ${isPaid ? '<span class="paid-stamp">Paid</span>' : ''}
+      </div>
+
+      ${payment.note ? `<div class="note-box"><strong>Note:</strong> ${escapeHtml(payment.note)}</div>` : ''}
+
+      <div class="footer">
+        This is a computer-generated receipt. Generated ${escapeHtml(generated)}
+      </div>
+    </div>
+  </div>
+  <script>window.onload = function () { setTimeout(function () { window.print(); }, 250); };</script>
+</body></html>`)
+  win.document.close()
+}
+
+// ─── Statement print helpers ──────────────────────────────────────────────
+interface StatementLine {
+  description: string
+  amount: number
+  color: string | null
+}
+interface StatementMonth {
+  id: string
+  month: string
+  amount: number
+  paidAmount: number
+  balance: number
+  status: string
+  method: string
+  paidDate: string | null
+  receiptNo: string | null
+  lines: StatementLine[]
+}
+interface StatementResponse {
+  student: {
+    id: string
+    studentId: string
+    fullName: string
+    gender: string
+    status: string
+    admissionDate: string | null
+    guardians: { name: string; phone: string; relationship: string; isPrimary: boolean }[]
+    enrollments: { program: string | null; programColor: string | null; class: string | null }[]
+  }
+  months: StatementMonth[]
+  totals: { billed: number; paid: number; balance: number; billCount: number }
+  generatedAt: string
+}
+
+function printStatementDocument(data: StatementResponse, school: SchoolInfoShape): void {
+  const win = window.open('', '_blank', 'width=1000,height=1000')
+  if (!win) {
+    toast.error('Pop-up blocked — allow pop-ups to print statements.')
+    return
+  }
+
+  const primaryGuardian =
+    data.student.guardians.find((g) => g.isPrimary) ?? data.student.guardians[0]
+  const generated = new Date().toLocaleString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+  const asOf = new Date(data.generatedAt).toLocaleDateString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  })
+
+  win.document.write(`<!doctype html>
+<html><head><meta charset="utf-8" />
+<title>Fee Statement — ${escapeHtml(data.student.fullName)}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, Helvetica, sans-serif; background: #f1f5f9; color: #0f172a; padding: 24px; }
+  .sheet { max-width: 800px; margin: 0 auto; background: #fff; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden; }
+  .head { display: flex; justify-content: space-between; align-items: center; padding: 20px 28px; border-bottom: 1px solid #e2e8f0; gap: 16px; }
+  .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .brand img { width: 44px; height: 44px; border-radius: 8px; object-fit: cover; border: 1px solid #e2e8f0; flex-shrink: 0; }
+  .brand-name { font-size: 15px; font-weight: 700; line-height: 1.2; }
+  .brand-sub { font-size: 10px; text-transform: uppercase; letter-spacing: 1.4px; color: #64748b; margin-top: 2px; }
+  .brand-meta { font-size: 10px; color: #94a3b8; margin-top: 3px; }
+  .title-block { text-align: right; flex-shrink: 0; }
+  .title-block h2 { font-size: 15px; font-weight: 800; letter-spacing: 3px; text-transform: uppercase; }
+  .title-block p { font-size: 10px; color: #64748b; margin-top: 3px; }
+  .meta { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; padding: 18px 28px; border-bottom: 1px solid #e2e8f0; }
+  .meta-cell { min-width: 0; }
+  .meta-cell .k { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #64748b; }
+  .meta-cell .v { font-size: 13px; font-weight: 600; margin-top: 3px; word-break: break-word; }
+  .meta-cell .v.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  thead { background: #f1f5f9; }
+  th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #64748b; padding: 10px 14px; font-weight: 600; border-bottom: 1px solid #e2e8f0; }
+  th.num { text-align: right; }
+  td { padding: 10px 14px; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+  .month-name { font-weight: 600; font-size: 12px; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; }
+  .item-line { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: #475569; padding: 1px 0; }
+  .item-dot { width: 6px; height: 6px; border-radius: 999px; flex-shrink: 0; }
+  .paid-amt { color: #059669; }
+  .bal-due { color: #dc2626; font-weight: 700; }
+  .bal-clear { color: #059669; font-weight: 700; }
+  .totals { padding: 18px 28px; background: #f8fafc; border-top: 1px solid #e2e8f0; }
+  .totals-row { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; padding: 3px 0; }
+  .totals-row .k { color: #64748b; }
+  .totals-row .v { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .totals-row.grand { border-top: 1px solid #e2e8f0; margin-top: 8px; padding-top: 10px; font-size: 15px; }
+  .totals-row.grand .k { font-weight: 700; color: #0f172a; }
+  .totals-row.grand .v { font-weight: 800; }
+  .foot { padding: 14px 28px; border-top: 1px solid #e2e8f0; font-size: 10px; color: #94a3b8; text-align: center; }
+  @media print {
+    body { background: #fff; padding: 0; }
+    .sheet { border: none; border-radius: 0; max-width: none; }
+    thead { display: table-header-group; }
+    tr { page-break-inside: avoid; break-inside: avoid; }
+  }
+</style></head>
+<body>
+  <div class="sheet">
+    <div class="head">
+      <div class="brand">
+        <img src="${escapeHtml(school.logoUrl)}" alt="${escapeHtml(school.shortName)}" />
+        <div>
+          <div class="brand-name">${escapeHtml(school.shortName)}</div>
+          <div class="brand-sub">${escapeHtml(school.subtitle)}</div>
+          <div class="brand-meta">${escapeHtml([school.address, school.phone].filter(Boolean).join(' · '))}</div>
+        </div>
+      </div>
+      <div class="title-block">
+        <h2>Fee Statement</h2>
+        <p>As of ${escapeHtml(asOf)}</p>
+      </div>
+    </div>
+
+    <div class="meta">
+      <div class="meta-cell">
+        <div class="k">Student</div>
+        <div class="v">${escapeHtml(data.student.fullName)}</div>
+      </div>
+      <div class="meta-cell">
+        <div class="k">Student ID</div>
+        <div class="v mono">${escapeHtml(data.student.studentId)}</div>
+      </div>
+      <div class="meta-cell">
+        <div class="k">Guardian</div>
+        <div class="v">
+          ${escapeHtml(primaryGuardian?.name ?? '—')}
+          ${primaryGuardian?.phone ? `<div style="font-family:ui-monospace,monospace;font-size:10px;color:#64748b;font-weight:400">${escapeHtml(primaryGuardian.phone)}</div>` : ''}
+        </div>
+      </div>
+      <div class="meta-cell">
+        <div class="k">Enrolled in</div>
+        <div class="v" style="font-size:11px">
+          ${data.student.enrollments.filter((e) => e.program).slice(0, 4).map((e) => escapeHtml(e.program ?? '')).join(', ') || '—'}
+        </div>
+      </div>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th style="width:140px">Month</th>
+          <th>Items</th>
+          <th class="num">Billed</th>
+          <th class="num">Paid</th>
+          <th class="num">Balance</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${
+          data.months.length === 0
+            ? `
+          <tr><td colspan="5" style="text-align:center;padding:32px;color:#64748b">No bills issued for this student yet.</td></tr>
+        `
+            : data.months
+                .map((m) => {
+                  const sc = statusColor(m.status)
+                  return `
+          <tr>
+            <td>
+              <div class="month-name">${escapeHtml(monthLabel(m.month))}</div>
+              <div style="margin-top:5px">
+                <span class="badge" style="background:${sc.bg};color:${sc.fg}">${escapeHtml(m.status)}</span>
+              </div>
+              ${m.receiptNo ? `<div class="mono" style="font-size:9px;color:#94a3b8;margin-top:3px">${escapeHtml(m.receiptNo)}</div>` : ''}
+              ${m.paidDate ? `<div style="font-size:9px;color:#94a3b8;margin-top:2px">paid ${escapeHtml(fmtDate(m.paidDate))} · ${escapeHtml(m.method)}</div>` : ''}
+            </td>
+            <td>
+              ${m.lines
+                .map(
+                  (l) => `
+                <div class="item-line">
+                  <span class="item-dot" style="background:${escapeHtml(l.color ?? '#94a3b8')}"></span>
+                  ${escapeHtml(l.description)}
+                </div>
+              `,
+                )
+                .join('')}
+            </td>
+            <td class="num">${lkr(m.amount)}</td>
+            <td class="num paid-amt">${lkr(m.paidAmount)}</td>
+            <td class="num ${m.balance > 0 ? 'bal-due' : 'bal-clear'}">${lkr(m.balance)}</td>
+          </tr>
+        `
+                })
+                .join('')
+        }
+      </tbody>
+    </table>
+
+    <div class="totals">
+      <div class="totals-row">
+        <span class="k">Total billed (${data.totals.billCount} bills)</span>
+        <span class="v">${lkr(data.totals.billed)}</span>
+      </div>
+      <div class="totals-row">
+        <span class="k">Total paid</span>
+        <span class="v" style="color:#059669">${lkr(data.totals.paid)}</span>
+      </div>
+      <div class="totals-row grand">
+        <span class="k">Outstanding balance</span>
+        <span class="v ${data.totals.balance > 0 ? 'bal-due' : 'bal-clear'}">${lkr(data.totals.balance)}</span>
+      </div>
+    </div>
+
+    <div class="foot">
+      This is a computer-generated fee statement. Generated ${escapeHtml(generated)}
+    </div>
+  </div>
+  <script>window.onload = function () { setTimeout(function () { window.print(); }, 250); };</script>
+</body></html>`)
+  win.document.close()
+}
+
 // ─── Response shapes ──────────────────────────────────────────────────────
 interface PaymentListResponse {
   data: PaymentRow[]
@@ -248,26 +649,23 @@ export function FeesSection() {
   const [blastOpen, setBlastOpen] = useState(false)
   const [sendingReminder, setSendingReminder] = useState(false)
 
-  // ─── Debounce search input ──────────────────────────────────────────────
   useEffect(() => {
     const h = setTimeout(() => setDebouncedSearch(search.trim()), 250)
     return () => clearTimeout(h)
   }, [search])
 
-  // ─── Load programs once ────────────────────────────────────────────────
   useEffect(() => {
     let alive = true
     api<{ data: ProgramRow[] }>('/api/programs?active=true')
       .then((r) => alive && setPrograms(r.data || []))
       .catch(() => {
-        /* silently ignore — programs select stays empty */
+        /* silently ignore */
       })
     return () => {
       alive = false
     }
   }, [])
 
-  // ─── Build query from filters + tab ────────────────────────────────────
   const reloadRef = useRef<() => void>(() => {})
 
   useEffect(() => {
@@ -319,7 +717,6 @@ export function FeesSection() {
 
   const fetchPayments = useCallback(() => reloadRef.current(), [])
 
-  // ─── Bulk-generate payments for the selected month ─────────────────────
   const handleBulkGenerate = useCallback(
     async (targetMonth: string, dueDate?: string, skipEmpty?: boolean) => {
       setGenerating(true)
@@ -347,7 +744,6 @@ export function FeesSection() {
     [fetchPayments],
   )
 
-  // ─── Send fee reminder ─────────────────────────────────────────────────
   const handleSendReminder = useCallback(async () => {
     setSendingReminder(true)
     try {
@@ -372,7 +768,6 @@ export function FeesSection() {
     }
   }, [month])
 
-  // ─── CSV export ────────────────────────────────────────────────────────
   const exportCsv = useCallback(() => {
     const headers = [
       'Receipt No',
@@ -442,7 +837,6 @@ export function FeesSection() {
     methodFilter !== 'all' ||
     debouncedSearch !== ''
 
-  // ─── Render ────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col gap-6">
       <SectionHeader
@@ -492,7 +886,6 @@ export function FeesSection() {
         }
       />
 
-      {/* Stats strip */}
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         {summary ? (
           <>
@@ -534,7 +927,6 @@ export function FeesSection() {
         )}
       </div>
 
-      {/* Month selector + Filters */}
       <Card className="min-w-0 p-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div className="grid grid-cols-2 gap-3 sm:flex sm:flex-wrap sm:items-end">
@@ -621,7 +1013,6 @@ export function FeesSection() {
         </div>
       </Card>
 
-      {/* Tabs + Table */}
       <Card className="min-w-0 p-0">
         <div className="flex flex-col gap-3 border-b p-4 sm:flex-row sm:items-center sm:justify-between">
           <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)}>
@@ -828,7 +1219,6 @@ export function FeesSection() {
         )}
       </Card>
 
-      {/* Create / Edit dialogs */}
       {createOpen && (
         <PaymentDialog
           mode="create"
@@ -2001,23 +2391,20 @@ function BulkWhatsAppDialog({ month, onClose }: { month: string; onClose: () => 
   )
 }
 
-// ─── Receipt print dialog ──────────────────────────────────────────────────
+// ─── Receipt dialog — preview only; printing opens a self-contained popup ─
 interface ReceiptDialogProps {
   payment: PaymentRow
   onClose: () => void
 }
 
 function ReceiptDialog({ payment, onClose }: ReceiptDialogProps) {
-  const receiptRef = useRef<HTMLDivElement>(null)
   const school = useSchoolInfo()
   const balance = Math.max(0, payment.amount - payment.paidAmount)
   const isPaid = payment.status === 'Paid'
 
   const handlePrint = useCallback(() => {
-    if (typeof window !== 'undefined') {
-      window.print()
-    }
-  }, [])
+    printReceiptDocument(payment, school)
+  }, [payment, school])
 
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
@@ -2027,157 +2414,155 @@ function ReceiptDialog({ payment, onClose }: ReceiptDialogProps) {
           <DialogDescription>Printable receipt for the selected payment.</DialogDescription>
         </DialogHeader>
 
-        <div ref={receiptRef} className="receipt-print">
-          <div className="flex items-center justify-between gap-3 border-b p-4">
-            <div className="flex items-center gap-3">
-              <div className="relative h-10 w-10 overflow-hidden rounded-lg ring-1 ring-border">
-                <img
-                  src={school.logoUrl}
-                  alt={school.shortName}
-                  className="h-full w-full object-cover"
-                />
-              </div>
-              <div className="leading-tight">
-                <p className="text-sm font-bold">{school.shortName}</p>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                  {school.subtitle}
-                </p>
-                <p className="text-[9px] text-muted-foreground">
-                  {[school.address, school.phone].filter(Boolean).join(' · ')}
-                </p>
-              </div>
+        <div className="flex items-center justify-between gap-3 border-b p-4">
+          <div className="flex items-center gap-3">
+            <div className="relative h-10 w-10 overflow-hidden rounded-lg ring-1 ring-border">
+              <img
+                src={school.logoUrl}
+                alt={school.shortName}
+                className="h-full w-full object-cover"
+              />
             </div>
-            <Badge variant="outline" className="text-[10px]">
-              Payment Receipt
-            </Badge>
-          </div>
-
-          <div className="space-y-4 p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                  Receipt No
-                </p>
-                <p className="font-mono text-sm font-bold">{payment.receiptNo ?? '—'}</p>
-              </div>
-              <div className="text-right">
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                  Billed month
-                </p>
-                <p className="text-sm font-semibold">{monthLabel(payment.month)}</p>
-              </div>
-            </div>
-
-            <div className="rounded-lg bg-muted/40 p-3">
+            <div className="leading-tight">
+              <p className="text-sm font-bold">{school.shortName}</p>
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Student
+                {school.subtitle}
               </p>
-              <div className="mt-1 flex items-center gap-2.5">
-                <Avatar className="h-8 w-8">
-                  <AvatarFallback className={avatarColor(payment.student.fullName)}>
-                    {initials(payment.student.fullName)}
-                  </AvatarFallback>
-                </Avatar>
-                <div>
-                  <p className="text-sm font-semibold">{payment.student.fullName}</p>
-                  <p className="font-mono text-[10px] text-muted-foreground">
-                    {payment.student.studentId}
-                  </p>
-                </div>
-              </div>
+              <p className="text-[9px] text-muted-foreground">
+                {[school.address, school.phone].filter(Boolean).join(' · ')}
+              </p>
             </div>
-
-            <div className="space-y-1.5 border-y py-3 text-sm">
-              {billLines(payment).map((item, i) => (
-                <div key={`${item.key}-${i}`} className="flex justify-between gap-2">
-                  <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
-                    {item.color && (
-                      <span
-                        className="h-2 w-2 shrink-0 rounded-full"
-                        style={{ backgroundColor: item.color }}
-                      />
-                    )}
-                    <span className="truncate">{item.description}</span>
-                  </span>
-                  <span className="shrink-0 font-medium tabular-nums">
-                    {currency(item.amount)}
-                  </span>
-                </div>
-              ))}
-              <div className="flex justify-between border-t pt-1.5">
-                <span className="text-muted-foreground">Total billed</span>
-                <span className="font-semibold tabular-nums">{currency(payment.amount)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Amount paid</span>
-                <span className="font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
-                  {currency(payment.paidAmount)}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Balance</span>
-                <span
-                  className={`font-semibold tabular-nums ${
-                    balance > 0
-                      ? 'text-red-600 dark:text-red-400'
-                      : 'text-emerald-600 dark:text-emerald-400'
-                  }`}
-                >
-                  {currency(balance)}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Method</span>
-                <span className="font-medium">{payment.method}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Paid date</span>
-                <span className="font-medium tabular-nums">
-                  {payment.paidDate ? fmtDate(payment.paidDate) : '—'}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Due date</span>
-                <span className="font-medium tabular-nums">
-                  {payment.dueDate ? fmtDate(payment.dueDate) : '—'}
-                </span>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between">
-              <Badge
-                variant="outline"
-                className={`px-3 py-1 text-xs font-semibold ${statusBadgeClasses(payment.status)}`}
-              >
-                {payment.status}
-              </Badge>
-              {isPaid && (
-                <div className="rotate-[-12deg] rounded-md border-2 border-emerald-500 px-3 py-1 text-lg font-extrabold uppercase tracking-widest text-emerald-500">
-                  Paid
-                </div>
-              )}
-            </div>
-
-            {payment.note && (
-              <div className="rounded-lg bg-muted/40 p-2 text-xs">
-                <span className="text-muted-foreground">Note:</span> {payment.note}
-              </div>
-            )}
-
-            <p className="text-center text-[10px] text-muted-foreground">
-              This is a computer-generated receipt. Generated{' '}
-              {new Date().toLocaleString('en-GB', {
-                day: '2-digit',
-                month: 'short',
-                year: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit',
-              })}
-            </p>
           </div>
+          <Badge variant="outline" className="text-[10px]">
+            Payment Receipt
+          </Badge>
         </div>
 
-        <div className="no-print flex items-center justify-end gap-2 border-t p-3">
+        <div className="space-y-4 p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                Receipt No
+              </p>
+              <p className="font-mono text-sm font-bold">{payment.receiptNo ?? '—'}</p>
+            </div>
+            <div className="text-right">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                Billed month
+              </p>
+              <p className="text-sm font-semibold">{monthLabel(payment.month)}</p>
+            </div>
+          </div>
+
+          <div className="rounded-lg bg-muted/40 p-3">
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              Student
+            </p>
+            <div className="mt-1 flex items-center gap-2.5">
+              <Avatar className="h-8 w-8">
+                <AvatarFallback className={avatarColor(payment.student.fullName)}>
+                  {initials(payment.student.fullName)}
+                </AvatarFallback>
+              </Avatar>
+              <div>
+                <p className="text-sm font-semibold">{payment.student.fullName}</p>
+                <p className="font-mono text-[10px] text-muted-foreground">
+                  {payment.student.studentId}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-1.5 border-y py-3 text-sm">
+            {billLines(payment).map((item, i) => (
+              <div key={`${item.key}-${i}`} className="flex justify-between gap-2">
+                <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+                  {item.color && (
+                    <span
+                      className="h-2 w-2 shrink-0 rounded-full"
+                      style={{ backgroundColor: item.color }}
+                    />
+                  )}
+                  <span className="truncate">{item.description}</span>
+                </span>
+                <span className="shrink-0 font-medium tabular-nums">
+                  {currency(item.amount)}
+                </span>
+              </div>
+            ))}
+            <div className="flex justify-between border-t pt-1.5">
+              <span className="text-muted-foreground">Total billed</span>
+              <span className="font-semibold tabular-nums">{currency(payment.amount)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Amount paid</span>
+              <span className="font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
+                {currency(payment.paidAmount)}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Balance</span>
+              <span
+                className={`font-semibold tabular-nums ${
+                  balance > 0
+                    ? 'text-red-600 dark:text-red-400'
+                    : 'text-emerald-600 dark:text-emerald-400'
+                }`}
+              >
+                {currency(balance)}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Method</span>
+              <span className="font-medium">{payment.method}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Paid date</span>
+              <span className="font-medium tabular-nums">
+                {payment.paidDate ? fmtDate(payment.paidDate) : '—'}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Due date</span>
+              <span className="font-medium tabular-nums">
+                {payment.dueDate ? fmtDate(payment.dueDate) : '—'}
+              </span>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <Badge
+              variant="outline"
+              className={`px-3 py-1 text-xs font-semibold ${statusBadgeClasses(payment.status)}`}
+            >
+              {payment.status}
+            </Badge>
+            {isPaid && (
+              <div className="rotate-[-12deg] rounded-md border-2 border-emerald-500 px-3 py-1 text-lg font-extrabold uppercase tracking-widest text-emerald-500">
+                Paid
+              </div>
+            )}
+          </div>
+
+          {payment.note && (
+            <div className="rounded-lg bg-muted/40 p-2 text-xs">
+              <span className="text-muted-foreground">Note:</span> {payment.note}
+            </div>
+          )}
+
+          <p className="text-center text-[10px] text-muted-foreground">
+            This is a computer-generated receipt. Generated{' '}
+            {new Date().toLocaleString('en-GB', {
+              day: '2-digit',
+              month: 'short',
+              year: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit',
+            })}
+          </p>
+        </div>
+
+        <div className="flex items-center justify-end gap-2 border-t p-3">
           <Button variant="outline" onClick={onClose}>
             Close
           </Button>
@@ -2185,76 +2570,6 @@ function ReceiptDialog({ payment, onClose }: ReceiptDialogProps) {
             <Printer className="h-4 w-4" /> Print
           </Button>
         </div>
-
-        <style jsx global>{`
-          @media print {
-            @page { size: A4 portrait; margin: 12mm; }
-
-            html, body {
-              background: #fff !important;
-              height: auto !important;
-              overflow: visible !important;
-              margin: 0 !important;
-              padding: 0 !important;
-            }
-
-            /* Hide every element that is NOT the receipt, NOT inside the
-               receipt, and does NOT contain the receipt. This collapses the
-               entire app shell + dialog chrome without leaving phantom pages. */
-            body *:not(.receipt-print):not(.receipt-print *):not(:has(.receipt-print)) {
-              display: none !important;
-            }
-
-            /* Neutralise every ancestor of the receipt so it sits in normal
-               flow instead of being absolutely-positioned inside a modal. */
-            :has(.receipt-print) {
-              position: static !important;
-              display: block !important;
-              width: auto !important;
-              max-width: none !important;
-              height: auto !important;
-              max-height: none !important;
-              margin: 0 !important;
-              padding: 0 !important;
-              border: 0 !important;
-              border-radius: 0 !important;
-              box-shadow: none !important;
-              background: transparent !important;
-              overflow: visible !important;
-              transform: none !important;
-              inset: auto !important;
-            }
-
-            /* The receipt itself — centred, card-like, one page */
-            .receipt-print {
-              width: 90mm !important;
-              max-width: 100% !important;
-              margin: 0 auto !important;
-              padding: 0 !important;
-              border: 1px solid #e5e7eb !important;
-              border-radius: 4px !important;
-              box-shadow: none !important;
-              overflow: hidden !important;
-              background: #fff !important;
-              page-break-inside: avoid !important;
-              break-inside: avoid !important;
-            }
-
-            /* Force muted text to stay readable in print (avoids near-white
-               resolved custom properties from Tailwind's color-mix) */
-            .receipt-print .text-muted-foreground { color: #52525b !important; }
-            .receipt-print .text-foreground       { color: #0f172a !important; }
-
-            /* Preserve colour accents (PAID stamp, status pills, brand bar) */
-            .receipt-print * {
-              -webkit-print-color-adjust: exact !important;
-              print-color-adjust: exact !important;
-            }
-
-            /* Chrome-only helpers */
-            .no-print { display: none !important; }
-          }
-        `}</style>
       </DialogContent>
     </Dialog>
   )
@@ -2692,39 +3007,6 @@ function BulkGenerateDialog({
 }
 
 // ─── Student fee statement ─────────────────────────────────────────────────
-interface StatementLine {
-  description: string
-  amount: number
-  color: string | null
-}
-interface StatementMonth {
-  id: string
-  month: string
-  amount: number
-  paidAmount: number
-  balance: number
-  status: string
-  method: string
-  paidDate: string | null
-  receiptNo: string | null
-  lines: StatementLine[]
-}
-interface StatementResponse {
-  student: {
-    id: string
-    studentId: string
-    fullName: string
-    gender: string
-    status: string
-    admissionDate: string | null
-    guardians: { name: string; phone: string; relationship: string; isPrimary: boolean }[]
-    enrollments: { program: string | null; programColor: string | null; class: string | null }[]
-  }
-  months: StatementMonth[]
-  totals: { billed: number; paid: number; balance: number; billCount: number }
-  generatedAt: string
-}
-
 function statementStatusClasses(status: string): string {
   switch (status) {
     case 'Paid':
@@ -2764,8 +3046,9 @@ function StudentStatementDialog({
   }, [studentId])
 
   const handlePrint = useCallback(() => {
-    if (typeof window !== 'undefined') window.print()
-  }, [])
+    if (!data) return
+    printStatementDocument(data, school)
+  }, [data, school])
 
   const primaryGuardian = data?.student.guardians.find((g) => g.isPrimary) ?? data?.student.guardians[0]
 
@@ -2793,7 +3076,7 @@ function StudentStatementDialog({
           </div>
         ) : (
           <>
-            <div className="statement-print rounded-lg border">
+            <div className="rounded-lg border">
               <div className="flex items-center justify-between gap-3 border-b p-4">
                 <div className="flex items-center gap-3">
                   <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-lg ring-1 ring-border">
@@ -2962,7 +3245,7 @@ function StudentStatementDialog({
               </div>
             </div>
 
-            <DialogFooter className="no-print">
+            <DialogFooter>
               <Button variant="outline" onClick={onClose}>
                 Close
               </Button>
@@ -2970,72 +3253,6 @@ function StudentStatementDialog({
                 <Printer className="h-4 w-4" /> Print statement
               </Button>
             </DialogFooter>
-
-            <style jsx global>{`
-              @media print {
-                @page { size: A4 portrait; margin: 12mm; }
-
-                html, body {
-                  background: #fff !important;
-                  height: auto !important;
-                  overflow: visible !important;
-                  margin: 0 !important;
-                  padding: 0 !important;
-                }
-
-                body *:not(.statement-print):not(.statement-print *):not(:has(.statement-print)) {
-                  display: none !important;
-                }
-
-                :has(.statement-print) {
-                  position: static !important;
-                  display: block !important;
-                  width: auto !important;
-                  max-width: none !important;
-                  height: auto !important;
-                  max-height: none !important;
-                  margin: 0 !important;
-                  padding: 0 !important;
-                  border: 0 !important;
-                  border-radius: 0 !important;
-                  box-shadow: none !important;
-                  background: transparent !important;
-                  overflow: visible !important;
-                  transform: none !important;
-                  inset: auto !important;
-                }
-
-                .statement-print {
-                  width: 100% !important;
-                  max-width: 190mm !important;
-                  margin: 0 auto !important;
-                  padding: 0 !important;
-                  border: 1px solid #e5e7eb !important;
-                  border-radius: 4px !important;
-                  box-shadow: none !important;
-                  background: #fff !important;
-                }
-                /* Let the statement scroll internally on screen; on paper we
-                   need every row visible, so unclip the scroll wrapper. */
-                .statement-print .max-h-\[46vh\] {
-                  max-height: none !important;
-                  overflow: visible !important;
-                }
-                .statement-print table { page-break-inside: auto; }
-                .statement-print tr { page-break-inside: avoid; break-inside: avoid; }
-                .statement-print thead { display: table-header-group; }
-
-                .statement-print .text-muted-foreground { color: #52525b !important; }
-                .statement-print .text-foreground       { color: #0f172a !important; }
-
-                .statement-print * {
-                  -webkit-print-color-adjust: exact !important;
-                  print-color-adjust: exact !important;
-                }
-
-                .no-print { display: none !important; }
-              }
-            `}</style>
           </>
         )}
       </DialogContent>
