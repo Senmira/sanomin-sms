@@ -450,7 +450,6 @@ export function FeesSection() {
         description="Monthly tuition fee tracking & receipts"
         icon={<Wallet className="h-5 w-5" />}
         actions={
-          // Responsive: buttons wrap on narrow screens instead of overflowing
           <div className="flex flex-wrap items-center justify-end gap-2">
             <Button variant="outline" size="sm" onClick={exportCsv} className="gap-2">
               <Download className="h-4 w-4" /> Export CSV
@@ -493,7 +492,7 @@ export function FeesSection() {
         }
       />
 
-      {/* Stats strip — 2 cols mobile, 4 cols desktop */}
+      {/* Stats strip */}
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         {summary ? (
           <>
@@ -535,7 +534,7 @@ export function FeesSection() {
         )}
       </div>
 
-      {/* Month selector + Filters — responsive wrap */}
+      {/* Month selector + Filters */}
       <Card className="min-w-0 p-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div className="grid grid-cols-2 gap-3 sm:flex sm:flex-wrap sm:items-end">
@@ -675,9 +674,7 @@ export function FeesSection() {
             />
           </div>
         ) : (
-          // overflow-auto → table scrolls inside the card, not the whole page
           <div className="scroll-thin max-h-[60vh] overflow-auto">
-            {/* min-w forces internal horizontal scroll on narrow screens */}
             <Table className="table-zebra min-w-[1000px]">
               <TableHeader className="sticky top-0 z-10 bg-muted/80 backdrop-blur">
                 <TableRow>
@@ -1123,7 +1120,6 @@ function PaymentDialog({
 
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
-      {/* w-[95vw] ensures dialog fits on mobile; max-w-2xl caps desktop */}
       <DialogContent className="w-[95vw] max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -2181,7 +2177,7 @@ function ReceiptDialog({ payment, onClose }: ReceiptDialogProps) {
           </div>
         </div>
 
-        <div className="flex items-center justify-end gap-2 border-t p-3">
+        <div className="no-print flex items-center justify-end gap-2 border-t p-3">
           <Button variant="outline" onClick={onClose}>
             Close
           </Button>
@@ -2192,22 +2188,71 @@ function ReceiptDialog({ payment, onClose }: ReceiptDialogProps) {
 
         <style jsx global>{`
           @media print {
-            body * {
-              visibility: hidden;
+            @page { size: A4 portrait; margin: 12mm; }
+
+            html, body {
+              background: #fff !important;
+              height: auto !important;
+              overflow: visible !important;
+              margin: 0 !important;
+              padding: 0 !important;
             }
-            .receipt-print,
-            .receipt-print * {
-              visibility: visible;
+
+            /* Hide every element that is NOT the receipt, NOT inside the
+               receipt, and does NOT contain the receipt. This collapses the
+               entire app shell + dialog chrome without leaving phantom pages. */
+            body *:not(.receipt-print):not(.receipt-print *):not(:has(.receipt-print)) {
+              display: none !important;
             }
+
+            /* Neutralise every ancestor of the receipt so it sits in normal
+               flow instead of being absolutely-positioned inside a modal. */
+            :has(.receipt-print) {
+              position: static !important;
+              display: block !important;
+              width: auto !important;
+              max-width: none !important;
+              height: auto !important;
+              max-height: none !important;
+              margin: 0 !important;
+              padding: 0 !important;
+              border: 0 !important;
+              border-radius: 0 !important;
+              box-shadow: none !important;
+              background: transparent !important;
+              overflow: visible !important;
+              transform: none !important;
+              inset: auto !important;
+            }
+
+            /* The receipt itself — centred, card-like, one page */
             .receipt-print {
-              position: absolute;
-              left: 0;
-              top: 0;
-              width: 100%;
-              max-width: 100%;
-              padding: 0;
-              margin: 0;
+              width: 90mm !important;
+              max-width: 100% !important;
+              margin: 0 auto !important;
+              padding: 0 !important;
+              border: 1px solid #e5e7eb !important;
+              border-radius: 4px !important;
+              box-shadow: none !important;
+              overflow: hidden !important;
+              background: #fff !important;
+              page-break-inside: avoid !important;
+              break-inside: avoid !important;
             }
+
+            /* Force muted text to stay readable in print (avoids near-white
+               resolved custom properties from Tailwind's color-mix) */
+            .receipt-print .text-muted-foreground { color: #52525b !important; }
+            .receipt-print .text-foreground       { color: #0f172a !important; }
+
+            /* Preserve colour accents (PAID stamp, status pills, brand bar) */
+            .receipt-print * {
+              -webkit-print-color-adjust: exact !important;
+              print-color-adjust: exact !important;
+            }
+
+            /* Chrome-only helpers */
+            .no-print { display: none !important; }
           }
         `}</style>
       </DialogContent>
@@ -2917,7 +2962,7 @@ function StudentStatementDialog({
               </div>
             </div>
 
-            <DialogFooter>
+            <DialogFooter className="no-print">
               <Button variant="outline" onClick={onClose}>
                 Close
               </Button>
@@ -2925,6 +2970,72 @@ function StudentStatementDialog({
                 <Printer className="h-4 w-4" /> Print statement
               </Button>
             </DialogFooter>
+
+            <style jsx global>{`
+              @media print {
+                @page { size: A4 portrait; margin: 12mm; }
+
+                html, body {
+                  background: #fff !important;
+                  height: auto !important;
+                  overflow: visible !important;
+                  margin: 0 !important;
+                  padding: 0 !important;
+                }
+
+                body *:not(.statement-print):not(.statement-print *):not(:has(.statement-print)) {
+                  display: none !important;
+                }
+
+                :has(.statement-print) {
+                  position: static !important;
+                  display: block !important;
+                  width: auto !important;
+                  max-width: none !important;
+                  height: auto !important;
+                  max-height: none !important;
+                  margin: 0 !important;
+                  padding: 0 !important;
+                  border: 0 !important;
+                  border-radius: 0 !important;
+                  box-shadow: none !important;
+                  background: transparent !important;
+                  overflow: visible !important;
+                  transform: none !important;
+                  inset: auto !important;
+                }
+
+                .statement-print {
+                  width: 100% !important;
+                  max-width: 190mm !important;
+                  margin: 0 auto !important;
+                  padding: 0 !important;
+                  border: 1px solid #e5e7eb !important;
+                  border-radius: 4px !important;
+                  box-shadow: none !important;
+                  background: #fff !important;
+                }
+                /* Let the statement scroll internally on screen; on paper we
+                   need every row visible, so unclip the scroll wrapper. */
+                .statement-print .max-h-\[46vh\] {
+                  max-height: none !important;
+                  overflow: visible !important;
+                }
+                .statement-print table { page-break-inside: auto; }
+                .statement-print tr { page-break-inside: avoid; break-inside: avoid; }
+                .statement-print thead { display: table-header-group; }
+
+                .statement-print .text-muted-foreground { color: #52525b !important; }
+                .statement-print .text-foreground       { color: #0f172a !important; }
+
+                .statement-print * {
+                  -webkit-print-color-adjust: exact !important;
+                  print-color-adjust: exact !important;
+                }
+
+                .no-print { display: none !important; }
+              }
+            `}</style>
           </>
         )}
       </DialogContent>
