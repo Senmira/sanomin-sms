@@ -297,15 +297,17 @@ const PRINT_CSS = `
 .bulk-print-card .bkh-sub { font-size: 2mm; opacity: 0.9; line-height: 1.1; }
 .bulk-print-card .bkb {
   display: flex;
-  gap: 2.5mm;
+  gap: 3mm;
   padding: 2mm 2.5mm;
   flex: 1;
   align-items: center;
   min-height: 0;
 }
 .bulk-print-card .bkp {
-  height: 18mm; width: 18mm;
-  border-radius: 2mm;
+  height: 20mm;
+  width: 20mm;
+  border-radius: 1mm;
+  border: 0.3mm solid #d4d4d8;
   object-fit: cover;
   flex-shrink: 0;
   background: #f3f4f6;
@@ -314,7 +316,7 @@ const PRINT_CSS = `
   justify-content: center;
   font-weight: 700;
   color: #7c3aed;
-  font-size: 5mm;
+  font-size: 5.5mm;
 }
 .bulk-print-card .bki { min-width: 0; flex: 1; }
 .bulk-print-card .bkn {
@@ -608,10 +610,8 @@ export function StudentsSection() {
     document.body.classList.add('bulk-print-mode')
 
     const run = async () => {
-      // Let React commit and images start loading
       await new Promise((r) => setTimeout(r, 350))
 
-      // Wait for any <img> inside the bulk container to finish loading
       const imgs = Array.from(
         document.querySelectorAll<HTMLImageElement>('.bulk-print-container img'),
       )
@@ -655,7 +655,6 @@ export function StudentsSection() {
 
   return (
     <div className="flex flex-col gap-6">
-      {/* Print CSS injected once for the whole section (single + bulk) */}
       <style dangerouslySetInnerHTML={{ __html: PRINT_CSS }} />
 
       <SectionHeader
@@ -1892,7 +1891,7 @@ function Field({
   )
 }
 
-// ─── Profile dialog (View) — unchanged from previous version ───────────────
+// ─── Profile dialog (View) ─────────────────────────────────────────────────
 interface AttendanceLite {
   id: string
   date: string
@@ -2226,7 +2225,7 @@ function DetailItem({
   )
 }
 
-// ─── Single ID card dialog (simplified, print-ready) ───────────────────────
+// ─── Single ID card dialog — squared, larger photo ─────────────────────────
 function IdCardDialog({
   student,
   onClose,
@@ -2251,6 +2250,7 @@ function IdCardDialog({
         </DialogHeader>
 
         <div className="printable-id-card mx-auto w-full max-w-sm overflow-hidden rounded-xl border bg-white text-foreground shadow-md">
+          {/* Header */}
           <div
             className="flex items-center gap-3 px-4 py-3 text-white"
             style={{
@@ -2273,34 +2273,34 @@ function IdCardDialog({
             </div>
           </div>
 
-          <div className="flex gap-3 p-4">
+          {/* Photo + identity — squared photo, larger */}
+          <div className="flex gap-4 p-4">
             {student.photoUrl ? (
               <img
                 src={student.photoUrl}
                 alt={student.fullName}
-                className="size-16 shrink-0 rounded-full object-cover ring-2 ring-border"
+                className="size-24 shrink-0 rounded-lg border-2 border-border object-cover"
               />
             ) : (
-              <Avatar className="size-16 shrink-0 ring-2 ring-border">
-                <AvatarFallback
-                  className={`text-lg font-bold ${avatarColor(student.fullName)}`}
-                >
-                  {initials(student.fullName)}
-                </AvatarFallback>
-              </Avatar>
+              <div
+                className={`flex size-24 shrink-0 items-center justify-center rounded-lg border-2 border-border text-2xl font-bold ${avatarColor(student.fullName)}`}
+              >
+                {initials(student.fullName)}
+              </div>
             )}
-            <div className="min-w-0 flex-1 self-center">
-              <p className="truncate font-bold leading-tight">
+            <div className="flex min-w-0 flex-1 flex-col justify-center">
+              <p className="truncate text-base font-bold leading-tight">
                 {student.fullName}
               </p>
-              <p className="font-mono text-xs text-muted-foreground">
+              <p className="mt-1 font-mono text-xs text-muted-foreground">
                 {student.studentId}
               </p>
             </div>
           </div>
 
+          {/* Barcode */}
           <div className="flex flex-col items-center gap-1 border-t bg-muted/20 px-4 py-3">
-            <Barcode value={student.barcode} height={36} showText={false} />
+            <Barcode value={student.barcode} height={40} showText={false} />
             <span className="font-mono text-[11px] tracking-[0.18em]">
               {student.barcode}
             </span>
