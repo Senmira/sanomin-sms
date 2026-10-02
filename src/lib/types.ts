@@ -85,6 +85,7 @@ export interface EnrollmentRow {
     startTime: string | null
     endTime: string | null
     grade: string | null
+    fee: number
   } | null
 }
 
