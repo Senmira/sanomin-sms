@@ -1379,9 +1379,34 @@ function PaymentDialog({
     [allPrograms, form.programIds],
   )
 
+  // Map each programme → the fee that will actually be charged, based on the
+  // student's enrolled class (class.fee). Falls back to programme.monthlyFee.
+  const feeByProgram = useMemo(() => {
+    const map = new Map<string, { amount: number; classId: string | null; className: string | null }>()
+    // Default: programme monthlyFee
+    for (const p of allPrograms) {
+      map.set(p.id, { amount: p.monthlyFee || 0, classId: null, className: null })
+    }
+    // Override with the student's class fee when available
+    const enrols = selectedStudent?.enrollments ?? []
+    for (const e of enrols) {
+      if (!e.program) continue
+      const cls = e.class
+      if (cls && typeof cls.fee === 'number' && cls.fee > 0) {
+        map.set(e.program.id, { amount: cls.fee, classId: cls.id, className: cls.name })
+      }
+    }
+    return map
+  }, [allPrograms, selectedStudent])
+
+  // Bill total = Σ (class fee if enrolled, else programme monthlyFee)
   const totalAmount = useMemo(
-    () => selectedPrograms.reduce((sum, p) => sum + (p.monthlyFee || 0), 0),
-    [selectedPrograms],
+    () =>
+      selectedPrograms.reduce(
+        (sum, p) => sum + (feeByProgram.get(p.id)?.amount ?? p.monthlyFee ?? 0),
+        0,
+      ),
+    [selectedPrograms, feeByProgram],
   )
 
   const toggleProgram = useCallback((id: string) => {
@@ -1696,9 +1721,24 @@ function PaymentDialog({
                           </span>
                         </Label>
                       </div>
-                      <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-                        {currency(p.monthlyFee)}/mo
-                      </span>
+                      {(() => {
+                        const f = feeByProgram.get(p.id)
+                        const amt = f?.amount ?? p.monthlyFee ?? 0
+                        const fromClass = !!f?.className
+                        return (
+                          <span
+                            className="shrink-0 text-right text-xs tabular-nums text-muted-foreground"
+                            title={fromClass ? `From class: ${f!.className}` : 'From programme monthly fee'}
+                          >
+                            {currency(amt)}/mo
+                            {fromClass && (
+                              <span className="ml-1 rounded bg-primary/10 px-1 text-[9px] font-semibold text-primary">
+                                class
+                              </span>
+                            )}
+                          </span>
+                        )
+                      })()}
                     </div>
                   )
                 })
@@ -1716,20 +1756,29 @@ function PaymentDialog({
               </p>
             ) : (
               <div className="space-y-1.5">
-                {selectedPrograms.map((p) => (
-                  <div key={p.id} className="flex items-center justify-between gap-2 text-sm">
-                    <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
-                      <span
-                        className="h-2 w-2 shrink-0 rounded-full"
-                        style={{ backgroundColor: p.color }}
-                      />
-                      <span className="truncate">{p.name}</span>
-                    </span>
-                    <span className="shrink-0 font-medium tabular-nums">
-                      {currency(p.monthlyFee)}
-                    </span>
-                  </div>
-                ))}
+                {selectedPrograms.map((p) => {
+                  const f = feeByProgram.get(p.id)
+                  const amt = f?.amount ?? p.monthlyFee ?? 0
+                  return (
+                    <div key={p.id} className="flex items-center justify-between gap-2 text-sm">
+                      <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+                        <span
+                          className="h-2 w-2 shrink-0 rounded-full"
+                          style={{ backgroundColor: p.color }}
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate">{p.name}</span>
+                          {f?.className && (
+                            <span className="block truncate text-[10px] text-muted-foreground/80">
+                              class: {f.className}
+                            </span>
+                          )}
+                        </span>
+                      </span>
+                      <span className="shrink-0 font-medium tabular-nums">{currency(amt)}</span>
+                    </div>
+                  )
+                })}
                 <div className="flex items-center justify-between gap-2 border-t pt-2">
                   <span className="text-sm font-semibold">Total billed</span>
                   <span className="text-base font-bold tabular-nums text-primary">
