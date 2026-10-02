@@ -3,7 +3,7 @@
 // /bulk-generate, /bulk-generate/preview, /outstanding-guardians
 // NOTE: static sub-paths are registered BEFORE /:id on purpose.
 import { Router } from 'express'
-import { Payment, Student, Guardian, Program, Announcement, Setting } from '../models'
+import { Payment, Student, Guardian, Program, Class, Enrollment, Announcement, Setting } from '../models'
 import {
   ah, qs, round2, currentMonth, parseDate, computeStatus, toWaPhone, containsRe,
 } from '../helpers'
@@ -12,6 +12,79 @@ const r = Router()
 
 const ALLOWED_STATUSES = new Set(['Pending', 'Partial', 'Paid', 'Overdue'])
 const ALLOWED_METHODS = new Set(['Cash', 'Card', 'Bank', 'Online'])
+
+// ─── Fee resolution helper ──────────────────────────────────────────────────
+// Priority: explicit amount → class fee (if > 0) → programme monthlyFee
+// Returns { amount, description }.
+async function resolveLineAmount(opts: {
+  programId: string | null
+  classId: string | null
+  explicitAmount: number | null
+  programCache: Map<string, any>
+  classCache: Map<string, any>
+}): Promise<{ amount: number; description: string | null }> {
+  const { programId, classId, explicitAmount, programCache, classCache } = opts
+
+  // 1. Explicit amount wins (custom charges / legacy clients)
+  if (typeof explicitAmount === 'number' && !isNaN(explicitAmount) && explicitAmount >= 0) {
+    // Still resolve a description from the programme if available
+    let desc: string | null = null
+    if (programId) {
+      let p = programCache.get(programId)
+      if (!p) { p = await Program.findById(programId).lean(); programCache.set(programId, p) }
+      if (p) desc = (p as any).name
+    }
+    return { amount: explicitAmount, description: desc }
+  }
+
+  // 2. Class fee if the student has a class for this programme and it has a fee
+  if (classId) {
+    let c = classCache.get(classId)
+    if (!c) { c = await Class.findById(classId).lean(); classCache.set(classId, c) }
+    if (c && typeof (c as any).fee === 'number' && (c as any).fee > 0) {
+      // Description: prefer "Programme — Class name" for clarity on the receipt
+      let progName: string | null = null
+      if (programId) {
+        let p = programCache.get(programId)
+        if (!p) { p = await Program.findById(programId).lean(); programCache.set(programId, p) }
+        if (p) progName = (p as any).name
+      }
+      const desc = progName && (c as any).name
+        ? `${progName} — ${(c as any).name}`
+        : progName ?? (c as any).name ?? null
+      return { amount: (c as any).fee, description: desc }
+    }
+  }
+
+  // 3. Programme monthlyFee fallback
+  if (programId) {
+    let p = programCache.get(programId)
+    if (!p) { p = await Program.findById(programId).lean(); programCache.set(programId, p) }
+    if (p) return { amount: (p as any).monthlyFee || 0, description: (p as any).name }
+  }
+
+  return { amount: 0, description: null }
+}
+
+// Build a map studentId → { programId → classId } from active enrolments.
+// Used by bulk-generate to attach the right class to each programme line.
+async function enrolmentClassMapForStudents(
+  studentIds: string[],
+): Promise<Map<string, Map<string, string>>> {
+  const map = new Map<string, Map<string, string>>()
+  if (studentIds.length === 0) return map
+  const rows = await Enrollment.find(
+    { studentId: { $in: studentIds }, status: 'Active', classId: { $ne: null } },
+    'studentId programId classId',
+  ).lean()
+  for (const e of rows as any[]) {
+    if (!e.programId || !e.classId) continue
+    if (!map.has(e.studentId)) map.set(e.studentId, new Map())
+    const inner = map.get(e.studentId)!
+    if (!inner.has(e.programId)) inner.set(e.programId, e.classId)
+  }
+  return map
+}
 
 // ─── Serializers ────────────────────────────────────────────────────────────
 interface ProgInfo { id: string; code: string; name: string; color: string; monthlyFee?: number }
@@ -127,7 +200,6 @@ r.get('/', ah(async (req, res) => {
 
   const where: Record<string, unknown> = {}
   if (q) {
-    // match by receiptNo OR student name/code — resolve students first
     const matched = await Student.find(
       { $or: [{ fullName: containsRe(q) }, { studentId: containsRe(q) }] },
       '_id',
@@ -141,8 +213,6 @@ r.get('/', ah(async (req, res) => {
   if (status && ALLOWED_STATUSES.has(status)) where.status = status
   if (month) where.month = month
   if (program) {
-    // programme match (direct or via embedded line item) — same precedence
-    // quirk as the original: overrides the q $or when both are given
     const prog = await Program.findOne({ code: program }, '_id').lean()
     const pid = prog ? (prog as any)._id.toString() : '___none___'
     where.$or = [{ programId: pid }, { 'items.programId': pid }]
@@ -200,48 +270,95 @@ r.post('/', ah(async (req, res) => {
     return res.status(400).json({ error: 'month is required (YYYY-MM)' })
   }
 
+  const programCache = new Map<string, any>()
+  const classCache = new Map<string, any>()
+
+  // Find classIds the student is actually enrolled in for each programme
+  const classByProgramme = new Map<string, string>()
+  const activeEnrolments = await Enrollment.find(
+    { studentId, status: 'Active', classId: { $ne: null } },
+    'programId classId',
+  ).lean()
+  for (const e of activeEnrolments as any[]) {
+    if (!e.programId || !e.classId) continue
+    if (!classByProgramme.has(e.programId)) classByProgramme.set(e.programId, e.classId)
+  }
+
   type LineItem = { programId: string | null; amount: number; description: string | null }
   let lineItems: LineItem[] = []
-  let hasExplicitAmounts = false
 
   if (Array.isArray(body.items) && body.items.length > 0) {
     for (const it of body.items) {
       const pid = it.programId?.trim() || null
+      const cidExplicit = it.classId?.trim() || null
+      const cid = cidExplicit || (pid ? classByProgramme.get(pid) ?? null : null)
+      const explicitAmount =
+        typeof it.amount === 'number' && !isNaN(it.amount) && it.amount >= 0 ? it.amount : null
+
       if (pid) {
-        const prog = await Program.findById(pid).lean()
-        if (!prog) return res.status(400).json({ error: 'Program not found' })
+        const resolved = await resolveLineAmount({
+          programId: pid,
+          classId: cid,
+          explicitAmount,
+          programCache,
+          classCache,
+        })
+        if (!resolved.description && !programCache.get(pid)) {
+          return res.status(400).json({ error: 'Program not found' })
+        }
         lineItems.push({
           programId: pid,
-          amount: typeof it.amount === 'number' && !isNaN(it.amount) && it.amount >= 0 ? it.amount : (prog as any).monthlyFee,
-          description: it.description?.trim() || (prog as any).name,
+          amount: resolved.amount,
+          description: it.description?.trim() || resolved.description,
         })
       } else {
         lineItems.push({
           programId: null,
-          amount: typeof it.amount === 'number' && !isNaN(it.amount) && it.amount >= 0 ? it.amount : 0,
+          amount: explicitAmount ?? 0,
           description: it.description?.trim() || 'Custom charge',
         })
       }
     }
-    hasExplicitAmounts = body.items.some((it: any) => typeof it.amount === 'number' && !isNaN(it.amount))
   } else if (Array.isArray(body.programIds) && body.programIds.length > 0) {
     const programs = await Program.find({ _id: { $in: body.programIds } }).lean()
     if (programs.length !== new Set(body.programIds).size) {
       return res.status(400).json({ error: 'One or more programs not found' })
     }
-    const byId = new Map((programs as any[]).map((p) => [p._id.toString(), p]))
-    for (const pid of body.programIds) {
-      const prog = byId.get(pid)!
-      lineItems.push({ programId: pid, amount: prog.monthlyFee, description: prog.name })
+    for (const prog of programs as any[]) {
+      const pid = prog._id.toString()
+      const cid = classByProgramme.get(pid) ?? null
+      const resolved = await resolveLineAmount({
+        programId: pid,
+        classId: cid,
+        explicitAmount: null,
+        programCache,
+        classCache,
+      })
+      lineItems.push({
+        programId: pid,
+        amount: resolved.amount,
+        description: resolved.description || prog.name,
+      })
     }
   } else if (body.programId) {
     const prog = await Program.findById(body.programId).lean()
     if (!prog) return res.status(400).json({ error: 'Program not found' })
+    const pid = body.programId
+    const cid = classByProgramme.get(pid) ?? null
+    const explicitAmount =
+      typeof body.amount === 'number' && !isNaN(body.amount) ? Math.max(0, body.amount) : null
+    const resolved = await resolveLineAmount({
+      programId: pid,
+      classId: cid,
+      explicitAmount,
+      programCache,
+      classCache,
+    })
     lineItems = [
       {
-        programId: body.programId,
-        amount: typeof body.amount === 'number' && !isNaN(body.amount) ? Math.max(0, body.amount) : (prog as any).monthlyFee,
-        description: (prog as any).name,
+        programId: pid,
+        amount: resolved.amount,
+        description: resolved.description || (prog as any).name,
       },
     ]
   }
@@ -382,7 +499,6 @@ r.get('/statement', ah(async (req, res) => {
   if (!student) return res.status(404).json({ error: 'Student not found' })
   const s = student as any
 
-  const { Enrollment, Class } = await import('../models')
   const [guardians, enrollments, payments] = await Promise.all([
     Guardian.find({ studentId }, 'name phone relationship isPrimary').lean(),
     Enrollment.find({ studentId, status: 'Active' })
@@ -502,9 +618,7 @@ r.post('/send-reminder', ah(async (req, res) => {
     ``,
     `Total outstanding amount: LKR ${outstandingAmount.toLocaleString()}.`,
     ``,
-    `Please settle your child's tuition fees at your earliest convenience. Payments can be made via Cash, Card, Bank Transfer, or Online at the accounts desk. If you have already paid, please share the receipt number so our records can be updated.`,
-    ``,
-    `For any queries regarding your fee statement, please contact the school office${schoolPhone ? ` (${schoolPhone})` : ''}. Thank you for your cooperation.`,
+    `Please settle your child's tuition fees at your earliest convenience.`,
     ``,
     `— ${schoolName} Administration`,
   ].filter(Boolean).join('\n')
@@ -549,13 +663,13 @@ r.get('/bulk-generate/preview', ah(async (req, res) => {
     year: 'numeric',
   })
 
-  const { Enrollment } = await import('../models')
   const students = await Student.find({ status: 'Active' }).sort({ studentId: 1 }).lean()
   const studentIds = (students as any[]).map((s) => s._id.toString())
   const enrollments = studentIds.length
     ? await Enrollment.find({ studentId: { $in: studentIds }, status: 'Active' })
         .sort({ enrolledAt: 1 })
         .populate('programId', 'id monthlyFee code name color')
+        .populate('classId', 'id name fee')
         .lean()
     : []
   const existing = await Payment.find({ month }, 'studentId amount').lean()
@@ -564,7 +678,8 @@ r.get('/bulk-generate/preview', ah(async (req, res) => {
     existingByStudent.set(p.studentId, (existingByStudent.get(p.studentId) ?? 0) + p.amount)
   }
 
-  const toBill: Array<{ studentId: string; studentCode: string; fullName: string; lines: Array<{ programId: string; code: string; name: string; color: string | null; amount: number }>; total: number }> = []
+  type PreviewLine = { programId: string; code: string; name: string; color: string | null; amount: number; classId: string | null; className: string | null }
+  const toBill: Array<{ studentId: string; studentCode: string; fullName: string; lines: PreviewLine[]; total: number }> = []
   const skipped: Array<{ studentId: string; studentCode: string; fullName: string; billedAmount: number }> = []
   const noProgrammes: Array<{ studentId: string; studentCode: string; fullName: string }> = []
 
@@ -580,19 +695,26 @@ r.get('/bulk-generate/preview', ah(async (req, res) => {
       continue
     }
     const seen = new Set<string>()
-    const lines: Array<{ programId: string; code: string; name: string; color: string | null; amount: number }> = []
+    const lines: PreviewLine[] = []
     for (const en of enrollments as any[]) {
       if (en.studentId !== sid) continue
       const prog = en.programId
       if (!prog) continue
-      if (seen.has(prog._id.toString())) continue
-      seen.add(prog._id.toString())
+      const pid = prog._id.toString()
+      if (seen.has(pid)) continue
+      seen.add(pid)
+      const cls = en.classId
+      const classFee = cls && typeof cls.fee === 'number' ? cls.fee : 0
+      const progFee = typeof prog.monthlyFee === 'number' ? prog.monthlyFee : 0
+      const amount = classFee > 0 ? classFee : progFee
       lines.push({
-        programId: prog._id.toString(),
+        programId: pid,
         code: prog.code,
         name: prog.name,
         color: prog.color ?? null,
-        amount: prog.monthlyFee,
+        amount,
+        classId: cls?._id ? cls._id.toString() : null,
+        className: cls?.name ?? null,
       })
     }
     if (lines.length === 0) {
@@ -649,13 +771,13 @@ r.post('/bulk-generate', ah(async (req, res) => {
     if (m) seq = parseInt(m[1], 10) + 1
   }
 
-  const { Enrollment } = await import('../models')
   const students = await Student.find({ status: 'Active' }).sort({ studentId: 1 }).lean()
   const studentIds = (students as any[]).map((s) => s._id.toString())
   const enrollments = studentIds.length
     ? await Enrollment.find({ studentId: { $in: studentIds }, status: 'Active' })
         .sort({ enrolledAt: 1 })
-        .populate('programId', 'monthlyFee code name')
+        .populate('programId', 'monthlyFee code name color')
+        .populate('classId', 'name fee')
         .lean()
     : []
   const existing = await Payment.find({ month }, 'studentId').lean()
@@ -665,7 +787,7 @@ r.post('/bulk-generate', ah(async (req, res) => {
     studentId: string
     amount: number
     receiptNo: string
-    lines: Array<{ programId: string | null; amount: number; description: string | null }>
+    lines: Array<{ programId: string | null; amount: number; description: string | null; classId: string | null }>
   }
   const bills: BillDraft[] = []
   let skipped = 0
@@ -685,7 +807,19 @@ r.post('/bulk-generate', ah(async (req, res) => {
       const pid = prog._id.toString()
       if (seenProgram.has(pid)) continue
       seenProgram.add(pid)
-      lines.push({ programId: pid, amount: prog.monthlyFee, description: prog.name })
+      const cls = en.classId
+      const classFee = cls && typeof cls.fee === 'number' ? cls.fee : 0
+      const progFee = typeof prog.monthlyFee === 'number' ? prog.monthlyFee : 0
+      const amount = classFee > 0 ? classFee : progFee
+      const desc = cls?.name
+        ? `${prog.name} — ${cls.name}`
+        : prog.name
+      lines.push({
+        programId: pid,
+        amount,
+        description: desc,
+        classId: cls?._id ? cls._id.toString() : null,
+      })
     }
     const amount = lines.reduce((sum, li) => sum + li.amount, 0)
     if (skipEmpty && lines.length === 0) {
@@ -712,6 +846,7 @@ r.post('/bulk-generate', ah(async (req, res) => {
     bills.map((b) => ({
       studentId: b.studentId,
       programId: b.lines.length === 1 ? b.lines[0].programId : null,
+      classId: b.lines.length === 1 ? b.lines[0].classId : null,
       month,
       amount: b.amount,
       paidAmount: 0,
@@ -742,9 +877,7 @@ r.post('/bulk-generate', ah(async (req, res) => {
 r.get('/outstanding-guardians', ah(async (req, res) => {
   const month = qs(req).get('month')?.trim() || currentMonth()
 
-  const payments = await Payment.find({ month })
-    .sort({ receiptNo: 1 })
-    .lean()
+  const payments = await Payment.find({ month }).sort({ receiptNo: 1 }).lean()
   const sIds = [...new Set((payments as any[]).map((p) => p.studentId))]
   const [students, guardians] = await Promise.all([
     sIds.length ? Student.find({ _id: { $in: sIds } }, 'studentId fullName').lean() : [],
@@ -892,7 +1025,20 @@ r.put('/:id', ah(async (req, res) => {
     }
   }
 
-  // Replace-all line items when items[]/programIds[] provided
+  const targetStudentId = body.studentId || existing.studentId
+  const classByProgramme = new Map<string, string>()
+  const activeEnrolments = await Enrollment.find(
+    { studentId: targetStudentId, status: 'Active', classId: { $ne: null } },
+    'programId classId',
+  ).lean()
+  for (const e of activeEnrolments as any[]) {
+    if (!e.programId || !e.classId) continue
+    if (!classByProgramme.has(e.programId)) classByProgramme.set(e.programId, e.classId)
+  }
+
+  const programCache = new Map<string, any>()
+  const classCache = new Map<string, any>()
+
   let replaceItems: Array<{ programId: string | null; amount: number; description: string | null }> | null = null
   let itemsTotal = 0
   if (Array.isArray(body.items) || Array.isArray(body.programIds)) {
@@ -900,18 +1046,26 @@ r.put('/:id', ah(async (req, res) => {
     if (Array.isArray(body.items) && body.items.length > 0) {
       for (const it of body.items) {
         const pid = it.programId?.trim() || null
+        const cid = it.classId?.trim() || (pid ? classByProgramme.get(pid) ?? null : null)
+        const explicitAmount =
+          typeof it.amount === 'number' && !isNaN(it.amount) && it.amount >= 0 ? it.amount : null
         if (pid) {
-          const prog = await Program.findById(pid).lean()
-          if (!prog) return res.status(400).json({ error: 'Program not found' })
+          const resolved = await resolveLineAmount({
+            programId: pid,
+            classId: cid,
+            explicitAmount,
+            programCache,
+            classCache,
+          })
           lines.push({
             programId: pid,
-            amount: typeof it.amount === 'number' && !isNaN(it.amount) && it.amount >= 0 ? it.amount : (prog as any).monthlyFee,
-            description: it.description?.trim() || (prog as any).name,
+            amount: resolved.amount,
+            description: it.description?.trim() || resolved.description,
           })
         } else {
           lines.push({
             programId: null,
-            amount: typeof it.amount === 'number' && !isNaN(it.amount) && it.amount >= 0 ? it.amount : 0,
+            amount: explicitAmount ?? 0,
             description: it.description?.trim() || 'Custom charge',
           })
         }
@@ -921,10 +1075,21 @@ r.put('/:id', ah(async (req, res) => {
       if (programs.length !== new Set(body.programIds).size) {
         return res.status(400).json({ error: 'One or more programs not found' })
       }
-      const byId = new Map((programs as any[]).map((p) => [p._id.toString(), p]))
-      for (const pid of body.programIds) {
-        const prog = byId.get(pid)!
-        lines.push({ programId: pid, amount: prog.monthlyFee, description: prog.name })
+      for (const prog of programs as any[]) {
+        const pid = prog._id.toString()
+        const cid = classByProgramme.get(pid) ?? null
+        const resolved = await resolveLineAmount({
+          programId: pid,
+          classId: cid,
+          explicitAmount: null,
+          programCache,
+          classCache,
+        })
+        lines.push({
+          programId: pid,
+          amount: resolved.amount,
+          description: resolved.description || prog.name,
+        })
       }
     }
     const seen = new Set<string>()
