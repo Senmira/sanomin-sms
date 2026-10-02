@@ -27,7 +27,6 @@ async function resolveLineAmount(opts: {
 
   // 1. Explicit amount wins (custom charges / legacy clients)
   if (typeof explicitAmount === 'number' && !isNaN(explicitAmount) && explicitAmount >= 0) {
-    // Still resolve a description from the programme if available
     let desc: string | null = null
     if (programId) {
       let p = programCache.get(programId)
@@ -42,7 +41,6 @@ async function resolveLineAmount(opts: {
     let c = classCache.get(classId)
     if (!c) { c = await Class.findById(classId).lean(); classCache.set(classId, c) }
     if (c && typeof (c as any).fee === 'number' && (c as any).fee > 0) {
-      // Description: prefer "Programme — Class name" for clarity on the receipt
       let progName: string | null = null
       if (programId) {
         let p = programCache.get(programId)
@@ -67,7 +65,6 @@ async function resolveLineAmount(opts: {
 }
 
 // Build a map studentId → { programId → classId } from active enrolments.
-// Used by bulk-generate to attach the right class to each programme line.
 async function enrolmentClassMapForStudents(
   studentIds: string[],
 ): Promise<Map<string, Map<string, string>>> {
@@ -273,7 +270,6 @@ r.post('/', ah(async (req, res) => {
   const programCache = new Map<string, any>()
   const classCache = new Map<string, any>()
 
-  // Find classIds the student is actually enrolled in for each programme
   const classByProgramme = new Map<string, string>()
   const activeEnrolments = await Enrollment.find(
     { studentId, status: 'Active', classId: { $ne: null } },
@@ -363,7 +359,6 @@ r.post('/', ah(async (req, res) => {
     ]
   }
 
-  // Deduplicate programmes
   const seenProgram = new Set<string>()
   lineItems = lineItems.filter((li) => {
     if (!li.programId) return true
