@@ -46,8 +46,21 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
   if (err?.code === 11000) {
     return res.status(400).json({ error: 'Duplicate value: ' + JSON.stringify(err.keyValue || {}) })
   }
+  // Mongoose CastError → happens when a string can't be cast to ObjectId.
+  // This almost always means a corrupted reference (e.g. "null", "", or a
+  // truncated hex string stored in a ref field). Log the details so we can
+  // find the offending document, then return a 400.
   if (err?.name === 'CastError') {
-    return res.status(404).json({ error: 'Record not found' })
+    console.error('[api] CastError:', JSON.stringify({
+      message: err.message,
+      path: err.path,
+      value: err.value,
+      kind: err.kind,
+      model: err.model?.modelName ?? null,
+    }))
+    return res.status(400).json({
+      error: 'Invalid reference: ' + (err.path ?? 'unknown field'),
+    })
   }
   console.error('[api] error:', err?.message || err)
   res.status(500).json({ error: err?.message || 'Internal server error' })
