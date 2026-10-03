@@ -26,14 +26,20 @@ app.use((req, _res, next) => {
   next()
 })
 
-app.use('/api', simpleRoutes)
+// ─── Route mounts ─────────────────────────────────────────────────────────
+// IMPORTANT: mount order matters. Specific sub-path mounts first, then
+// resource-wide routers (people, analytics) that handle /students, /teachers,
+// /classes, /dashboard, etc. `simpleRoutes` is mounted LAST because it
+// contains catch-all/wildcard handlers (e.g. /:id) that would otherwise
+// swallow requests intended for the real resource routes.
 app.use('/api/attendance', attendanceRoutes)
 app.use('/api/payments', paymentRoutes)
 app.use('/api/payroll', payrollRoutes)
 app.use('/api/expenses', expenseRoutes)
-app.use('/api/kiosk', kioskRoutes)          // ← new
-app.use('/api', peopleRoutes)
-app.use('/api', analyticsRoutes)
+app.use('/api/kiosk', kioskRoutes)
+app.use('/api', peopleRoutes)       // /students, /teachers, /classes, lookups
+app.use('/api', analyticsRoutes)    // /dashboard, /notifications, etc.
+app.use('/api', simpleRoutes)       // /settings, /health, and misc — LAST
 
 // 404 for unknown API paths
 app.use('/api', (_req, res) => {
@@ -47,9 +53,7 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
     return res.status(400).json({ error: 'Duplicate value: ' + JSON.stringify(err.keyValue || {}) })
   }
   // Mongoose CastError → happens when a string can't be cast to ObjectId.
-  // This almost always means a corrupted reference (e.g. "null", "", or a
-  // truncated hex string stored in a ref field). Log the details so we can
-  // find the offending document, then return a 400.
+  // Log the details so we can find the offending route/document.
   if (err?.name === 'CastError') {
     console.error('[api] CastError:', JSON.stringify({
       message: err.message,
@@ -71,8 +75,9 @@ mongoose
   .then(() => {
     console.log(`[api] MongoDB connected → ${MONGODB_URI}`)
     app.listen(PORT, '0.0.0.0', () => {
-  console.log(`[api] SANOMIN API server listening on http://0.0.0.0:${PORT}`)
-})  })
+      console.log(`[api] SANOMIN API server listening on http://0.0.0.0:${PORT}`)
+    })
+  })
   .catch((e) => {
     console.error('[api] MongoDB connection failed:', e.message)
     process.exit(1)
