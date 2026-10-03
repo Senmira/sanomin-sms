@@ -1,1168 +1,951 @@
-// ─── Payments routes (bills with EMBEDDED line items) ──────────────────────
-// /api/payments, /:id, /summary, /statement, /send-reminder,
-// /bulk-generate, /bulk-generate/preview, /outstanding-guardians
-// NOTE: static sub-paths are registered BEFORE /:id on purpose.
+// ─── People & classes routes — students, teachers, classes (+ lookups) ─────
+// Static sub-paths (/students/lookup, /teachers/lookup) BEFORE /:id.
 import { Router } from 'express'
-import { Payment, Student, Guardian, Program, Class, Enrollment, Announcement, Setting } from '../models'
 import {
-  ah, qs, round2, currentMonth, parseDate, computeStatus, toWaPhone, containsRe,
-} from '../helpers'
+  Student, Guardian, Teacher, Class, Enrollment, Program, Attendance, PayrollRecord, Payment,
+} from '../models'
+import { ah, qs, containsRe, round2 } from '../helpers'
 
 const r = Router()
 
-const ALLOWED_STATUSES = new Set(['Pending', 'Partial', 'Paid', 'Overdue'])
-const ALLOWED_METHODS = new Set(['Cash', 'Card', 'Bank', 'Online'])
+// ─── Age bands (fixed) ──────────────────────────────────────────────────────
+const VALID_AGE_GROUPS = new Set(['1-3', '3-5', '5-10', '10-15', '15-17', '17-19'])
 
-// ─── Fee resolution helper ──────────────────────────────────────────────────
-// Priority: explicit amount → class fee (if > 0) → programme monthlyFee
-// Returns { amount, description }.
-async function resolveLineAmount(opts: {
-  programId: string | null
-  classId: string | null
-  explicitAmount: number | null
-  programCache: Map<string, any>
-  classCache: Map<string, any>
-}): Promise<{ amount: number; description: string | null }> {
-  const { programId, classId, explicitAmount, programCache, classCache } = opts
-
-  // 1. Explicit amount wins (custom charges / legacy clients)
-  if (typeof explicitAmount === 'number' && !isNaN(explicitAmount) && explicitAmount >= 0) {
-    let desc: string | null = null
-    if (programId) {
-      let p = programCache.get(programId)
-      if (!p) { p = await Program.findById(programId).lean(); programCache.set(programId, p) }
-      if (p) desc = (p as any).name
-    }
-    return { amount: explicitAmount, description: desc }
-  }
-
-  // 2. Class fee if the student has a class for this programme and it has a fee
-  if (classId) {
-    let c = classCache.get(classId)
-    if (!c) { c = await Class.findById(classId).lean(); classCache.set(classId, c) }
-    if (c && typeof (c as any).fee === 'number' && (c as any).fee > 0) {
-      let progName: string | null = null
-      if (programId) {
-        let p = programCache.get(programId)
-        if (!p) { p = await Program.findById(programId).lean(); programCache.set(programId, p) }
-        if (p) progName = (p as any).name
-      }
-      const desc = progName && (c as any).name
-        ? `${progName} — ${(c as any).name}`
-        : progName ?? (c as any).name ?? null
-      return { amount: (c as any).fee, description: desc }
-    }
-  }
-
-  // 3. Programme monthlyFee fallback
-  if (programId) {
-    let p = programCache.get(programId)
-    if (!p) { p = await Program.findById(programId).lean(); programCache.set(programId, p) }
-    if (p) return { amount: (p as any).monthlyFee || 0, description: (p as any).name }
-  }
-
-  return { amount: 0, description: null }
-}
-
-// Build a map studentId → { programId → classId } from active enrolments.
-async function enrolmentClassMapForStudents(
-  studentIds: string[],
-): Promise<Map<string, Map<string, string>>> {
-  const map = new Map<string, Map<string, string>>()
-  if (studentIds.length === 0) return map
-  const rows = await Enrollment.find(
-    { studentId: { $in: studentIds }, status: 'Active', classId: { $ne: null } },
-    'studentId programId classId',
-  ).lean()
-  for (const e of rows as any[]) {
-    if (!e.programId || !e.classId) continue
-    if (!map.has(e.studentId)) map.set(e.studentId, new Map())
-    const inner = map.get(e.studentId)!
-    if (!inner.has(e.programId)) inner.set(e.programId, e.classId)
-  }
-  return map
-}
-
-// ─── Serializers ────────────────────────────────────────────────────────────
-interface ProgInfo { id: string; code: string; name: string; color: string; monthlyFee?: number }
-
-async function programInfoMaps(paymentDocs: any[]) {
-  const progIds = new Set<string>()
-  for (const p of paymentDocs) {
-    if (p.programId) progIds.add(p.programId)
-    for (const it of p.items || []) if (it.programId) progIds.add(it.programId)
-  }
-  const sIds = [...new Set(paymentDocs.map((p) => p.studentId))]
-  const [progs, students, guardians] = await Promise.all([
-    progIds.size ? Program.find({ _id: { $in: [...progIds] } }).lean() : [],
-    sIds.length ? Student.find({ _id: { $in: sIds } }, 'studentId fullName').lean() : [],
-    sIds.length
-      ? Guardian.find({ studentId: { $in: sIds } }, 'studentId name phone relationship isPrimary')
-          .sort({ isPrimary: -1, name: 1 })
+// ─── shared serialization ───────────────────────────────────────────────────
+async function studentRelMaps(studentIds: string[], orderGuardians: boolean) {
+  const [guardians, enrollments, attendanceCounts] = await Promise.all([
+    studentIds.length
+      ? Guardian.find({ studentId: { $in: studentIds } })
+          .sort(orderGuardians ? { isPrimary: -1, createdAt: 1 } : {})
           .lean()
       : [],
+    studentIds.length
+      ? Enrollment.find({ studentId: { $in: studentIds } })
+          .populate('programId', 'code name color category hasGrades grades')
+          .populate('classId', 'name dayOfWeek startTime endTime grade fee')
+          .lean()
+      : [],
+    studentIds.length
+      ? Attendance.aggregate([
+          { $match: { personType: 'Student', personId: { $in: studentIds } } },
+          { $group: { _id: '$personId', count: { $sum: 1 } } },
+        ])
+      : [],
   ])
-  const pMap = new Map<string, any>()
-  for (const p of progs as any[]) pMap.set(p._id.toString(), p)
-  const sMap = new Map<string, any>()
-  for (const s of students as any[]) sMap.set(s._id.toString(), s)
   const gMap = new Map<string, any[]>()
   for (const g of guardians as any[]) {
     if (!gMap.has(g.studentId)) gMap.set(g.studentId, [])
     gMap.get(g.studentId)!.push(g)
   }
-  return { pMap, sMap, gMap }
+  const eMap = new Map<string, any[]>()
+  for (const e of enrollments as any[]) {
+    if (!eMap.has(e.studentId)) eMap.set(e.studentId, [])
+    eMap.get(e.studentId)!.push(e)
+  }
+  const aMap = new Map<string, number>()
+  for (const a of attendanceCounts as any[]) aMap.set(a._id, a.count)
+  return { gMap, eMap, aMap }
 }
 
-function progBrief(p: any): { id: string; code: string; name: string; color: string } {
-  return { id: p._id.toString(), code: p.code, name: p.name, color: p.color }
-}
-
-function progBriefFee(p: any): { id: string; code: string; name: string; color: string; monthlyFee: number } {
-  return { id: p._id.toString(), code: p.code, name: p.name, color: p.color, monthlyFee: p.monthlyFee }
-}
-
-function serializePayment(doc: any, maps: Awaited<ReturnType<typeof programInfoMaps>>, withGuardians: boolean) {
-  const id = doc._id.toString()
-  const s = maps.sMap.get(doc.studentId)
-  const prog = doc.programId ? maps.pMap.get(doc.programId) : null
-  const items = (doc.items || []).map((it: any) => ({
-    id: it._id.toString(),
-    programId: it.programId ?? null,
-    description: it.description ?? null,
-    amount: it.amount,
-    program: it.programId ? (maps.pMap.has(it.programId) ? progBriefFee(maps.pMap.get(it.programId)) : null) : null,
-  }))
+function serializeStudent(s: any, maps: Awaited<ReturnType<typeof studentRelMaps>>) {
+  const id = s._id.toString()
   return {
     id,
-    studentId: doc.studentId,
-    programId: doc.programId ?? null,
-    classId: doc.classId ?? null,
-    month: doc.month,
-    amount: doc.amount,
-    paidAmount: doc.paidAmount,
-    method: doc.method,
-    status: doc.status,
-    paidDate: doc.paidDate ? new Date(doc.paidDate).toISOString() : null,
-    dueDate: doc.dueDate ? new Date(doc.dueDate).toISOString() : null,
-    note: doc.note ?? null,
-    receiptNo: doc.receiptNo ?? null,
-    createdAt: new Date(doc.createdAt).toISOString(),
-    updatedAt: new Date(doc.updatedAt).toISOString(),
-    student: withGuardians
-      ? {
-          id: doc.studentId,
-          studentId: s?.studentId ?? '',
-          fullName: s?.fullName ?? '',
-          guardians: (maps.gMap.get(doc.studentId) || []).map((g: any) => ({
-            name: g.name,
-            phone: g.phone,
-            relationship: g.relationship,
-            isPrimary: g.isPrimary,
-          })),
-        }
-      : {
-          id: doc.studentId,
-          studentId: s?.studentId ?? '',
-          fullName: s?.fullName ?? '',
-        },
-    program: prog ? progBrief(prog) : null,
-    items,
+    studentId: s.studentId,
+    indexNo: s.indexNo ?? null,
+    barcode: s.barcode,
+    fullName: s.fullName,
+    gender: s.gender,
+    dob: s.dob ? new Date(s.dob).toISOString() : null,
+    ageGroup: s.ageGroup ?? null,
+    grade: s.grade ?? null,
+    admissionDate: s.admissionDate ? new Date(s.admissionDate).toISOString() : null,
+    religion: s.religion ?? null,
+    nationality: s.nationality ?? null,
+    previousSchool: s.previousSchool ?? null,
+    photoUrl: s.photoUrl ?? null,
+    status: s.status,
+    medicalNotes: s.medicalNotes ?? null,
+    guardians: (maps.gMap.get(id) || []).map((g: any) => ({
+      id: g._id.toString(),
+      name: g.name,
+      phone: g.phone,
+      address: g.address ?? null,
+      relationship: g.relationship,
+      isPrimary: g.isPrimary,
+    })),
+    enrollments: (maps.eMap.get(id) || []).map((e: any) => ({
+      id: e._id.toString(),
+      program: e.programId
+        ? {
+            id: e.programId._id.toString(),
+            code: e.programId.code,
+            name: e.programId.name,
+            color: e.programId.color,
+            category: e.programId.category ?? 'Tuition',
+            hasGrades: !!e.programId.hasGrades,
+            grades: Array.isArray(e.programId.grades) ? e.programId.grades : [],
+          }
+        : null,
+      class: e.classId
+        ? {
+            id: e.classId._id.toString(),
+            name: e.classId.name,
+            dayOfWeek: e.classId.dayOfWeek ?? null,
+            startTime: e.classId.startTime ?? null,
+            endTime: e.classId.endTime ?? null,
+            grade: e.classId.grade ?? null,
+            fee: typeof e.classId.fee === 'number' ? e.classId.fee : 0,
+          }
+        : null,
+    })),
+    _count: { attendance: maps.aMap.get(id) || 0 },
   }
 }
 
-async function nextReceiptNo(): Promise<string> {
-  const year = String(new Date().getFullYear())
-  const prefix = `SAN-${year}-`
-  const rows = await Payment.find({ receiptNo: { $regex: `^${prefix}` } }, 'receiptNo').lean()
+// ─── ID generation ──────────────────────────────────────────────────────────
+function computeYear2(d: Date | null): string {
+  const dt = d && !isNaN(d.getTime()) ? d : new Date()
+  return String(dt.getFullYear()).slice(-2)
+}
+
+async function nextStudentId(admissionDate: Date | null): Promise<string> {
+  const prefix = `S${computeYear2(admissionDate)}`
+  const existing = await Student.find({ studentId: { $regex: `^${prefix}` } }, 'studentId').lean()
   let max = 0
-  for (const row of rows as any[]) {
-    if (!row.receiptNo) continue
-    const num = parseInt(row.receiptNo.slice(prefix.length), 10)
+  for (const s of existing as any[]) {
+    const num = parseInt(s.studentId.slice(prefix.length), 10)
     if (!isNaN(num) && num > max) max = num
   }
   return `${prefix}${String(max + 1).padStart(4, '0')}`
 }
 
-// ─── GET /api/payments ──────────────────────────────────────────────────────
-r.get('/', ah(async (req, res) => {
+async function nextTeacherId(
+  type: 'Internal' | 'External',
+  hireDate: Date | null,
+): Promise<string> {
+  const prefix = `${type === 'Internal' ? 'I' : 'E'}${computeYear2(hireDate)}`
+  const existing = await Teacher.find({ teacherId: { $regex: `^${prefix}` } }, 'teacherId').lean()
+  let max = 0
+  for (const t of existing as any[]) {
+    const num = parseInt(t.teacherId.slice(prefix.length), 10)
+    if (!isNaN(num) && num > max) max = num
+  }
+  return `${prefix}${String(max + 1).padStart(3, '0')}`
+}
+
+// ─── Enrolment resolution ───────────────────────────────────────────────────
+type EnrollInput = { programId: string; classId: string | null }
+
+async function resolveEnrollments(raw: unknown): Promise<
+  { error: string } | { list: EnrollInput[] }
+> {
+  if (!Array.isArray(raw)) return { list: [] }
+  const list: EnrollInput[] = []
+  const seen = new Set<string>()
+  for (const r of raw) {
+    const programId = String((r as any)?.programId ?? '').trim()
+    if (!programId) continue
+    const classRaw = (r as any)?.classId
+    const classId = classRaw ? String(classRaw).trim() : null
+
+    const key = `${programId}|${classId ?? ''}`
+    if (seen.has(key)) continue
+    seen.add(key)
+
+    const prog = await Program.findById(programId).lean()
+    if (!prog) return { error: `Programme ${programId} not found` }
+
+    if (classId) {
+      const cls = await Class.findById(classId).lean()
+      if (!cls) return { error: 'Selected class not found' }
+      if ((cls as any).programId && (cls as any).programId !== programId) {
+        return { error: `Class "${(cls as any).name}" is not part of ${(prog as any).name}` }
+      }
+    }
+    list.push({ programId, classId })
+  }
+  return { list }
+}
+
+// ─── GET /api/students/lookup?barcode= | ?studentId= ────────────────────────
+r.get('/students/lookup', ah(async (req, res) => {
+  const p = qs(req)
+  const barcode = p.get('barcode')?.trim()
+  const studentId = p.get('studentId')?.trim()
+  if (!barcode && !studentId) {
+    return res.status(400).json({ error: 'Provide either ?barcode= or ?studentId= query parameter' })
+  }
+  const where: Record<string, unknown> = {}
+  if (barcode) where.barcode = barcode
+  else if (studentId) where.studentId = studentId
+
+  const student = await Student.findOne(where).lean()
+  if (!student) return res.status(404).json({ error: 'No student matches that barcode / ID' })
+  const maps = await studentRelMaps([(student as any)._id.toString()], true)
+  res.json(serializeStudent(student, maps))
+}))
+
+// ─── GET /api/students ──────────────────────────────────────────────────────
+r.get('/students', ah(async (req, res) => {
   const p = qs(req)
   const q = p.get('q')?.trim() || ''
+  const program = p.get('program') || ''
+  const category = p.get('category')?.trim().toLowerCase() || ''
+  const ageGroup = p.get('ageGroup') || ''
+  const gender = p.get('gender') || ''
+  const status = p.get('status') || ''
+  const page = Math.max(1, parseInt(p.get('page') || '1', 10) || 1)
+  const limit = Math.min(100, Math.max(1, parseInt(p.get('limit') || '20', 10) || 20))
+
+  const where: Record<string, unknown> = {}
+  if (q) {
+    where.$or = [
+      { fullName: containsRe(q) },
+      { studentId: containsRe(q) },
+      { indexNo: containsRe(q) },
+      { barcode: containsRe(q) },
+    ]
+  }
+  if (ageGroup) where.ageGroup = ageGroup
+  if (gender) where.gender = gender
+  if (status) where.status = status
+
+  if (category && category !== 'all') {
+    const catName = category === 'preschool' ? 'Preschool'
+      : category === 'daycare' ? 'Daycare'
+      : 'Tuition'
+    const progs = await Program.find({ category: catName }, '_id').lean()
+    const pids = (progs as any[]).map((x) => x._id.toString())
+    const enr = await Enrollment.find(
+      { programId: { $in: pids }, status: 'Active' },
+      'studentId',
+    ).lean()
+    where._id = { $in: [...new Set((enr as any[]).map((e) => e.studentId))] }
+  }
+
+  if (program) {
+    const prog = await Program.findOne({ code: program }, '_id').lean()
+    const pid = prog ? (prog as any)._id.toString() : '___none___'
+    const enr = await Enrollment.find({ programId: pid }, 'studentId').lean()
+    where._id = { $in: (enr as any[]).map((e) => e.studentId) }
+  }
+
+  const monthStart = new Date()
+  monthStart.setDate(1)
+  monthStart.setHours(0, 0, 0, 0)
+
+  const [total, rows, totalStudents, activeStudents, newThisMonth] = await Promise.all([
+    Student.countDocuments(where),
+    Student.find(where).sort({ studentId: 1 }).skip((page - 1) * limit).limit(limit).lean(),
+    Student.countDocuments({}),
+    Student.countDocuments({ status: 'Active' }),
+    Student.countDocuments({
+      $or: [
+        { admissionDate: { $gte: monthStart } },
+        { admissionDate: null, createdAt: { $gte: monthStart } },
+      ],
+    }),
+  ])
+
+  const ids = (rows as any[]).map((s) => s._id.toString())
+  const maps = await studentRelMaps(ids, false)
+
+  const allProgs = await Program.find({}, 'category _id').lean()
+  const progIdToCat = new Map(
+    (allProgs as any[]).map((x) => [x._id.toString(), x.category ?? 'Tuition']),
+  )
+  const allActiveEnrolls = await Enrollment.find(
+    { status: 'Active' },
+    'studentId programId',
+  ).lean()
+  const studentCats = new Map<string, Set<string>>()
+  for (const e of allActiveEnrolls as any[]) {
+    if (!e.programId) continue
+    const cat = progIdToCat.get(e.programId) ?? 'Tuition'
+    if (!studentCats.has(e.studentId)) studentCats.set(e.studentId, new Set())
+    studentCats.get(e.studentId)!.add(cat)
+  }
+  const byCategory = { all: 0, preschool: 0, daycare: 0, tuition: 0 }
+  for (const cats of studentCats.values()) {
+    byCategory.all++
+    if (cats.has('Preschool')) byCategory.preschool++
+    else if (cats.has('Daycare')) byCategory.daycare++
+    else byCategory.tuition++
+  }
+
+  res.json({
+    data: (rows as any[]).map((s) => serializeStudent(s, maps)),
+    total,
+    page,
+    limit,
+    stats: {
+      totalStudents,
+      activeStudents,
+      newThisMonth,
+      filteredCount: total,
+      byCategory,
+    },
+  })
+}))
+
+// ─── POST /api/students ─────────────────────────────────────────────────────
+r.post('/students', ah(async (req, res) => {
+  const body = req.body || {}
+  const fullName = body.fullName?.trim()
+  const gender = body.gender?.trim()
+  if (!fullName) return res.status(400).json({ error: 'fullName is required' })
+  if (!gender) return res.status(400).json({ error: 'gender is required' })
+
+  const ageGroup = String(body.ageGroup ?? '').trim()
+  if (ageGroup && !VALID_AGE_GROUPS.has(ageGroup)) {
+    return res.status(400).json({ error: `ageGroup must be one of ${[...VALID_AGE_GROUPS].join(', ')}` })
+  }
+
+  const enrollmentsToCreate = await resolveEnrollments(body.enrollments ?? [])
+  if ('error' in enrollmentsToCreate) return res.status(400).json({ error: enrollmentsToCreate.error })
+
+  const parseDate = (v?: string | null): Date | null => {
+    if (!v) return null
+    const d = new Date(v)
+    return isNaN(d.getTime()) ? null : d
+  }
+
+  const admissionDate = parseDate(body.admissionDate) || new Date()
+  const studentId = await nextStudentId(admissionDate)
+
+  const created = await Student.create({
+    studentId,
+    barcode: studentId,
+    fullName,
+    gender,
+    indexNo: body.indexNo?.trim() || null,
+    dob: parseDate(body.dob),
+    ageGroup: ageGroup || null,
+    grade: body.grade?.trim() || null,
+    admissionDate,
+    religion: body.religion || null,
+    nationality: body.nationality || null,
+    previousSchool: body.previousSchool || null,
+    photoUrl: body.photoUrl || null,
+    status: body.status || 'Active',
+    medicalNotes: body.medicalNotes || null,
+  })
+
+  const guardians = (body.guardians || [])
+    .filter((g: any) => g && g.name && g.name.trim())
+    .map((g: any, idx: number) => ({
+      studentId: (created as any)._id.toString(),
+      name: g.name.trim(),
+      phone: (g.phone || '').trim() || 'N/A',
+      address: g.address || null,
+      email: g.email || null,
+      relationship: g.relationship || 'Guardian',
+      occupation: g.occupation || null,
+      isPrimary: g.isPrimary ?? idx === 0,
+    }))
+  if (guardians.length) await Guardian.insertMany(guardians)
+
+  if (enrollmentsToCreate.list.length) {
+    await Enrollment.insertMany(
+      enrollmentsToCreate.list.map((e) => ({
+        studentId: (created as any)._id.toString(),
+        programId: e.programId,
+        classId: e.classId,
+        status: 'Active',
+      })),
+    )
+  }
+
+  const doc = await Student.findById((created as any)._id).lean()
+  const maps = await studentRelMaps([(created as any)._id.toString()], false)
+  res.status(201).json(serializeStudent(doc, maps))
+}))
+
+// ─── GET /api/students/:id ──────────────────────────────────────────────────
+r.get('/students/:id', ah(async (req, res) => {
+  const student = await Student.findById(req.params.id).lean()
+  if (!student) return res.status(404).json({ error: 'Student not found' })
+  const maps = await studentRelMaps([req.params.id], true)
+  res.json(serializeStudent(student, maps))
+}))
+
+// ─── PUT /api/students/:id ──────────────────────────────────────────────────
+r.put('/students/:id', ah(async (req, res) => {
+  const existing = await Student.findById(req.params.id)
+  if (!existing) return res.status(404).json({ error: 'Student not found' })
+  const body = req.body || {}
+
+  if (body.fullName !== undefined && !body.fullName.trim()) {
+    return res.status(400).json({ error: 'fullName cannot be empty' })
+  }
+  if (body.gender !== undefined && !body.gender.trim()) {
+    return res.status(400).json({ error: 'gender cannot be empty' })
+  }
+  if (body.ageGroup !== undefined && body.ageGroup && !VALID_AGE_GROUPS.has(String(body.ageGroup))) {
+    return res.status(400).json({ error: `ageGroup must be one of ${[...VALID_AGE_GROUPS].join(', ')}` })
+  }
+
+  let toCreate: EnrollInput[] | null = null
+  if (body.enrollments !== undefined) {
+    const resolved = await resolveEnrollments(body.enrollments)
+    if ('error' in resolved) return res.status(400).json({ error: resolved.error })
+    toCreate = resolved.list
+  }
+
+  const parseDate = (v?: string | null): Date | null => {
+    if (!v) return null
+    const d = new Date(v)
+    return isNaN(d.getTime()) ? null : d
+  }
+
+  if (body.fullName !== undefined) existing.fullName = body.fullName.trim()
+  if (body.gender !== undefined) existing.gender = body.gender
+  if (body.indexNo !== undefined) existing.indexNo = body.indexNo?.trim() || null
+  if (body.dob !== undefined) existing.dob = parseDate(body.dob)
+  if (body.ageGroup !== undefined) existing.ageGroup = body.ageGroup || null
+  if (body.grade !== undefined) existing.grade = body.grade?.trim() || null
+  if (body.admissionDate !== undefined) existing.admissionDate = parseDate(body.admissionDate)
+  if (body.religion !== undefined) existing.religion = body.religion || null
+  if (body.nationality !== undefined) existing.nationality = body.nationality || null
+  if (body.previousSchool !== undefined) existing.previousSchool = body.previousSchool || null
+  if (body.photoUrl !== undefined) existing.photoUrl = body.photoUrl || null
+  if (body.status !== undefined) existing.status = body.status
+  if (body.medicalNotes !== undefined) existing.medicalNotes = body.medicalNotes || null
+  await existing.save()
+
+  if (body.guardians !== undefined) {
+    await Guardian.deleteMany({ studentId: req.params.id })
+    const newGuardians = (body.guardians || [])
+      .filter((g: any) => g && g.name && g.name.trim())
+      .map((g: any, idx: number) => ({
+        studentId: req.params.id,
+        name: g.name.trim(),
+        phone: (g.phone || '').trim() || 'N/A',
+        address: g.address || null,
+        email: g.email || null,
+        relationship: g.relationship || 'Guardian',
+        occupation: g.occupation || null,
+        isPrimary: g.isPrimary ?? idx === 0,
+      }))
+    if (newGuardians.length) await Guardian.insertMany(newGuardians)
+  }
+
+  if (toCreate !== null) {
+    await Enrollment.deleteMany({ studentId: req.params.id })
+    if (toCreate.length) {
+      await Enrollment.insertMany(
+        toCreate.map((e) => ({
+          studentId: req.params.id,
+          programId: e.programId,
+          classId: e.classId,
+          status: 'Active',
+        })),
+      )
+    }
+  }
+
+  const doc = await Student.findById(req.params.id).lean()
+  const maps = await studentRelMaps([req.params.id], true)
+  res.json(serializeStudent(doc, maps))
+}))
+
+// ─── DELETE /api/students/:id (cascade) ─────────────────────────────────────
+r.delete('/students/:id', ah(async (req, res) => {
+  const existing = await Student.findById(req.params.id).lean()
+  if (!existing) return res.status(404).json({ error: 'Student not found' })
+  const id = req.params.id
+  await Promise.all([
+    Guardian.deleteMany({ studentId: id }),
+    Enrollment.deleteMany({ studentId: id }),
+    Attendance.deleteMany({ personType: 'Student', personId: id }),
+    Payment.deleteMany({ studentId: id }),
+  ])
+  await Student.deleteOne({ _id: (existing as any)._id })
+  res.json({ ok: true, id, fullName: (existing as any).fullName })
+}))
+
+// ─── Teachers ───────────────────────────────────────────────────────────────
+async function teacherRelData(teacherIds: string[]) {
+  const [classes, lastAttRows, attCounts] = await Promise.all([
+    teacherIds.length ? Class.find({ teacherId: { $in: teacherIds } }).populate('programId', 'code name color').lean() : [],
+    teacherIds.length
+      ? Attendance.find({ personType: 'Teacher', personId: { $in: teacherIds } })
+          .sort({ date: -1 })
+          .limit(teacherIds.length * 3)
+          .lean()
+      : [],
+    teacherIds.length
+      ? Attendance.aggregate([
+          { $match: { personType: 'Teacher', personId: { $in: teacherIds } } },
+          { $group: { _id: '$personId', count: { $sum: 1 } } },
+        ])
+      : [],
+  ])
+  const cMap = new Map<string, any[]>()
+  for (const c of classes as any[]) {
+    if (!c.teacherId) continue
+    const tid = c.teacherId.toString()
+    if (!cMap.has(tid)) cMap.set(tid, [])
+    cMap.get(tid)!.push(c)
+  }
+  const lastMap = new Map<string, any>()
+  for (const a of lastAttRows as any[]) {
+    if (!lastMap.has(a.personId)) lastMap.set(a.personId, a)
+  }
+  const aMap = new Map<string, number>()
+  for (const a of attCounts as any[]) aMap.set(a._id, a.count)
+  return { cMap, lastMap, aMap }
+}
+
+function serializeTeacher(t: any, rel: Awaited<ReturnType<typeof teacherRelData>>, detailed: boolean) {
+  const id = t._id.toString()
+  const lastAtt = rel.lastMap.get(id)
+  return {
+    id,
+    teacherId: t.teacherId,
+    fingerprintId: t.fingerprintId ?? null,
+    fullName: t.fullName,
+    type: t.type,
+    gender: t.gender ?? null,
+    phone: t.phone ?? null,
+    email: t.email ?? null,
+    address: t.address ?? null,
+    nic: t.nic ?? null,
+    qualification: t.qualification ?? null,
+    specialization: t.specialization ?? null,
+    photoUrl: t.photoUrl ?? null,
+    status: t.status,
+    hireDate: t.hireDate ? new Date(t.hireDate).toISOString() : null,
+    monthlyRate: t.monthlyRate,
+    basicSalary: t.basicSalary,
+    allowances: t.allowances,
+    epfNo: t.epfNo ?? null,
+    salaryNote: t.salaryNote ?? null,
+    lastActive: lastAtt ? new Date(lastAtt.checkIn ?? lastAtt.date).toISOString() : null,
+    classes: (rel.cMap.get(id) || [])
+      .slice()
+      .sort((a: any, b: any) => (a.name || '').localeCompare(b.name || ''))
+      .map((c: any) => ({
+        id: c._id.toString(),
+        name: c.name,
+        dayOfWeek: c.dayOfWeek ?? null,
+        startTime: c.startTime ?? null,
+        grade: c.grade ?? null,
+        ...(detailed
+          ? {
+              endTime: c.endTime ?? null,
+              room: c.room ?? null,
+              program: c.programId
+                ? {
+                    id: c.programId._id.toString(),
+                    code: c.programId.code,
+                    name: c.programId.name,
+                    color: c.programId.color,
+                  }
+                : null,
+            }
+          : {}),
+      })),
+    _count: { classes: (rel.cMap.get(id) || []).length, attendance: rel.aMap.get(id) || 0 },
+  }
+}
+
+// ─── GET /api/teachers/lookup?fingerprintId= ────────────────────────────────
+r.get('/teachers/lookup', ah(async (req, res) => {
+  const fingerprintId = qs(req).get('fingerprintId')?.trim()
+  if (!fingerprintId) return res.status(400).json({ error: 'Provide ?fingerprintId= query parameter' })
+  const teacher = await Teacher.findOne({ fingerprintId }).lean()
+  if (!teacher) return res.status(404).json({ error: 'No teacher matches that fingerprint ID' })
+  const rel = await teacherRelData([(teacher as any)._id.toString()])
+  res.json(serializeTeacher(teacher, rel, false))
+}))
+
+// ─── GET /api/teachers ──────────────────────────────────────────────────────
+r.get('/teachers', ah(async (req, res) => {
+  const p = qs(req)
+  const q = p.get('q')?.trim() || ''
+  const type = p.get('type')?.trim() || ''
   const status = p.get('status')?.trim() || ''
-  const month = p.get('month')?.trim() || ''
-  const program = p.get('program')?.trim() || ''
-  const method = p.get('method')?.trim() || ''
+  const page = Math.max(1, parseInt(p.get('page') || '1', 10) || 1)
+  const limit = Math.min(100, Math.max(1, parseInt(p.get('limit') || '20', 10) || 20))
+
+  const where: Record<string, unknown> = {}
+  if (q) {
+    where.$or = [
+      { fullName: containsRe(q) },
+      { teacherId: containsRe(q) },
+      { fingerprintId: containsRe(q) },
+      { phone: containsRe(q) },
+    ]
+  }
+  if (type) where.type = type
+  if (status) where.status = status
+
+  const [total, rows, totalTeachers, internalCount, externalCount, onLeaveCount] = await Promise.all([
+    Teacher.countDocuments(where),
+    Teacher.find(where).sort({ type: 1, teacherId: 1 }).skip((page - 1) * limit).limit(limit).lean(),
+    Teacher.countDocuments({}),
+    Teacher.countDocuments({ type: 'Internal' }),
+    Teacher.countDocuments({ type: 'External' }),
+    Teacher.countDocuments({ status: 'On Leave' }),
+  ])
+
+  const rel = await teacherRelData((rows as any[]).map((t) => t._id.toString()))
+  res.json({
+    data: (rows as any[]).map((t) => serializeTeacher(t, rel, false)),
+    total,
+    page,
+    limit,
+    stats: { totalTeachers, internalCount, externalCount, onLeaveCount, filteredCount: total },
+  })
+}))
+
+// ─── POST /api/teachers ─────────────────────────────────────────────────────
+r.post('/teachers', ah(async (req, res) => {
+  const body = req.body || {}
+  const fullName = body.fullName?.trim()
+  if (!fullName) return res.status(400).json({ error: 'fullName is required' })
+
+  const type = (body.type || 'Internal').trim()
+  if (type !== 'Internal' && type !== 'External') {
+    return res.status(400).json({ error: 'type must be Internal or External' })
+  }
+
+  let fingerprintId = body.fingerprintId?.trim() || null
+  if (fingerprintId) {
+    const clash = await Teacher.findOne({ fingerprintId })
+    if (clash) return res.status(400).json({ error: `fingerprintId "${fingerprintId}" is already in use` })
+  }
+
+  const parseDate = (v?: string | null): Date | null => {
+    if (!v) return null
+    const d = new Date(v)
+    return isNaN(d.getTime()) ? null : d
+  }
+
+  const hireDate = parseDate(body.hireDate)
+  const teacherId = await nextTeacherId(type as 'Internal' | 'External', hireDate)
+
+  const created = await Teacher.create({
+    teacherId,
+    fingerprintId,
+    fullName,
+    type,
+    gender: body.gender || null,
+    phone: body.phone || null,
+    email: body.email || null,
+    address: body.address || null,
+    nic: body.nic || null,
+    qualification: body.qualification || null,
+    specialization: body.specialization || null,
+    photoUrl: body.photoUrl || null,
+    status: body.status || 'Active',
+    hireDate,
+    monthlyRate: typeof body.monthlyRate === 'number' ? body.monthlyRate : 0,
+    basicSalary: typeof body.basicSalary === 'number' ? Math.max(0, body.basicSalary) : 0,
+    allowances: typeof body.allowances === 'number' ? Math.max(0, body.allowances) : 0,
+    epfNo: body.epfNo?.trim() || null,
+    salaryNote: body.salaryNote?.trim() || null,
+  })
+
+  const doc = await Teacher.findById((created as any)._id).lean()
+  const rel = await teacherRelData([(created as any)._id.toString()])
+  res.status(201).json(serializeTeacher(doc, rel, false))
+}))
+
+// ─── GET /api/teachers/:id ──────────────────────────────────────────────────
+r.get('/teachers/:id', ah(async (req, res) => {
+  const teacher = await Teacher.findById(req.params.id).lean()
+  if (!teacher) return res.status(404).json({ error: 'Teacher not found' })
+  const rel = await teacherRelData([req.params.id])
+  res.json(serializeTeacher(teacher, rel, true))
+}))
+
+// ─── PUT /api/teachers/:id ──────────────────────────────────────────────────
+r.put('/teachers/:id', ah(async (req, res) => {
+  const existing = await Teacher.findById(req.params.id)
+  if (!existing) return res.status(404).json({ error: 'Teacher not found' })
+  const body = req.body || {}
+
+  if (body.fullName !== undefined && !body.fullName.trim()) {
+    return res.status(400).json({ error: 'fullName cannot be empty' })
+  }
+  if (body.type !== undefined && !['Internal', 'External'].includes(body.type)) {
+    return res.status(400).json({ error: 'type must be Internal or External' })
+  }
+  if (body.fingerprintId !== undefined) {
+    const newFp = body.fingerprintId?.trim() || null
+    if (newFp) {
+      const clash = await Teacher.findOne({ fingerprintId: newFp, _id: { $ne: req.params.id } })
+      if (clash) {
+        return res.status(400).json({ error: `fingerprintId "${newFp}" is already assigned to another teacher` })
+      }
+    }
+  }
+
+  const parseDate = (v?: string | null): Date | null => {
+    if (!v) return null
+    const d = new Date(v)
+    return isNaN(d.getTime()) ? null : d
+  }
+
+  if (body.fullName !== undefined) existing.fullName = body.fullName.trim()
+  if (body.type !== undefined) existing.type = body.type
+  if (body.gender !== undefined) existing.gender = body.gender || null
+  if (body.phone !== undefined) existing.phone = body.phone || null
+  if (body.email !== undefined) existing.email = body.email || null
+  if (body.address !== undefined) existing.address = body.address || null
+  if (body.nic !== undefined) existing.nic = body.nic || null
+  if (body.qualification !== undefined) existing.qualification = body.qualification || null
+  if (body.specialization !== undefined) existing.specialization = body.specialization || null
+  if (body.photoUrl !== undefined) existing.photoUrl = body.photoUrl || null
+  if (body.status !== undefined) existing.status = body.status
+  if (body.hireDate !== undefined) existing.hireDate = parseDate(body.hireDate)
+  if (body.monthlyRate !== undefined) existing.monthlyRate = typeof body.monthlyRate === 'number' ? body.monthlyRate : 0
+  if (body.basicSalary !== undefined) existing.basicSalary = typeof body.basicSalary === 'number' ? Math.max(0, body.basicSalary) : 0
+  if (body.allowances !== undefined) existing.allowances = typeof body.allowances === 'number' ? Math.max(0, body.allowances) : 0
+  if (body.epfNo !== undefined) existing.epfNo = body.epfNo?.trim() || null
+  if (body.salaryNote !== undefined) existing.salaryNote = body.salaryNote?.trim() || null
+  if (body.fingerprintId !== undefined) existing.fingerprintId = body.fingerprintId?.trim() || null
+
+  await existing.save()
+  const doc = await Teacher.findById(req.params.id).lean()
+  const rel = await teacherRelData([req.params.id])
+  res.json(serializeTeacher(doc, rel, true))
+}))
+
+// ─── DELETE /api/teachers/:id ───────────────────────────────────────────────
+r.delete('/teachers/:id', ah(async (req, res) => {
+  const existing = await Teacher.findById(req.params.id).lean()
+  if (!existing) return res.status(404).json({ error: 'Teacher not found' })
+  const id = req.params.id
+  await Promise.all([
+    Class.updateMany({ teacherId: id }, { $set: { teacherId: null } }),
+    Attendance.deleteMany({ personType: 'Teacher', personId: id }),
+    PayrollRecord.deleteMany({ teacherId: id }),
+  ])
+  await Teacher.deleteOne({ _id: (existing as any)._id })
+  res.json({ ok: true, id, fullName: (existing as any).fullName, teacherId: (existing as any).teacherId })
+}))
+
+// ─── Classes ────────────────────────────────────────────────────────────────
+async function classRelMaps(classes: any[]) {
+  const ids = classes.map((c) => c._id.toString())
+  const [enrRows] = await Promise.all([
+    ids.length ? Enrollment.find({ classId: { $in: ids } }, 'classId').lean() : [],
+  ])
+  const eMap = new Map<string, number>()
+  for (const e of enrRows as any[]) {
+    const k = e.classId
+    if (!k) continue
+    eMap.set(k, (eMap.get(k) || 0) + 1)
+  }
+  return { eMap }
+}
+
+function serializeClass(c: any, eMap: Map<string, number>) {
+  return {
+    id: c._id.toString(),
+    name: c.name,
+    dayOfWeek: c.dayOfWeek ?? null,
+    startTime: c.startTime ?? null,
+    endTime: c.endTime ?? null,
+    room: c.room ?? null,
+    capacity: c.capacity,
+    fee: c.fee,
+    instituteSharePct: c.instituteSharePct,
+    grade: c.grade ?? null,
+    active: c.active,
+    notes: c.notes ?? null,
+    program: c.programId
+      ? {
+          id: c.programId._id.toString(),
+          code: c.programId.code,
+          name: c.programId.name,
+          color: c.programId.color,
+          category: c.programId.category ?? 'Tuition',
+        }
+      : null,
+    teacher: c.teacherId
+      ? {
+          id: c.teacherId._id ? c.teacherId._id.toString() : c.teacherId.toString(),
+          teacherId: c.teacherId.teacherId,
+          fullName: c.teacherId.fullName,
+          type: c.teacherId.type,
+        }
+      : null,
+    _count: { enrollments: eMap.get(c._id.toString()) || 0 },
+  }
+}
+
+const DAY_ORDER: Record<string, number> = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 }
+const VALID_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
+// ─── GET /api/classes ───────────────────────────────────────────────────────
+r.get('/classes', ah(async (req, res) => {
+  const p = qs(req)
+  const day = p.get('day')?.trim() || ''
+  const programCode = p.get('program')?.trim() || ''
+  const teacherId = p.get('teacherId')?.trim() || ''
+  const activeParam = p.get('active')
   const page = Math.max(1, parseInt(p.get('page') || '1', 10) || 1)
   const limit = Math.min(200, Math.max(1, parseInt(p.get('limit') || '50', 10) || 50))
 
   const where: Record<string, unknown> = {}
-  if (q) {
-    const matched = await Student.find(
-      { $or: [{ fullName: containsRe(q) }, { studentId: containsRe(q) }] },
-      '_id',
-    ).lean()
-    const ids = matched.map((s: any) => s._id.toString())
-    where.$or = [
-      { receiptNo: containsRe(q) },
-      ...(ids.length ? [{ studentId: { $in: ids } }] : []),
-    ]
+  if (day) where.dayOfWeek = day
+  if (programCode) {
+    const prog = await Program.findOne({ code: programCode }, '_id').lean()
+    where.programId = prog ? (prog as any)._id.toString() : '___none___'
   }
-  if (status && ALLOWED_STATUSES.has(status)) where.status = status
-  if (month) where.month = month
-  if (program) {
-    const prog = await Program.findOne({ code: program }, '_id').lean()
-    const pid = prog ? (prog as any)._id.toString() : '___none___'
-    where.$or = [{ programId: pid }, { 'items.programId': pid }]
-  }
-  if (method && ALLOWED_METHODS.has(method)) where.method = method
+  if (teacherId) where.teacherId = teacherId
+  if (activeParam === 'true') where.active = true
+  if (activeParam === 'false') where.active = false
 
-  const [total, rows, aggRows] = await Promise.all([
-    Payment.countDocuments(where),
-    Payment.find(where).sort({ month: -1, receiptNo: -1 }).skip((page - 1) * limit).limit(limit).lean(),
-    Payment.find(where, 'amount paidAmount').lean(),
-  ])
-
-  const summaryMonth = month || currentMonth()
-  const [monthRows, pendingCount, overdueCount] = await Promise.all([
-    Payment.find({ month: summaryMonth }, 'amount paidAmount').lean(),
-    Payment.countDocuments({ month: summaryMonth, status: 'Pending' }),
-    Payment.countDocuments({ month: summaryMonth, status: 'Overdue' }),
-  ])
-  const totalBilled = round2(monthRows.reduce((s: number, x: any) => s + x.amount, 0))
-  const totalCollected = round2(monthRows.reduce((s: number, x: any) => s + x.paidAmount, 0))
-  const totalOutstanding = Math.max(0, round2(totalBilled - totalCollected))
-
-  const filteredBilled = round2(aggRows.reduce((s: number, x: any) => s + x.amount, 0))
-  const filteredCollected = round2(aggRows.reduce((s: number, x: any) => s + x.paidAmount, 0))
-
-  const maps = await programInfoMaps(rows)
-  res.json({
-    data: rows.map((row: any) => serializePayment(row, maps, true)),
-    total,
-    page,
-    limit,
-    summary: {
-      totalBilled,
-      totalCollected,
-      totalOutstanding,
-      pendingCount,
-      overdueCount,
-    },
-    filtered: {
-      totalBilled: filteredBilled,
-      totalCollected: filteredCollected,
-      count: total,
-    },
-  })
-}))
-
-// ─── POST /api/payments ─────────────────────────────────────────────────────
-r.post('/', ah(async (req, res) => {
-  const body = req.body || {}
-  const studentId = (body.studentId || '').trim()
-  if (!studentId) return res.status(400).json({ error: 'studentId is required' })
-  const student = await Student.findById(studentId)
-  if (!student) return res.status(400).json({ error: 'Student not found' })
-  if (!body.month || !/^\d{4}-\d{2}$/.test(body.month)) {
-    return res.status(400).json({ error: 'month is required (YYYY-MM)' })
-  }
-
-  const programCache = new Map<string, any>()
-  const classCache = new Map<string, any>()
-
-  const classByProgramme = new Map<string, string>()
-  const activeEnrolments = await Enrollment.find(
-    { studentId, status: 'Active', classId: { $ne: null } },
-    'programId classId',
-  ).lean()
-  for (const e of activeEnrolments as any[]) {
-    if (!e.programId || !e.classId) continue
-    if (!classByProgramme.has(e.programId)) classByProgramme.set(e.programId, e.classId)
-  }
-
-  type LineItem = { programId: string | null; amount: number; description: string | null }
-  let lineItems: LineItem[] = []
-
-  if (Array.isArray(body.items) && body.items.length > 0) {
-    for (const it of body.items) {
-      const pid = it.programId?.trim() || null
-      const cidExplicit = it.classId?.trim() || null
-      const cid = cidExplicit || (pid ? classByProgramme.get(pid) ?? null : null)
-      const explicitAmount =
-        typeof it.amount === 'number' && !isNaN(it.amount) && it.amount >= 0 ? it.amount : null
-
-      if (pid) {
-        const resolved = await resolveLineAmount({
-          programId: pid,
-          classId: cid,
-          explicitAmount,
-          programCache,
-          classCache,
-        })
-        if (!resolved.description && !programCache.get(pid)) {
-          return res.status(400).json({ error: 'Program not found' })
-        }
-        lineItems.push({
-          programId: pid,
-          amount: resolved.amount,
-          description: it.description?.trim() || resolved.description,
-        })
-      } else {
-        lineItems.push({
-          programId: null,
-          amount: explicitAmount ?? 0,
-          description: it.description?.trim() || 'Custom charge',
-        })
-      }
-    }
-  } else if (Array.isArray(body.programIds) && body.programIds.length > 0) {
-    const programs = await Program.find({ _id: { $in: body.programIds } }).lean()
-    if (programs.length !== new Set(body.programIds).size) {
-      return res.status(400).json({ error: 'One or more programs not found' })
-    }
-    for (const prog of programs as any[]) {
-      const pid = prog._id.toString()
-      const cid = classByProgramme.get(pid) ?? null
-      const resolved = await resolveLineAmount({
-        programId: pid,
-        classId: cid,
-        explicitAmount: null,
-        programCache,
-        classCache,
-      })
-      lineItems.push({
-        programId: pid,
-        amount: resolved.amount,
-        description: resolved.description || prog.name,
-      })
-    }
-  } else if (body.programId) {
-    const prog = await Program.findById(body.programId).lean()
-    if (!prog) return res.status(400).json({ error: 'Program not found' })
-    const pid = body.programId
-    const cid = classByProgramme.get(pid) ?? null
-    const explicitAmount =
-      typeof body.amount === 'number' && !isNaN(body.amount) ? Math.max(0, body.amount) : null
-    const resolved = await resolveLineAmount({
-      programId: pid,
-      classId: cid,
-      explicitAmount,
-      programCache,
-      classCache,
-    })
-    lineItems = [
-      {
-        programId: pid,
-        amount: resolved.amount,
-        description: resolved.description || (prog as any).name,
-      },
-    ]
-  }
-
-  const seenProgram = new Set<string>()
-  lineItems = lineItems.filter((li) => {
-    if (!li.programId) return true
-    if (seenProgram.has(li.programId)) return false
-    seenProgram.add(li.programId)
-    return true
-  })
-
-  const itemsTotal = lineItems.reduce((sum, li) => sum + li.amount, 0)
-  const amount =
-    typeof body.amount === 'number' && !isNaN(body.amount) && body.amount >= 0
-      ? body.amount
-      : itemsTotal
-
-  if (amount <= 0) {
-    return res.status(400).json({
-      error: 'Amount must be greater than 0 — select at least one programme or enter an amount',
-    })
-  }
-
-  const paidAmount =
-    typeof body.paidAmount === 'number' && !isNaN(body.paidAmount) ? Math.max(0, body.paidAmount) : 0
-  const method = body.method && ALLOWED_METHODS.has(body.method) ? body.method : 'Cash'
-
-  let status = body.status && ALLOWED_STATUSES.has(body.status) ? body.status : ''
-  let paidDate = parseDate(body.paidDate)
-  if (!status) {
-    const computed = computeStatus(amount, paidAmount)
-    status = computed.status
-    paidDate = paidDate ?? computed.paidDate
-  } else if (status === 'Paid' && !paidDate) {
-    paidDate = new Date()
-  }
-
-  let receiptNo = body.receiptNo?.trim() || null
-  if (receiptNo) {
-    const clash = await Payment.findOne({ receiptNo })
-    if (clash) return res.status(400).json({ error: `receiptNo "${receiptNo}" already exists` })
-  } else {
-    receiptNo = await nextReceiptNo()
-  }
-
-  const created = await Payment.create({
-    studentId,
-    programId: lineItems.length === 1 ? lineItems[0].programId : null,
-    classId: body.classId || null,
-    month: body.month,
-    amount,
-    paidAmount,
-    method,
-    status,
-    paidDate,
-    dueDate: parseDate(body.dueDate),
-    note: body.note?.trim() || null,
-    receiptNo,
-    items: lineItems.map((li) => ({
-      programId: li.programId,
-      amount: li.amount,
-      description: li.description,
-    })),
-  })
-
-  const doc = await Payment.findById(created._id).lean()
-  const maps = await programInfoMaps([doc])
-  res.status(201).json(serializePayment(doc, maps, true))
-}))
-
-// ─── GET /api/payments/summary?month= ───────────────────────────────────────
-r.get('/summary', ah(async (req, res) => {
-  const month = qs(req).get('month')?.trim() || currentMonth()
-  const rows = await Payment.find({ month }, 'amount paidAmount status programId').lean()
-  const progIds = [...new Set(rows.map((x: any) => x.programId).filter(Boolean))]
-  const progs = progIds.length ? await Program.find({ _id: { $in: progIds } }).lean() : []
-  const pMap = new Map((progs as any[]).map((p) => [p._id.toString(), p]))
-
-  const totalBilled = round2(rows.reduce((s: number, x: any) => s + x.amount, 0))
-  const totalCollected = round2(rows.reduce((s: number, x: any) => s + x.paidAmount, 0))
-  const totalOutstanding = Math.max(0, round2(totalBilled - totalCollected))
-
-  const byStatus: Record<string, { count: number; billed: number; collected: number }> = {
-    Pending: { count: 0, billed: 0, collected: 0 },
-    Partial: { count: 0, billed: 0, collected: 0 },
-    Paid: { count: 0, billed: 0, collected: 0 },
-    Overdue: { count: 0, billed: 0, collected: 0 },
-  }
-  for (const x of rows as any[]) {
-    if (byStatus[x.status]) {
-      byStatus[x.status].count++
-      byStatus[x.status].billed = round2(byStatus[x.status].billed + x.amount)
-      byStatus[x.status].collected = round2(byStatus[x.status].collected + x.paidAmount)
-    }
-  }
-
-  const programMap = new Map<string, { id: string; code: string; name: string; color: string; count: number; billed: number; collected: number }>()
-  for (const x of rows as any[]) {
-    if (!x.programId) continue
-    const prog = pMap.get(x.programId)
-    if (!prog) continue
-    const key = x.programId
-    const existing = programMap.get(key)
-    if (existing) {
-      existing.count += 1
-      existing.billed = round2(existing.billed + x.amount)
-      existing.collected = round2(existing.collected + x.paidAmount)
-    } else {
-      programMap.set(key, {
-        id: key, code: prog.code, name: prog.name, color: prog.color,
-        count: 1, billed: round2(x.amount), collected: round2(x.paidAmount),
-      })
-    }
-  }
-  const byProgram = Array.from(programMap.values()).sort((a, b) => b.billed - a.billed)
-
-  res.json({
-    month,
-    totalBilled,
-    totalCollected,
-    totalOutstanding,
-    paidRate: totalBilled > 0 ? Math.round((totalCollected / totalBilled) * 1000) / 10 : 0,
-    overdueCount: byStatus.Overdue.count,
-    pendingCount: byStatus.Pending.count,
-    byStatus,
-    byProgram,
-  })
-}))
-
-// ─── GET /api/payments/statement?studentId= ─────────────────────────────────
-r.get('/statement', ah(async (req, res) => {
-  const studentId = qs(req).get('studentId')?.trim() || ''
-  if (!studentId) return res.status(400).json({ error: 'studentId is required' })
-
-  const student = await Student.findById(studentId).lean()
-  if (!student) return res.status(404).json({ error: 'Student not found' })
-  const s = student as any
-
-  const [guardians, enrollments, payments] = await Promise.all([
-    Guardian.find({ studentId }, 'name phone relationship isPrimary').lean(),
-    Enrollment.find({ studentId, status: 'Active' })
-      .populate('programId', 'name color')
-      .populate('classId', 'name')
+  const [total, rows] = await Promise.all([
+    Class.countDocuments(where),
+    Class.find(where)
+      .populate('programId', 'code name color category')
+      .populate('teacherId', 'teacherId fullName type')
       .lean(),
-    Payment.find({ studentId }).sort({ month: -1, createdAt: -1 }).lean(),
   ])
 
-  const progIds = new Set<string>()
-  for (const p of payments as any[]) {
-    if (p.programId) progIds.add(p.programId)
-    for (const it of p.items || []) if (it.programId) progIds.add(it.programId)
-  }
-  const progs = progIds.size ? await Program.find({ _id: { $in: [...progIds] } }, 'name color').lean() : []
-  const pMap = new Map((progs as any[]).map((p) => [p._id.toString(), p]))
-
-  const months = (payments as any[]).map((p) => {
-    const lines =
-      (p.items || []).length > 0
-        ? (p.items || []).map((it: any) => ({
-            description: it.description || (it.programId ? pMap.get(it.programId)?.name : null) || 'Programme',
-            amount: it.amount,
-            color: it.programId ? pMap.get(it.programId)?.color ?? null : null,
-          }))
-        : [
-            {
-              description: (p.programId ? pMap.get(p.programId)?.name : null) || 'Programme fee',
-              amount: p.amount,
-              color: p.programId ? pMap.get(p.programId)?.color ?? null : null,
-            },
-          ]
-    return {
-      id: p._id.toString(),
-      month: p.month,
-      amount: p.amount,
-      paidAmount: p.paidAmount,
-      balance: Math.max(0, round2(p.amount - p.paidAmount)),
-      status: p.status,
-      method: p.method,
-      paidDate: p.paidDate ? new Date(p.paidDate).toISOString() : null,
-      receiptNo: p.receiptNo ?? null,
-      lines,
-    }
+  const sorted = (rows as any[]).sort((a, b) => {
+    const da = DAY_ORDER[a.dayOfWeek || ''] ?? 99
+    const db = DAY_ORDER[b.dayOfWeek || ''] ?? 99
+    if (da !== db) return da - db
+    return (a.startTime || '').localeCompare(b.startTime || '')
   })
+  const pageRows = sorted.slice((page - 1) * limit, (page - 1) * limit + limit)
 
-  const totals = {
-    billed: round2((payments as any[]).reduce((s, p) => s + p.amount, 0)),
-    paid: round2((payments as any[]).reduce((s, p) => s + p.paidAmount, 0)),
-    balance: round2((payments as any[]).reduce((s, p) => s + Math.max(0, p.amount - p.paidAmount), 0)),
-    billCount: (payments as any[]).length,
-  }
-
-  res.json({
-    student: {
-      id: s._id.toString(),
-      studentId: s.studentId,
-      fullName: s.fullName,
-      gender: s.gender,
-      status: s.status,
-      admissionDate: s.admissionDate ? new Date(s.admissionDate).toISOString() : null,
-      guardians: (guardians as any[]).map((g) => ({
-        name: g.name, phone: g.phone, relationship: g.relationship, isPrimary: g.isPrimary,
-      })),
-      enrollments: (enrollments as any[]).map((e) => ({
-        program: e.programId?.name ?? null,
-        programColor: e.programId?.color ?? null,
-        class: e.classId?.name ?? null,
-      })),
-    },
-    months,
-    totals,
-    generatedAt: new Date().toISOString(),
-  })
+  const { eMap } = await classRelMaps(pageRows)
+  res.json({ data: pageRows.map((c) => serializeClass(c, eMap)), total })
 }))
 
-// ─── POST /api/payments/send-reminder ───────────────────────────────────────
-r.post('/send-reminder', ah(async (req, res) => {
+// ─── POST /api/classes ──────────────────────────────────────────────────────
+r.post('/classes', ah(async (req, res) => {
   const body = req.body || {}
-  const now = new Date()
-  const month = body.month || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
-
-  const outstanding = await Payment.find({ month, status: { $in: ['Pending', 'Partial', 'Overdue'] } })
-    .sort({ status: -1 })
-    .lean()
-
-  if (outstanding.length === 0) {
-    return res.json({
-      announcement: null,
-      outstandingCount: 0,
-      outstandingAmount: 0,
-      message: `No outstanding fees for ${month}. All payments are settled.`,
-    })
-  }
-
-  const outstandingAmount = outstanding.reduce((s: number, p: any) => s + (p.amount - p.paidAmount), 0)
-  const overdueCount = outstanding.filter((p: any) => p.status === 'Overdue').length
-  const partialCount = outstanding.filter((p: any) => p.status === 'Partial').length
-  const pendingCount = outstanding.filter((p: any) => p.status === 'Pending').length
-
-  const monthLabel = new Date(month + '-01').toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
-  const title = `Fee Payment Reminder — ${monthLabel}`
-
-  const settingsRows = await Setting.find({ key: { $in: ['school_name', 'school_phone'] } }).lean()
-  const settingsMap = Object.fromEntries((settingsRows as any[]).map((row) => [row.key, row.value]))
-  const schoolName = settingsMap.school_name?.trim() || 'SANOMIN International Preschool'
-  const schoolPhone = settingsMap.school_phone?.trim()
-
-  const body_text = [
-    `Dear Parents,`,
-    ``,
-    `This is a friendly reminder that ${outstanding.length} fee payment${outstanding.length === 1 ? '' : 's'} remain outstanding for ${monthLabel}:`,
-    ``,
-    `• ${overdueCount} overdue payment${overdueCount === 1 ? '' : 's'}`,
-    `• ${pendingCount} pending payment${pendingCount === 1 ? '' : 's'}`,
-    partialCount > 0 ? `• ${partialCount} partial payment${partialCount === 1 ? '' : 's'}` : null,
-    ``,
-    `Total outstanding amount: LKR ${outstandingAmount.toLocaleString()}.`,
-    ``,
-    `Please settle your child's tuition fees at your earliest convenience.`,
-    ``,
-    `— ${schoolName} Administration`,
-  ].filter(Boolean).join('\n')
-
-  const expiry = new Date()
-  expiry.setDate(expiry.getDate() + 14)
-  const announcement = await Announcement.create({
-    title,
-    body: body_text,
-    category: 'Payment',
-    audience: 'Parents',
-    priority: overdueCount > 0 ? 'High' : 'Normal',
-    pinned: true,
-    status: 'Published',
-    publishDate: new Date(),
-    expiryDate: expiry,
-    authorName: 'Administrator',
-  })
-
-  res.json({
-    announcement: { id: (announcement as any)._id.toString(), title: announcement.title },
-    outstandingCount: outstanding.length,
-    outstandingAmount,
-    overdueCount,
-    pendingCount,
-    partialCount,
-    month,
-    message: `Published "${title}" — notifying parents about ${outstanding.length} outstanding payment${outstanding.length === 1 ? '' : 's'} (LKR ${outstandingAmount.toLocaleString()}).`,
-  })
-}))
-
-// ─── GET /api/payments/bulk-generate/preview?month= ─────────────────────────
-r.get('/bulk-generate/preview', ah(async (req, res) => {
-  const month = qs(req).get('month')?.trim() || ''
-  if (!/^\d{4}-\d{2}$/.test(month)) {
-    return res.status(400).json({ error: 'month is required in YYYY-MM format' })
-  }
-
-  const [y, m] = month.split('-').map((n) => parseInt(n, 10))
-  const monthLabel = new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('en-GB', {
-    month: 'long',
-    year: 'numeric',
-  })
-
-  const students = await Student.find({ status: 'Active' }).sort({ studentId: 1 }).lean()
-  const studentIds = (students as any[]).map((s) => s._id.toString())
-  const enrollments = studentIds.length
-    ? await Enrollment.find({ studentId: { $in: studentIds }, status: 'Active' })
-        .sort({ enrolledAt: 1 })
-        .populate('programId', 'id monthlyFee code name color')
-        .populate('classId', 'id name fee')
-        .lean()
-    : []
-  const existing = await Payment.find({ month }, 'studentId amount').lean()
-  const existingByStudent = new Map<string, number>()
-  for (const p of existing as any[]) {
-    existingByStudent.set(p.studentId, (existingByStudent.get(p.studentId) ?? 0) + p.amount)
-  }
-
-  type PreviewLine = { programId: string; code: string; name: string; color: string | null; amount: number; classId: string | null; className: string | null }
-  const toBill: Array<{ studentId: string; studentCode: string; fullName: string; lines: PreviewLine[]; total: number }> = []
-  const skipped: Array<{ studentId: string; studentCode: string; fullName: string; billedAmount: number }> = []
-  const noProgrammes: Array<{ studentId: string; studentCode: string; fullName: string }> = []
-
-  for (const s of students as any[]) {
-    const sid = s._id.toString()
-    if (existingByStudent.has(sid)) {
-      skipped.push({
-        studentId: sid,
-        studentCode: s.studentId,
-        fullName: s.fullName,
-        billedAmount: existingByStudent.get(sid) ?? 0,
-      })
-      continue
-    }
-    const seen = new Set<string>()
-    const lines: PreviewLine[] = []
-    for (const en of enrollments as any[]) {
-      if (en.studentId !== sid) continue
-      const prog = en.programId
-      if (!prog) continue
-      const pid = prog._id.toString()
-      if (seen.has(pid)) continue
-      seen.add(pid)
-      const cls = en.classId
-      const classFee = cls && typeof cls.fee === 'number' ? cls.fee : 0
-      const progFee = typeof prog.monthlyFee === 'number' ? prog.monthlyFee : 0
-      const amount = classFee > 0 ? classFee : progFee
-      lines.push({
-        programId: pid,
-        code: prog.code,
-        name: prog.name,
-        color: prog.color ?? null,
-        amount,
-        classId: cls?._id ? cls._id.toString() : null,
-        className: cls?.name ?? null,
-      })
-    }
-    if (lines.length === 0) {
-      noProgrammes.push({ studentId: sid, studentCode: s.studentId, fullName: s.fullName })
-      continue
-    }
-    toBill.push({
-      studentId: sid,
-      studentCode: s.studentId,
-      fullName: s.fullName,
-      lines,
-      total: lines.reduce((sum, li) => sum + li.amount, 0),
-    })
-  }
-
-  const lineCount = toBill.reduce((sum, b) => sum + b.lines.length, 0)
-  const grandTotal = toBill.reduce((sum, b) => sum + b.total, 0)
-
-  res.json({
-    month,
-    monthLabel,
-    toBill,
-    skipped,
-    noProgrammes,
-    totals: {
-      billCount: toBill.length,
-      lineCount,
-      grandTotal,
-      skippedCount: skipped.length,
-      noProgrammeCount: noProgrammes.length,
-      studentCount: (students as any[]).length,
-    },
-  })
-}))
-
-// ─── POST /api/payments/bulk-generate ───────────────────────────────────────
-r.post('/bulk-generate', ah(async (req, res) => {
-  const body = req.body || {}
-  if (!body.month || !/^\d{4}-\d{2}$/.test(body.month)) {
-    return res.status(400).json({ error: 'month is required in YYYY-MM format' })
-  }
-  const month: string = body.month
-  const skipExisting = body.skipExisting !== false
-  const skipEmpty = body.skipEmpty === true
-  const dueDate = body.dueDate ? new Date(body.dueDate + 'T23:59:59') : null
-
-  const lastPayment = await Payment.findOne({ receiptNo: { $regex: '^SAN-' } })
-    .sort({ receiptNo: -1 })
-    .select('receiptNo')
-    .lean()
-  let seq = 1
-  if ((lastPayment as any)?.receiptNo) {
-    const m = /SAN-\d{4}-(\d+)/.exec((lastPayment as any).receiptNo)
-    if (m) seq = parseInt(m[1], 10) + 1
-  }
-
-  const students = await Student.find({ status: 'Active' }).sort({ studentId: 1 }).lean()
-  const studentIds = (students as any[]).map((s) => s._id.toString())
-  const enrollments = studentIds.length
-    ? await Enrollment.find({ studentId: { $in: studentIds }, status: 'Active' })
-        .sort({ enrolledAt: 1 })
-        .populate('programId', 'monthlyFee code name color')
-        .populate('classId', 'name fee')
-        .lean()
-    : []
-  const existing = await Payment.find({ month }, 'studentId').lean()
-  const existingStudents = new Set((existing as any[]).map((p) => p.studentId))
-
-  type BillDraft = {
-    studentId: string
-    amount: number
-    receiptNo: string
-    lines: Array<{ programId: string | null; amount: number; description: string | null; classId: string | null }>
-  }
-  const bills: BillDraft[] = []
-  let skipped = 0
-
-  for (const s of students as any[]) {
-    const sid = s._id.toString()
-    if (skipExisting && existingStudents.has(sid)) {
-      skipped++
-      continue
-    }
-    const seenProgram = new Set<string>()
-    const lines: BillDraft['lines'] = []
-    for (const en of enrollments as any[]) {
-      if (en.studentId !== sid) continue
-      const prog = en.programId
-      if (!prog) continue
-      const pid = prog._id.toString()
-      if (seenProgram.has(pid)) continue
-      seenProgram.add(pid)
-      const cls = en.classId
-      const classFee = cls && typeof cls.fee === 'number' ? cls.fee : 0
-      const progFee = typeof prog.monthlyFee === 'number' ? prog.monthlyFee : 0
-      const amount = classFee > 0 ? classFee : progFee
-      const desc = cls?.name
-        ? `${prog.name} — ${cls.name}`
-        : prog.name
-      lines.push({
-        programId: pid,
-        amount,
-        description: desc,
-        classId: cls?._id ? cls._id.toString() : null,
-      })
-    }
-    const amount = lines.reduce((sum, li) => sum + li.amount, 0)
-    if (skipEmpty && lines.length === 0) {
-      skipped++
-      continue
-    }
-    const receiptNo = `SAN-${new Date().getFullYear()}-${String(seq).padStart(4, '0')}`
-    seq++
-    bills.push({ studentId: sid, amount, receiptNo, lines })
-  }
-
-  if (bills.length === 0) {
-    return res.json({
-      created: 0,
-      skipped,
-      total: (students as any[]).length,
-      message: skipExisting
-        ? `All ${(students as any[]).length} active students already have bills for ${month}.`
-        : 'No students to generate bills for.',
-    })
-  }
-
-  await Payment.insertMany(
-    bills.map((b) => ({
-      studentId: b.studentId,
-      programId: b.lines.length === 1 ? b.lines[0].programId : null,
-      classId: b.lines.length === 1 ? b.lines[0].classId : null,
-      month,
-      amount: b.amount,
-      paidAmount: 0,
-      method: 'Cash',
-      status: b.amount > 0 ? 'Pending' : 'Paid',
-      dueDate,
-      receiptNo: b.receiptNo,
-      note: `Monthly bill for ${month}`,
-      items: b.lines.map((li) => ({
-        programId: li.programId,
-        amount: li.amount,
-        description: li.description,
-      })),
-    })),
-  )
-
-  const lineCount = bills.reduce((sum, b) => sum + b.lines.length, 0)
-  res.json({
-    created: bills.length,
-    skipped,
-    total: (students as any[]).length,
-    month,
-    message: `Created ${bills.length} bill${bills.length === 1 ? '' : 's'} for ${month} covering ${lineCount} programme line item${lineCount === 1 ? '' : 's'}${skipped > 0 ? ` (${skipped} student${skipped === 1 ? '' : 's'} already billed, skipped)` : ''}.`,
-  })
-}))
-
-// ─── GET /api/payments/outstanding-guardians?month= ─────────────────────────
-r.get('/outstanding-guardians', ah(async (req, res) => {
-  const month = qs(req).get('month')?.trim() || currentMonth()
-
-  const payments = await Payment.find({ month }).sort({ receiptNo: 1 }).lean()
-  const sIds = [...new Set((payments as any[]).map((p) => p.studentId))]
-  const [students, guardians] = await Promise.all([
-    sIds.length ? Student.find({ _id: { $in: sIds } }, 'studentId fullName').lean() : [],
-    sIds.length
-      ? Guardian.find({ studentId: { $in: sIds } }, 'studentId name phone isPrimary')
-          .sort({ isPrimary: -1, name: 1 })
-          .lean()
-      : [],
-  ])
-  const sMap = new Map((students as any[]).map((s) => [s._id.toString(), s]))
-  const gByStudent = new Map<string, any[]>()
-  for (const g of guardians as any[]) {
-    if (!gByStudent.has(g.studentId)) gByStudent.set(g.studentId, [])
-    gByStudent.get(g.studentId)!.push(g)
-  }
-
-  const buckets = new Map<string, any>()
-  const unreachable: Array<{ studentRef: string; studentName: string; guardianName: string | null; balance: number; reason: string }> = []
-  let billCount = 0
-  let totalBalance = 0
-
-  for (const p of payments as any[]) {
-    const balance = round2(p.amount - p.paidAmount)
-    if (balance <= 0) continue
-    billCount++
-    totalBalance = round2(totalBalance + balance)
-
-    const lines =
-      (p.items || []).length > 0
-        ? (p.items || []).map((it: any) => ({
-            description: it.description || 'Fee',
-            amount: it.amount,
-          }))
-        : [{ description: 'Tuition fee', amount: p.amount }]
-
-    const bill = {
-      id: p._id.toString(),
-      receiptNo: p.receiptNo ?? null,
-      month: p.month,
-      total: p.amount,
-      paid: p.paidAmount,
-      balance,
-      dueDate: p.dueDate ? new Date(p.dueDate).toISOString() : null,
-      status: p.status,
-      lines,
-    }
-
-    const student = sMap.get(p.studentId)
-    const gs = gByStudent.get(p.studentId) || []
-    const reachable = gs.filter((g: any) => toWaPhone(g.phone) !== null)
-    const chosen = reachable.find((g: any) => g.isPrimary) ?? reachable[0] ?? null
-
-    if (!chosen) {
-      unreachable.push({
-        studentRef: student?.studentId ?? '',
-        studentName: student?.fullName ?? '',
-        guardianName: gs[0]?.name ?? null,
-        balance,
-        reason: gs.length === 0 ? 'No guardian on file' : 'No valid phone number',
-      })
-      continue
-    }
-
-    const wa = toWaPhone(chosen.phone)!
-    let bucket = buckets.get(wa)
-    if (!bucket) {
-      bucket = {
-        phone: wa,
-        displayPhone: chosen.phone,
-        guardianName: chosen.name,
-        isPrimary: chosen.isPrimary,
-        students: [],
-        billCount: 0,
-        totalBalance: 0,
-      }
-      buckets.set(wa, bucket)
-    }
-    bucket.billCount++
-    bucket.totalBalance = round2(bucket.totalBalance + balance)
-
-    let studentEntry = bucket.students.find((s: any) => s.studentId === p.studentId)
-    if (!studentEntry) {
-      studentEntry = {
-        studentId: p.studentId,
-        studentRef: student?.studentId ?? '',
-        studentName: student?.fullName ?? '',
-        bills: [],
-        balance: 0,
-      }
-      bucket.students.push(studentEntry)
-    }
-    studentEntry.bills.push(bill)
-    studentEntry.balance = round2(studentEntry.balance + balance)
-  }
-
-  const guardiansOut = Array.from(buckets.values()).sort((a: any, b: any) => b.totalBalance - a.totalBalance)
-  res.json({
-    month,
-    totals: {
-      guardians: guardiansOut.length,
-      bills: billCount,
-      outstanding: totalBalance,
-      unreachable: unreachable.length,
-    },
-    guardians: guardiansOut,
-    unreachable,
-  })
-}))
-
-// ─── GET /api/payments/:id (AFTER static sub-paths) ─────────────────────────
-r.get('/:id', ah(async (req, res) => {
-  const doc = await Payment.findById(req.params.id).lean()
-  if (!doc) return res.status(404).json({ error: 'Payment not found' })
-  const maps = await programInfoMaps([doc])
-  res.json(serializePayment(doc, maps, false))
-}))
-
-// ─── PUT /api/payments/:id ──────────────────────────────────────────────────
-r.put('/:id', ah(async (req, res) => {
-  const existing = await Payment.findById(req.params.id)
-  if (!existing) return res.status(404).json({ error: 'Payment not found' })
-  const body = req.body || {}
-
-  if (body.studentId) {
-    const s = await Student.findById(body.studentId)
-    if (!s) return res.status(400).json({ error: 'Student not found' })
+  const name = body.name?.trim()
+  if (!name) return res.status(400).json({ error: 'name is required' })
+  if (body.dayOfWeek && !VALID_DAYS.includes(body.dayOfWeek)) {
+    return res.status(400).json({ error: `dayOfWeek must be one of ${VALID_DAYS.join(', ')}` })
   }
   if (body.programId) {
     const p = await Program.findById(body.programId)
-    if (!p) return res.status(400).json({ error: 'Program not found' })
+    if (!p) return res.status(400).json({ error: 'programId not found' })
   }
-  if (body.month && !/^\d{4}-\d{2}$/.test(body.month)) {
-    return res.status(400).json({ error: 'month must be YYYY-MM' })
-  }
-  if (body.method && !ALLOWED_METHODS.has(body.method)) {
-    return res.status(400).json({ error: `method must be one of ${Array.from(ALLOWED_METHODS).join(', ')}` })
-  }
-  if (body.status && !ALLOWED_STATUSES.has(body.status)) {
-    return res.status(400).json({ error: `status must be one of ${Array.from(ALLOWED_STATUSES).join(', ')}` })
-  }
-  if (body.receiptNo) {
-    const clash = await Payment.findOne({ receiptNo: body.receiptNo })
-    if (clash && clash._id.toString() !== req.params.id) {
-      return res.status(400).json({ error: `receiptNo "${body.receiptNo}" already exists` })
-    }
+  if (body.teacherId) {
+    const t = await Teacher.findById(body.teacherId)
+    if (!t) return res.status(400).json({ error: 'teacherId not found' })
   }
 
-  const targetStudentId = body.studentId || existing.studentId
-  const classByProgramme = new Map<string, string>()
-  const activeEnrolments = await Enrollment.find(
-    { studentId: targetStudentId, status: 'Active', classId: { $ne: null } },
-    'programId classId',
-  ).lean()
-  for (const e of activeEnrolments as any[]) {
-    if (!e.programId || !e.classId) continue
-    if (!classByProgramme.has(e.programId)) classByProgramme.set(e.programId, e.classId)
-  }
+  const created = await Class.create({
+    name,
+    programId: body.programId || null,
+    teacherId: body.teacherId || null,
+    dayOfWeek: body.dayOfWeek || null,
+    startTime: body.startTime?.trim() || null,
+    endTime: body.endTime?.trim() || null,
+    room: body.room?.trim() || null,
+    capacity:
+      typeof body.capacity === 'number' && !isNaN(body.capacity) ? Math.max(0, Math.floor(body.capacity)) : 20,
+    fee: typeof body.fee === 'number' && !isNaN(body.fee) ? Math.max(0, body.fee) : 0,
+    instituteSharePct:
+      typeof body.instituteSharePct === 'number' && !isNaN(body.instituteSharePct)
+        ? Math.min(100, Math.max(0, body.instituteSharePct))
+        : 25,
+    grade: body.grade?.trim() || null,
+    active: body.active ?? true,
+    notes: body.notes?.trim() || null,
+  })
 
-  const programCache = new Map<string, any>()
-  const classCache = new Map<string, any>()
-
-  let replaceItems: Array<{ programId: string | null; amount: number; description: string | null }> | null = null
-  let itemsTotal = 0
-  if (Array.isArray(body.items) || Array.isArray(body.programIds)) {
-    const lines: Array<{ programId: string | null; amount: number; description: string | null }> = []
-    if (Array.isArray(body.items) && body.items.length > 0) {
-      for (const it of body.items) {
-        const pid = it.programId?.trim() || null
-        const cid = it.classId?.trim() || (pid ? classByProgramme.get(pid) ?? null : null)
-        const explicitAmount =
-          typeof it.amount === 'number' && !isNaN(it.amount) && it.amount >= 0 ? it.amount : null
-        if (pid) {
-          const resolved = await resolveLineAmount({
-            programId: pid,
-            classId: cid,
-            explicitAmount,
-            programCache,
-            classCache,
-          })
-          lines.push({
-            programId: pid,
-            amount: resolved.amount,
-            description: it.description?.trim() || resolved.description,
-          })
-        } else {
-          lines.push({
-            programId: null,
-            amount: explicitAmount ?? 0,
-            description: it.description?.trim() || 'Custom charge',
-          })
-        }
-      }
-    } else if (Array.isArray(body.programIds) && body.programIds.length > 0) {
-      const programs = await Program.find({ _id: { $in: body.programIds } }).lean()
-      if (programs.length !== new Set(body.programIds).size) {
-        return res.status(400).json({ error: 'One or more programs not found' })
-      }
-      for (const prog of programs as any[]) {
-        const pid = prog._id.toString()
-        const cid = classByProgramme.get(pid) ?? null
-        const resolved = await resolveLineAmount({
-          programId: pid,
-          classId: cid,
-          explicitAmount: null,
-          programCache,
-          classCache,
-        })
-        lines.push({
-          programId: pid,
-          amount: resolved.amount,
-          description: resolved.description || prog.name,
-        })
-      }
-    }
-    const seen = new Set<string>()
-    replaceItems = lines.filter((li) => {
-      if (!li.programId) return true
-      if (seen.has(li.programId)) return false
-      seen.add(li.programId)
-      return true
-    })
-    itemsTotal = replaceItems.reduce((s, li) => s + li.amount, 0)
-  }
-
-  const amount =
-    typeof body.amount === 'number' && !isNaN(body.amount)
-      ? Math.max(0, body.amount)
-      : replaceItems
-        ? itemsTotal
-        : existing.amount
-  const paidAmount =
-    typeof body.paidAmount === 'number' && !isNaN(body.paidAmount)
-      ? Math.max(0, body.paidAmount)
-      : existing.paidAmount
-
-  let status = body.status || existing.status
-  let paidDate: Date | null | undefined = body.paidDate !== undefined ? parseDate(body.paidDate) : undefined
-
-  if (paidAmount >= amount && amount > 0) {
-    status = 'Paid'
-    if (paidDate === undefined) paidDate = existing.paidDate ?? new Date()
-  } else if (paidAmount > 0 && paidAmount < amount) {
-    if (!body.status) {
-      status = 'Partial'
-      if (paidDate === undefined) paidDate = existing.paidDate ?? new Date()
-    }
-  } else if (paidAmount <= 0) {
-    if (!body.status) status = 'Pending'
-    if (paidDate === undefined) paidDate = null
-  }
-
-  if (body.studentId) existing.studentId = body.studentId
-  if (replaceItems) {
-    existing.programId = replaceItems.length === 1 ? replaceItems[0].programId : null
-    existing.items = replaceItems.map((li) => ({
-      programId: li.programId,
-      amount: li.amount,
-      description: li.description,
-    })) as any
-  } else if (body.programId !== undefined) {
-    existing.programId = body.programId || null
-  }
-  if (body.classId !== undefined) existing.classId = body.classId
-  if (body.month) existing.month = body.month
-  if ((typeof body.amount === 'number' && !isNaN(body.amount)) || replaceItems) existing.amount = amount
-  if (typeof body.paidAmount === 'number' && !isNaN(body.paidAmount)) existing.paidAmount = paidAmount
-  if (body.method) existing.method = body.method
-  if (status) existing.status = status
-  if (paidDate !== undefined) existing.paidDate = paidDate
-  if (body.dueDate !== undefined) existing.dueDate = parseDate(body.dueDate)
-  if (body.note !== undefined) existing.note = body.note?.trim() || null
-  if (body.receiptNo !== undefined) existing.receiptNo = body.receiptNo?.trim() || null
-
-  await existing.save()
-  const doc = await Payment.findById(existing._id).lean()
-  const maps = await programInfoMaps([doc])
-  res.json(serializePayment(doc, maps, false))
+  const doc = await Class.findById((created as any)._id)
+    .populate('programId', 'code name color category')
+    .populate('teacherId', 'teacherId fullName type')
+    .lean()
+  const { eMap } = await classRelMaps([doc as any])
+  res.status(201).json(serializeClass(doc, eMap))
 }))
 
-// ─── DELETE /api/payments/:id ───────────────────────────────────────────────
-r.delete('/:id', ah(async (req, res) => {
-  const existing = await Payment.findById(req.params.id).lean()
-  if (!existing) return res.status(404).json({ error: 'Payment not found' })
-  await Payment.deleteOne({ _id: (existing as any)._id })
-  res.json({
-    ok: true,
-    id: (existing as any)._id.toString(),
-    receiptNo: (existing as any).receiptNo ?? null,
-    month: (existing as any).month,
-  })
+// ─── GET /api/classes/:id ───────────────────────────────────────────────────
+r.get('/classes/:id', ah(async (req, res) => {
+  const cls = await Class.findById(req.params.id)
+    .populate('programId', 'code name color category')
+    .populate('teacherId', 'teacherId fullName type')
+    .lean()
+  if (!cls) return res.status(404).json({ error: 'Class not found' })
+  const { eMap } = await classRelMaps([cls as any])
+  res.json(serializeClass(cls, eMap))
+}))
+
+// ─── PUT /api/classes/:id ───────────────────────────────────────────────────
+r.put('/classes/:id', ah(async (req, res) => {
+  const existing = await Class.findById(req.params.id)
+  if (!existing) return res.status(404).json({ error: 'Class not found' })
+  const body = req.body || {}
+
+  if (body.dayOfWeek !== undefined && body.dayOfWeek && !VALID_DAYS.includes(body.dayOfWeek)) {
+    return res.status(400).json({ error: `dayOfWeek must be one of ${VALID_DAYS.join(', ')}` })
+  }
+  if (body.programId !== undefined && body.programId) {
+    const p = await Program.findById(body.programId)
+    if (!p) return res.status(400).json({ error: 'programId not found' })
+  }
+  if (body.teacherId !== undefined && body.teacherId) {
+    const t = await Teacher.findById(body.teacherId)
+    if (!t) return res.status(400).json({ error: 'teacherId not found' })
+  }
+
+  if (body.name !== undefined) {
+    const name = body.name.trim()
+    if (!name) return res.status(400).json({ error: 'name cannot be empty' })
+    existing.name = name
+  }
+  if (body.programId !== undefined) existing.programId = body.programId || null
+  if (body.teacherId !== undefined) existing.teacherId = body.teacherId || null
+  if (body.dayOfWeek !== undefined) existing.dayOfWeek = body.dayOfWeek || null
+  if (body.startTime !== undefined) existing.startTime = body.startTime?.trim() || null
+  if (body.endTime !== undefined) existing.endTime = body.endTime?.trim() || null
+  if (body.room !== undefined) existing.room = body.room?.trim() || null
+  if (body.capacity !== undefined) {
+    existing.capacity =
+      typeof body.capacity === 'number' && !isNaN(body.capacity) ? Math.max(0, Math.floor(body.capacity)) : 20
+  }
+  if (body.fee !== undefined) {
+    existing.fee = typeof body.fee === 'number' && !isNaN(body.fee) ? Math.max(0, body.fee) : 0
+  }
+  if (body.instituteSharePct !== undefined) {
+    existing.instituteSharePct =
+      typeof body.instituteSharePct === 'number' && !isNaN(body.instituteSharePct)
+        ? Math.min(100, Math.max(0, body.instituteSharePct))
+        : 25
+  }
+  if (body.grade !== undefined) existing.grade = body.grade?.trim() || null
+  if (body.active !== undefined) existing.active = Boolean(body.active)
+  if (body.notes !== undefined) existing.notes = body.notes?.trim() || null
+
+  await existing.save()
+  const doc = await Class.findById(req.params.id)
+    .populate('programId', 'code name color category')
+    .populate('teacherId', 'teacherId fullName type')
+    .lean()
+  const { eMap } = await classRelMaps([doc as any])
+  res.json(serializeClass(doc, eMap))
+}))
+
+// ─── DELETE /api/classes/:id (block when enrollments exist) ─────────────────
+r.delete('/classes/:id', ah(async (req, res) => {
+  const id = req.params.id
+  const existing = await Class.findById(id).lean()
+  if (!existing) return res.status(404).json({ error: 'Class not found' })
+  const enrolled = await Enrollment.countDocuments({ classId: id })
+  if (enrolled > 0) {
+    return res.status(400).json({
+      error: `Cannot delete "${(existing as any).name}" — ${enrolled} student(s) are enrolled. Withdraw them first.`,
+    })
+  }
+  await Class.deleteOne({ _id: (existing as any)._id })
+  res.json({ ok: true, id, name: (existing as any).name })
 }))
 
 export default r
