@@ -11,6 +11,80 @@ const r = Router()
 // ─── Age bands (fixed) ──────────────────────────────────────────────────────
 const VALID_AGE_GROUPS = new Set(['1-3', '3-5', '5-10', '10-15', '15-17', '17-19'])
 
+// ─── Day constants & helpers ────────────────────────────────────────────────
+const DAY_ORDER: Record<string, number> = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 }
+const VALID_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
+type Category = 'Preschool' | 'Daycare' | 'Tuition'
+
+function allowedDaysFor(category: Category | null): string[] {
+  switch (category) {
+    case 'Preschool': return ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']
+    case 'Daycare':   return ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+    default:          return ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+  }
+}
+
+/**
+ * Normalises incoming day input (array `daysOfWeek` OR single `dayOfWeek`)
+ * into a clean sorted array and validates it against the programme's category.
+ *   • Preschool → Mon–Fri only, at least 1 day
+ *   • Daycare   → Mon–Sat only, at least 1 day
+ *   • Tuition (or none) → at most 1 day
+ * Returns { error } on failure or { days } on success.
+ */
+async function resolveDays(
+  rawDaysOfWeek: unknown,
+  rawDayOfWeek: unknown,
+  programId: string | null,
+): Promise<{ error: string } | { days: string[] }> {
+  let days: string[] = []
+  if (Array.isArray(rawDaysOfWeek)) {
+    days = rawDaysOfWeek.map((d) => String(d).trim()).filter(Boolean)
+  } else if (typeof rawDayOfWeek === 'string' && rawDayOfWeek.trim()) {
+    days = [rawDayOfWeek.trim()]
+  }
+
+  // Dedupe + sort by weekday order
+  days = [...new Set(days)].sort((a, b) => (DAY_ORDER[a] ?? 99) - (DAY_ORDER[b] ?? 99))
+
+  // Every value must be a real day name
+  for (const d of days) {
+    if (!VALID_DAYS.includes(d)) {
+      return { error: `Invalid day "${d}" — must be one of ${VALID_DAYS.join(', ')}` }
+    }
+  }
+
+  // Look up the programme category (if a programme was chosen)
+  let category: Category | null = null
+  if (programId) {
+    const prog = await Program.findById(programId).lean()
+    if (prog) category = ((prog as any).category ?? 'Tuition') as Category
+  }
+
+  // Tuition (or no programme) → at most one day
+  if (!category || category === 'Tuition') {
+    if (days.length > 1) {
+      return { error: 'Only one day can be selected for Tuition programmes' }
+    }
+    return { days }
+  }
+
+  // Preschool / Daycare → within allowed set, at least one day
+  const allowed = allowedDaysFor(category)
+  const bad = days.find((d) => !allowed.includes(d))
+  if (bad) {
+    return {
+      error: `${category} classes can only be scheduled on ${allowed.join(', ')} — "${bad}" is not allowed`,
+    }
+  }
+  if (days.length === 0) {
+    return { error: `${category} classes must have at least one day selected` }
+  }
+
+  return { days }
+}
+
 // ─── shared serialization ───────────────────────────────────────────────────
 async function studentRelMaps(studentIds: string[], orderGuardians: boolean) {
   const [guardians, enrollments, attendanceCounts] = await Promise.all([
@@ -22,7 +96,7 @@ async function studentRelMaps(studentIds: string[], orderGuardians: boolean) {
     studentIds.length
       ? Enrollment.find({ studentId: { $in: studentIds } })
           .populate('programId', 'code name color category hasGrades grades')
-          .populate('classId', 'name dayOfWeek startTime endTime grade fee')
+          .populate('classId', 'name dayOfWeek daysOfWeek startTime endTime grade fee')
           .lean()
       : [],
     studentIds.length
@@ -92,6 +166,9 @@ function serializeStudent(s: any, maps: Awaited<ReturnType<typeof studentRelMaps
             id: e.classId._id.toString(),
             name: e.classId.name,
             dayOfWeek: e.classId.dayOfWeek ?? null,
+            daysOfWeek: Array.isArray(e.classId.daysOfWeek) && e.classId.daysOfWeek.length > 0
+              ? e.classId.daysOfWeek
+              : (e.classId.dayOfWeek ? [e.classId.dayOfWeek] : []),
             startTime: e.classId.startTime ?? null,
             endTime: e.classId.endTime ?? null,
             grade: e.classId.grade ?? null,
@@ -530,6 +607,9 @@ function serializeTeacher(t: any, rel: Awaited<ReturnType<typeof teacherRelData>
         id: c._id.toString(),
         name: c.name,
         dayOfWeek: c.dayOfWeek ?? null,
+        daysOfWeek: Array.isArray(c.daysOfWeek) && c.daysOfWeek.length > 0
+          ? c.daysOfWeek
+          : (c.dayOfWeek ? [c.dayOfWeek] : []),
         startTime: c.startTime ?? null,
         grade: c.grade ?? null,
         ...(detailed
@@ -749,6 +829,9 @@ function serializeClass(c: any, eMap: Map<string, number>) {
     id: c._id.toString(),
     name: c.name,
     dayOfWeek: c.dayOfWeek ?? null,
+    daysOfWeek: Array.isArray(c.daysOfWeek) && c.daysOfWeek.length > 0
+      ? c.daysOfWeek
+      : (c.dayOfWeek ? [c.dayOfWeek] : []),
     startTime: c.startTime ?? null,
     endTime: c.endTime ?? null,
     room: c.room ?? null,
@@ -779,9 +862,6 @@ function serializeClass(c: any, eMap: Map<string, number>) {
   }
 }
 
-const DAY_ORDER: Record<string, number> = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 }
-const VALID_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-
 // ─── GET /api/classes ───────────────────────────────────────────────────────
 r.get('/classes', ah(async (req, res) => {
   const p = qs(req)
@@ -793,7 +873,10 @@ r.get('/classes', ah(async (req, res) => {
   const limit = Math.min(200, Math.max(1, parseInt(p.get('limit') || '50', 10) || 50))
 
   const where: Record<string, unknown> = {}
-  if (day) where.dayOfWeek = day
+  if (day) {
+    // Match classes that have `day` as their primary day OR as any entry in daysOfWeek
+    where.$or = [{ dayOfWeek: day }, { daysOfWeek: day }]
+  }
   if (programCode) {
     const prog = await Program.findOne({ code: programCode }, '_id').lean()
     where.programId = prog ? (prog as any)._id.toString() : '___none___'
@@ -827,9 +910,7 @@ r.post('/classes', ah(async (req, res) => {
   const body = req.body || {}
   const name = body.name?.trim()
   if (!name) return res.status(400).json({ error: 'name is required' })
-  if (body.dayOfWeek && !VALID_DAYS.includes(body.dayOfWeek)) {
-    return res.status(400).json({ error: `dayOfWeek must be one of ${VALID_DAYS.join(', ')}` })
-  }
+
   if (body.programId) {
     const p = await Program.findById(body.programId)
     if (!p) return res.status(400).json({ error: 'programId not found' })
@@ -839,11 +920,17 @@ r.post('/classes', ah(async (req, res) => {
     if (!t) return res.status(400).json({ error: 'teacherId not found' })
   }
 
+  // Validate day(s) against the chosen programme's category
+  const daysResult = await resolveDays(body.daysOfWeek, body.dayOfWeek, body.programId || null)
+  if ('error' in daysResult) return res.status(400).json({ error: daysResult.error })
+  const days = daysResult.days
+
   const created = await Class.create({
     name,
     programId: body.programId || null,
     teacherId: body.teacherId || null,
-    dayOfWeek: body.dayOfWeek || null,
+    dayOfWeek: days[0] ?? null,
+    daysOfWeek: days,
     startTime: body.startTime?.trim() || null,
     endTime: body.endTime?.trim() || null,
     room: body.room?.trim() || null,
@@ -884,9 +971,6 @@ r.put('/classes/:id', ah(async (req, res) => {
   if (!existing) return res.status(404).json({ error: 'Class not found' })
   const body = req.body || {}
 
-  if (body.dayOfWeek !== undefined && body.dayOfWeek && !VALID_DAYS.includes(body.dayOfWeek)) {
-    return res.status(400).json({ error: `dayOfWeek must be one of ${VALID_DAYS.join(', ')}` })
-  }
   if (body.programId !== undefined && body.programId) {
     const p = await Program.findById(body.programId)
     if (!p) return res.status(400).json({ error: 'programId not found' })
@@ -896,6 +980,17 @@ r.put('/classes/:id', ah(async (req, res) => {
     if (!t) return res.status(400).json({ error: 'teacherId not found' })
   }
 
+  // Validate day(s) if either daysOfWeek or dayOfWeek was provided
+  let newDays: string[] | undefined
+  if (body.daysOfWeek !== undefined || body.dayOfWeek !== undefined) {
+    const targetProgramId = body.programId !== undefined
+      ? (body.programId || null)
+      : ((existing as any).programId?.toString() ?? null)
+    const daysResult = await resolveDays(body.daysOfWeek, body.dayOfWeek, targetProgramId)
+    if ('error' in daysResult) return res.status(400).json({ error: daysResult.error })
+    newDays = daysResult.days
+  }
+
   if (body.name !== undefined) {
     const name = body.name.trim()
     if (!name) return res.status(400).json({ error: 'name cannot be empty' })
@@ -903,7 +998,10 @@ r.put('/classes/:id', ah(async (req, res) => {
   }
   if (body.programId !== undefined) existing.programId = body.programId || null
   if (body.teacherId !== undefined) existing.teacherId = body.teacherId || null
-  if (body.dayOfWeek !== undefined) existing.dayOfWeek = body.dayOfWeek || null
+  if (newDays !== undefined) {
+    existing.dayOfWeek = newDays[0] ?? null
+    existing.daysOfWeek = newDays
+  }
   if (body.startTime !== undefined) existing.startTime = body.startTime?.trim() || null
   if (body.endTime !== undefined) existing.endTime = body.endTime?.trim() || null
   if (body.room !== undefined) existing.room = body.room?.trim() || null
