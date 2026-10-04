@@ -82,6 +82,7 @@ export interface EnrollmentRow {
     id: string
     name: string
     dayOfWeek: string | null
+    daysOfWeek: string[]              // ← NEW: full list of weekdays this class runs on
     startTime: string | null
     endTime: string | null
     grade: string | null
@@ -146,6 +147,7 @@ export interface TeacherRow {
     id: string
     name: string
     dayOfWeek: string | null
+    daysOfWeek?: string[]           // ← NEW: also returned by the teacher serializer
     startTime: string | null
     grade?: string | null
   }>
@@ -187,6 +189,7 @@ export interface ClassRow {
   id: string
   name: string
   dayOfWeek: string | null
+  daysOfWeek: string[]              // ← NEW: full list of weekdays (Mon–Fri / Mon–Sat / single day)
   startTime: string | null
   endTime: string | null
   room: string | null
