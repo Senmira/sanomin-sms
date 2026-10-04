@@ -188,6 +188,24 @@ async function readGraceMinutes(): Promise<number> {
   return Number.isFinite(n) && n >= 0 && n <= 60 ? n : 10
 }
 
+/**
+ * Build the Mongo filter that matches "active classes that run on weekday `dow`".
+ * A class matches if EITHER:
+ *   • daysOfWeek array contains `dow`   (new multi-day classes)
+ *   • dayOfWeek equals `dow`            (legacy single-day classes)
+ * The $or ensures backward compatibility for classes that predate the
+ * daysOfWeek migration.
+ */
+function classRunsOn(dow: string): Record<string, unknown> {
+  return {
+    active: true,
+    $or: [
+      { daysOfWeek: dow },
+      { dayOfWeek: dow },
+    ],
+  }
+}
+
 // Resolve the expected arrival/pickup window for a person on a given date,
 // based on the classes they're enrolled in / teach that day.
 export async function getExpectedTimesForPerson(
@@ -206,16 +224,16 @@ export async function getExpectedTimesForPerson(
     const programIds = [...new Set(enrollments.map((e: any) => e.programId).filter(Boolean))]
 
     const directClasses = classIds.length
-      ? await Class.find({ _id: { $in: classIds }, dayOfWeek: dow, active: true }).lean()
+      ? await Class.find({ _id: { $in: classIds }, ...classRunsOn(dow) }).lean()
       : []
 
     if (directClasses.length > 0) {
       classes = directClasses
     } else if (programIds.length) {
-      classes = await Class.find({ programId: { $in: programIds }, dayOfWeek: dow, active: true }).lean()
+      classes = await Class.find({ programId: { $in: programIds }, ...classRunsOn(dow) }).lean()
     }
   } else {
-    classes = await Class.find({ teacherId: personId, dayOfWeek: dow, active: true }).lean()
+    classes = await Class.find({ teacherId: personId, ...classRunsOn(dow) }).lean()
   }
 
   if (classes.length === 0) {
