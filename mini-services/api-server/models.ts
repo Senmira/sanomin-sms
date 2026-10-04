@@ -142,12 +142,18 @@ PayrollRecordSchema.index({ teacherId: 1, month: 1 }, { unique: true })
 // grade — optional pinned grade for this class (e.g. "Grade 6"). Shown as a
 //   badge. Students enrolled in this class inherit the grade, and the student
 //   form auto-fills the grade field when a class is picked.
+//
+// daysOfWeek — the full list of weekdays this class runs on. Preschool
+//   classes typically run Mon–Fri; Daycare classes run Mon–Sat. Tuition
+//   classes have a single day. `dayOfWeek` is kept as the FIRST entry of
+//   `daysOfWeek` for backwards compatibility with older clients.
 const ClassSchema = new Schema(
   {
     name: { type: String, required: true },
     programId: { type: String, default: null, ref: 'Program' },
     teacherId: { type: String, default: null, ref: 'Teacher' },
-    dayOfWeek: nullStr,
+    dayOfWeek: nullStr,                                 // legacy single-day field
+    daysOfWeek: { type: [String], default: [] },        // ← NEW: multi-day support
     startTime: nullStr,
     endTime: nullStr,
     room: nullStr,
