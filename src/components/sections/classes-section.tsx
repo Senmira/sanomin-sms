@@ -28,6 +28,7 @@ import {
   ClassRow,
   TeacherRow,
   ProgramRow,
+  ProgramCategory,
   DAYS,
 } from '@/lib/types'
 import { currency, fmtTime } from '@/lib/format'
@@ -94,12 +95,32 @@ interface TeacherListResponse {
 // Time slots for timetable grid (hourly) — full day range
 const ALL_TIME_SLOTS = Array.from({ length: 11 }, (_, i) => 8 + i) // 8..18
 
+// ─── Day helpers (mirror the server-side rules in people.ts) ───────────────
+function allowedDaysFor(category: ProgramCategory | null | undefined): string[] {
+  switch (category) {
+    case 'Preschool': return ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']
+    case 'Daycare':   return ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+    default:          return ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+  }
+}
+
+function isMultiDay(category: ProgramCategory | null | undefined): boolean {
+  return category === 'Preschool' || category === 'Daycare'
+}
+
+// Normalise a ClassRow's day info into an array (fallback for legacy data).
+function classDays(c: Pick<ClassRow, 'dayOfWeek' | 'daysOfWeek'>): string[] {
+  if (Array.isArray(c.daysOfWeek) && c.daysOfWeek.length > 0) return c.daysOfWeek
+  return c.dayOfWeek ? [c.dayOfWeek] : []
+}
+
 // ─── Form state ─────────────────────────────────────────────────────────────
 interface FormState {
   name: string
   programId: string
   teacherId: string
-  dayOfWeek: string
+  dayOfWeek: string                // legacy single-day (kept in sync with daysOfWeek[0])
+  daysOfWeek: string[]             // ← NEW: full list
   startTime: string
   endTime: string
   room: string
@@ -117,6 +138,7 @@ const EMPTY_FORM: FormState = {
   programId: '',
   teacherId: '',
   dayOfWeek: 'Mon',
+  daysOfWeek: ['Mon'],
   startTime: '09:00',
   endTime: '10:00',
   room: '',
@@ -276,11 +298,13 @@ export function ClassesSection() {
 
   const openEdit = useCallback((c: ClassRow) => {
     setEditing(c)
+    const days = classDays(c)
     setForm({
       name: c.name,
       programId: c.program?.id || '',
       teacherId: c.teacher?.id || '',
-      dayOfWeek: c.dayOfWeek || 'Mon',
+      dayOfWeek: days[0] || 'Mon',
+      daysOfWeek: days.length > 0 ? days : ['Mon'],
       startTime: c.startTime || '09:00',
       endTime: c.endTime || '10:00',
       room: c.room || '',
@@ -306,12 +330,31 @@ export function ClassesSection() {
       toast.error('Class name is required')
       return
     }
+    // Determine category to enforce day-picker rules client-side
+    const selectedProgram = programs.find((p) => p.id === form.programId)
+    const category = selectedProgram?.category ?? 'Tuition'
+    const multi = isMultiDay(category)
+
+    // Ensure at least one day for multi-day categories
+    if (multi && form.daysOfWeek.length === 0) {
+      toast.error(`${category} classes need at least one day selected`)
+      return
+    }
+    if (!multi && form.daysOfWeek.length === 0) {
+      toast.error('Select a day for this class')
+      return
+    }
+
     setSaving(true)
+    const days = [...form.daysOfWeek].sort(
+      (a, b) => DAYS.indexOf(a as (typeof DAYS)[number]) - DAYS.indexOf(b as (typeof DAYS)[number]),
+    )
     const payload = {
       name: form.name.trim(),
       programId: form.programId || null,
       teacherId: form.teacherId || null,
-      dayOfWeek: form.dayOfWeek,
+      dayOfWeek: days[0] ?? null,
+      daysOfWeek: days,
       startTime: form.startTime,
       endTime: form.endTime,
       room: form.room.trim() || null,
@@ -345,7 +388,7 @@ export function ClassesSection() {
     } finally {
       setSaving(false)
     }
-  }, [form, editing, closeDialog])
+  }, [form, editing, closeDialog, programs])
 
   // ─── Delete ──────────────────────────────────────────────────────────────
   const handleDelete = useCallback(async () => {
@@ -626,7 +669,25 @@ export function ClassesSection() {
                 <Select
                   value={form.programId || 'none'}
                   onValueChange={(v) =>
-                    setForm((f) => ({ ...f, programId: v === 'none' ? '' : v }))
+                    setForm((f) => {
+                      const newProgramId = v === 'none' ? '' : v
+                      // When programme changes, snap daysOfWeek to allowed days
+                      const selectedProgram = programs.find((p) => p.id === newProgramId)
+                      const category = selectedProgram?.category ?? 'Tuition'
+                      const allowed = allowedDaysFor(category)
+                      const multi = isMultiDay(category)
+                      // If switching to single-day, keep first allowed day
+                      // If switching to multi-day, keep intersecting days
+                      let nextDays = f.daysOfWeek.filter((d) => allowed.includes(d))
+                      if (nextDays.length === 0) nextDays = multi ? [allowed[0]] : [allowed[0]]
+                      if (!multi) nextDays = [nextDays[0]]
+                      return {
+                        ...f,
+                        programId: newProgramId,
+                        daysOfWeek: nextDays,
+                        dayOfWeek: nextDays[0] ?? 'Mon',
+                      }
+                    })
                   }
                 >
                   <SelectTrigger id="class-program">
@@ -676,25 +737,114 @@ export function ClassesSection() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-              <div className="grid gap-1.5">
-                <Label htmlFor="class-day">Day</Label>
-                <Select
-                  value={form.dayOfWeek}
-                  onValueChange={(v) => setForm((f) => ({ ...f, dayOfWeek: v }))}
-                >
-                  <SelectTrigger id="class-day">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {DAYS.map((d) => (
-                      <SelectItem key={d} value={d}>
-                        {d}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+            {/* ─── Day / Days picker (category-aware) ─────────────────────── */}
+            {(() => {
+              const selectedProgram = programs.find((p) => p.id === form.programId)
+              const category = selectedProgram?.category ?? 'Tuition'
+              const allowed = allowedDaysFor(category)
+              const multi = isMultiDay(category)
+              const selected = form.daysOfWeek
+
+              const toggleDay = (d: string) => {
+                setForm((f) => {
+                  const current = f.daysOfWeek
+                  if (!multi) {
+                    // single day: replace selection
+                    return { ...f, daysOfWeek: [d], dayOfWeek: d }
+                  }
+                  const next = current.includes(d)
+                    ? current.filter((x) => x !== d)
+                    : [...current, d].sort(
+                        (a, b) =>
+                          DAYS.indexOf(a as (typeof DAYS)[number]) -
+                          DAYS.indexOf(b as (typeof DAYS)[number]),
+                      )
+                  return { ...f, daysOfWeek: next, dayOfWeek: next[0] ?? 'Mon' }
+                })
+              }
+
+              return (
+                <div className="grid gap-1.5 rounded-lg border bg-muted/20 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <Label className="text-sm">
+                        {multi ? 'Days' : 'Day'}
+                      </Label>
+                      {multi && (
+                        <p className="text-xs text-muted-foreground">
+                          {category} classes run on{' '}
+                          {category === 'Preschool' ? 'Monday–Friday' : 'Monday–Saturday'} — pick any combination.
+                        </p>
+                      )}
+                      {!multi && (
+                        <p className="text-xs text-muted-foreground">
+                          Pick a single weekday for this class.
+                        </p>
+                      )}
+                    </div>
+                    {multi && selected.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setForm((f) => ({ ...f, daysOfWeek: [], dayOfWeek: 'Mon' }))
+                        }
+                        className="text-[11px] text-muted-foreground hover:text-foreground"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+
+                  {multi ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {allowed.map((d) => {
+                        const on = selected.includes(d)
+                        return (
+                          <button
+                            key={d}
+                            type="button"
+                            onClick={() => toggleDay(d)}
+                            className={`min-w-[56px] rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
+                              on
+                                ? 'border-primary bg-primary text-primary-foreground'
+                                : 'border-border bg-background text-muted-foreground hover:bg-muted'
+                            }`}
+                          >
+                            {d}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  ) : (
+                    <Select
+                      value={selected[0] ?? 'Mon'}
+                      onValueChange={(v) =>
+                        setForm((f) => ({ ...f, dayOfWeek: v, daysOfWeek: [v] }))
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {allowed.map((d) => (
+                          <SelectItem key={d} value={d}>
+                            {d}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+
+                  {multi && selected.length === 0 && (
+                    <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                      Pick at least one day.
+                    </p>
+                  )}
+                </div>
+              )
+            })()}
+
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
               <div className="grid gap-1.5">
                 <Label htmlFor="class-start">Start Time</Label>
                 <Input
@@ -892,12 +1042,16 @@ function parseHour(time: string | null): number | null {
 
 function TimetableView({ rows }: TimetableViewProps) {
   const [compact, setCompact] = useState(true)
+
+  // Group classes by day. A class appears on every weekday in its daysOfWeek
+  // (falls back to [dayOfWeek] for legacy single-day classes).
   const byDay = useMemo(() => {
     const map: Record<string, ClassRow[]> = {}
     for (const d of DAYS) map[d] = []
     for (const c of rows) {
-      if (c.dayOfWeek && map[c.dayOfWeek]) {
-        map[c.dayOfWeek].push(c)
+      const days = classDays(c)
+      for (const d of days) {
+        if (map[d]) map[d].push(c)
       }
     }
     for (const d of DAYS) {
@@ -1005,7 +1159,7 @@ function TimetableView({ rows }: TimetableViewProps) {
                   >
                     <div className="flex flex-col gap-1.5">
                       {cellClasses.map((c) => (
-                        <TimetableCard key={c.id} cls={c} />
+                        <TimetableCard key={`${d}-${c.id}`} cls={c} />
                       ))}
                     </div>
                   </div>
@@ -1028,6 +1182,7 @@ function TimetableCard({ cls }: TimetableCardProps) {
   const enrolled = cls._count?.enrollments ?? 0
   const capacity = cls.capacity || 0
   const fillRate = capacity > 0 ? Math.round((enrolled / capacity) * 100) : 0
+  const days = classDays(cls)
   return (
     <div
       className="group relative overflow-hidden rounded-md border p-2 text-xs shadow-sm transition-all hover:shadow-md hover:scale-[1.01]"
@@ -1058,6 +1213,19 @@ function TimetableCard({ cls }: TimetableCardProps) {
           )}
         </div>
       </div>
+      {/* Days chips (only shown when class runs on >1 day) */}
+      {days.length > 1 && (
+        <div className="mt-1 flex flex-wrap gap-0.5">
+          {days.map((d) => (
+            <span
+              key={d}
+              className="rounded bg-background/70 px-1 py-0.5 text-[9px] font-semibold text-foreground/70 ring-1 ring-border/50"
+            >
+              {d}
+            </span>
+          ))}
+        </div>
+      )}
       {/* Teacher */}
       {cls.teacher && (
         <div className="mt-1 flex items-center gap-1">
@@ -1113,8 +1281,10 @@ interface ClassListTableProps {
 function ClassListTable({ rows, onEdit, onDelete }: ClassListTableProps) {
   const sorted = useMemo(() => {
     return [...rows].sort((a, b) => {
-      const dayA = DAYS.indexOf((a.dayOfWeek || '') as (typeof DAYS)[number])
-      const dayB = DAYS.indexOf((b.dayOfWeek || '') as (typeof DAYS)[number])
+      const aDays = classDays(a)
+      const bDays = classDays(b)
+      const dayA = aDays.length > 0 ? DAYS.indexOf(aDays[0] as (typeof DAYS)[number]) : 99
+      const dayB = bDays.length > 0 ? DAYS.indexOf(bDays[0] as (typeof DAYS)[number]) : 99
       const da = dayA < 0 ? 99 : dayA
       const db = dayB < 0 ? 99 : dayB
       if (da !== db) return da - db
@@ -1131,7 +1301,7 @@ function ClassListTable({ rows, onEdit, onDelete }: ClassListTableProps) {
               <TableHead>Class</TableHead>
               <TableHead>Program</TableHead>
               <TableHead>Teacher</TableHead>
-              <TableHead>Day</TableHead>
+              <TableHead>Days</TableHead>
               <TableHead>Time</TableHead>
               <TableHead>Room</TableHead>
               <TableHead className="w-32">Capacity</TableHead>
@@ -1148,6 +1318,7 @@ function ClassListTable({ rows, onEdit, onDelete }: ClassListTableProps) {
               const share = c.instituteSharePct ?? 25
               const instituteCut = ((c.fee || 0) * share) / 100
               const teacherCut = (c.fee || 0) - instituteCut
+              const days = classDays(c)
               return (
                 <TableRow key={c.id}>
                   <TableCell>
@@ -1208,10 +1379,21 @@ function ClassListTable({ rows, onEdit, onDelete }: ClassListTableProps) {
                     )}
                   </TableCell>
                   <TableCell>
-                    {c.dayOfWeek ? (
-                      <Badge variant="secondary">{c.dayOfWeek}</Badge>
-                    ) : (
+                    {days.length === 0 ? (
                       <span className="text-xs text-muted-foreground">—</span>
+                    ) : days.length === 1 ? (
+                      <Badge variant="secondary">{days[0]}</Badge>
+                    ) : (
+                      <div className="flex flex-wrap gap-1">
+                        {days.map((d) => (
+                          <span
+                            key={d}
+                            className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] font-semibold"
+                          >
+                            {d}
+                          </span>
+                        ))}
+                      </div>
                     )}
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-sm">
