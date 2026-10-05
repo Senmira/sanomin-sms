@@ -12,6 +12,7 @@ import expenseRoutes from './routes/expenses'
 import peopleRoutes from './routes/people'
 import analyticsRoutes from './routes/analytics'
 import kioskRoutes from './routes/kiosk'
+import staffRoutes from './routes/staff'
 
 const PORT = Number(process.env.PORT) || 3010
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/sanomin'
@@ -37,6 +38,7 @@ app.use('/api/payments', paymentRoutes)
 app.use('/api/payroll', payrollRoutes)
 app.use('/api/expenses', expenseRoutes)
 app.use('/api/kiosk', kioskRoutes)
+app.use('/api/staff', staffRoutes)  // minor staff (daily-wage) — /api/staff/*
 app.use('/api', peopleRoutes)       // /students, /teachers, /classes, lookups
 app.use('/api', analyticsRoutes)    // /dashboard, /notifications, etc.
 app.use('/api', simpleRoutes)       // /settings, /health, and misc — LAST
