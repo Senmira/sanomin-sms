@@ -20,6 +20,7 @@ import {
   Undo2,
   X,
   Pencil,
+  BookOpen,
 } from 'lucide-react'
 
 import { api } from '@/lib/api'
@@ -155,8 +156,27 @@ function printPayslipDocument(row: PayrollRow, school: SchoolInfoShape): void {
     hour: '2-digit',
     minute: '2-digit',
   })
+  const isExternal = row.teacher.type === 'External'
+  const hasBreakdown = Array.isArray(row.classBreakdown) && row.classBreakdown.length > 0
+
   const epfEmployeeLine =
     row.epfEmployee > 0 ? `− ${lkrPrint(row.epfEmployee)}` : lkrPrint(0)
+
+  // Class breakdown rows for external teachers (or internal with tuition)
+  const breakdownRows = hasBreakdown
+    ? row.classBreakdown
+        .map(
+          (b) => `
+        <div class="line breakdown">
+          <span class="line-label">
+            ${escapeHtml(b.className ?? 'Class')}
+            <span class="hint">${b.enrolledCount} student${b.enrolledCount === 1 ? '' : 's'} × ${lkrPrint(b.classFee)} × ${100 - (b.classFee ? Math.round((b.teacherShare / (b.enrolledCount * b.classFee || 1)) * 10000) / 100 : 0)}%</span>
+          </span>
+          <span class="line-value">${lkrPrint(b.teacherShare)}</span>
+        </div>`,
+        )
+        .join('')
+    : ''
 
   win.document.write(`<!doctype html>
 <html><head><meta charset="utf-8" />
@@ -183,14 +203,18 @@ function printPayslipDocument(row: PayrollRow, school: SchoolInfoShape): void {
   .employee-meta { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: #64748b; margin-top: 2px; }
   .lines { border-top: 1px solid #e2e8f0; border-bottom: 1px solid #e2e8f0; padding: 12px 0; margin-bottom: 16px; }
   .line { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; padding: 4px 0; }
-  .line-label { color: #64748b; }
-  .line-value { font-variant-numeric: tabular-nums; font-weight: 500; }
+  .line-label { color: #64748b; display: flex; flex-direction: column; min-width: 0; }
+  .line-label .hint { font-size: 10px; color: #94a3b8; margin-top: 1px; }
+  .line-value { font-variant-numeric: tabular-nums; font-weight: 500; flex-shrink: 0; }
   .line.subtotal { border-top: 1px solid #e2e8f0; margin-top: 6px; padding-top: 8px; }
   .line.subtotal .line-value { font-weight: 700; }
   .line.epf .line-value { color: #dc2626; font-weight: 600; }
   .line.net { border-top: 1px solid #e2e8f0; margin-top: 8px; padding-top: 12px; }
   .line.net .line-label { font-size: 14px; font-weight: 700; color: #0f172a; }
   .line.net .line-value { font-size: 16px; font-weight: 800; color: #059669; }
+  .section-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #64748b; margin: 12px 0 4px; }
+  .breakdown { padding-left: 10px; }
+  .breakdown .line-label { color: #475569; }
   .employer-box { background: #f8fafc; border-radius: 8px; padding: 12px; margin-bottom: 16px; }
   .employer-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; }
   .tag-purple { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 10px; font-weight: 600; background: #ede9fe; color: #6d28d9; }
@@ -234,14 +258,23 @@ function printPayslipDocument(row: PayrollRow, school: SchoolInfoShape): void {
       </div>
 
       <div class="lines">
-        <div class="line">
-          <span class="line-label">Basic salary</span>
-          <span class="line-value">${lkrPrint(row.basicSalary)}</span>
-        </div>
-        <div class="line">
-          <span class="line-label">Allowances</span>
-          <span class="line-value">${lkrPrint(row.allowances)}</span>
-        </div>
+        ${
+          isExternal
+            ? `<div class="section-label">Tuition share from classes</div>${breakdownRows || '<div class="line"><span class="line-label">No classes assigned</span><span class="line-value">LKR 0.00</span></div>'}`
+            : `<div class="line">
+                <span class="line-label">Basic salary</span>
+                <span class="line-value">${lkrPrint(row.basicSalary)}</span>
+              </div>
+              <div class="line">
+                <span class="line-label">Allowances</span>
+                <span class="line-value">${lkrPrint(row.allowances)}</span>
+              </div>
+              ${
+                hasBreakdown
+                  ? `<div class="section-label">Tuition share from classes</div>${breakdownRows}`
+                  : ''
+              }`
+        }
         <div class="line subtotal">
           <span class="line-label">Gross earnings</span>
           <span class="line-value">${lkrPrint(row.gross)}</span>
@@ -256,24 +289,37 @@ function printPayslipDocument(row: PayrollRow, school: SchoolInfoShape): void {
         </div>
       </div>
 
-      <div class="employer-box">
-        <div class="employer-header">
-          <span class="field-label">Employer contributions</span>
-          <span class="tag-purple">paid by institute</span>
-        </div>
-        <div class="line">
-          <span class="line-label">EPF employer (12%)</span>
-          <span class="line-value">${lkrPrint(row.epfEmployer)}</span>
-        </div>
-        <div class="line">
-          <span class="line-label">ETF employer (3%)</span>
-          <span class="line-value">${lkrPrint(row.etfEmployer)}</span>
-        </div>
-        <div class="line subtotal">
-          <span class="line-label">Total institute cost</span>
-          <span class="line-value">${lkrPrint(row.employerCost)}</span>
-        </div>
-      </div>
+      ${
+        !isExternal
+          ? `<div class="employer-box">
+              <div class="employer-header">
+                <span class="field-label">Employer contributions</span>
+                <span class="tag-purple">paid by institute</span>
+              </div>
+              <div class="line">
+                <span class="line-label">EPF employer (12%)</span>
+                <span class="line-value">${lkrPrint(row.epfEmployer)}</span>
+              </div>
+              <div class="line">
+                <span class="line-label">ETF employer (3%)</span>
+                <span class="line-value">${lkrPrint(row.etfEmployer)}</span>
+              </div>
+              <div class="line subtotal">
+                <span class="line-label">Total institute cost</span>
+                <span class="line-value">${lkrPrint(row.employerCost)}</span>
+              </div>
+            </div>`
+          : `<div class="employer-box">
+              <div class="employer-header">
+                <span class="field-label">Employer contributions</span>
+                <span class="tag-purple">not applicable (external)</span>
+              </div>
+              <div class="line">
+                <span class="line-label">Total institute cost</span>
+                <span class="line-value">${lkrPrint(row.employerCost)}</span>
+              </div>
+            </div>`
+      }
 
       <div class="payment-grid">
         <div>
@@ -436,8 +482,24 @@ export function PayrollSection() {
     () => visibleRows.reduce((s, r) => s + r.allowances, 0),
     [visibleRows],
   )
+  const sumClassEarnings = useMemo(
+    () => visibleRows.reduce((s, r) => s + (r.classEarnings ?? 0), 0),
+    [visibleRows],
+  )
 
-  const noSalaryRows = useMemo(() => rows.filter((r) => r.netSalary <= 0), [rows])
+  // Rows that need attention:
+  //  - Internal teachers with no basic salary and no class earnings → need salary setup
+  //  - External teachers with no classes → nothing to bill, but still shown
+  const noSalaryRows = useMemo(
+    () =>
+      rows.filter(
+        (r) =>
+          r.teacher.type !== 'External' &&
+          r.basicSalary <= 0 &&
+          (r.classEarnings ?? 0) <= 0,
+      ),
+    [rows],
+  )
 
   // ─── Quick salary setup ────────────────────────────────────────────────
   const openSalaryDialog = useCallback(() => {
@@ -511,6 +573,7 @@ export function PayrollSection() {
       'Month',
       'Basic',
       'Allowances',
+      'Class earnings',
       'Gross',
       'EPF Employee (8%)',
       'Net Salary',
@@ -537,6 +600,7 @@ export function PayrollSection() {
           escape(r.month),
           escape(r.basicSalary),
           escape(r.allowances),
+          escape(r.classEarnings ?? 0),
           escape(r.gross),
           escape(r.epfEmployee),
           escape(r.netSalary),
@@ -686,8 +750,10 @@ export function PayrollSection() {
         </div>
         <p className="mt-3 text-xs text-muted-foreground">
           Salary register as of{' '}
-          <span className="font-medium text-foreground">{monthLabel(month)}</span> · pending rows
-          show live salary figures; paid rows show the snapshot taken at payment time.
+          <span className="font-medium text-foreground">{monthLabel(month)}</span> · Pending rows
+          show live figures (including class earnings); Paid rows show the snapshot taken at
+          payment time. <span className="text-foreground/70">External teachers earn tuition
+          share only; Internal teachers get basic + allowances + tuition share.</span>
         </p>
       </Card>
 
@@ -702,7 +768,7 @@ export function PayrollSection() {
           </div>
           <div className="min-w-0 flex-1">
             <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
-              {noSalaryRows.length} teacher{noSalaryRows.length === 1 ? '' : 's'}{' '}
+              {noSalaryRows.length} internal teacher{noSalaryRows.length === 1 ? '' : 's'}{' '}
               {noSalaryRows.length === 1 ? 'has' : 'have'} no salary configured
             </p>
             <p className="text-xs text-amber-700/80 dark:text-amber-300/80">
@@ -711,8 +777,7 @@ export function PayrollSection() {
                 .map((r) => r.teacher.fullName)
                 .join(', ')
                 .concat(noSalaryRows.length > 4 ? ` +${noSalaryRows.length - 4} more` : '')}{' '}
-              — their payroll rows total LKR 0. Set a basic salary, allowances or monthly rate in
-              the Teachers section.
+              — their payroll rows total LKR 0. Set a basic salary in the Teachers section.
             </p>
           </div>
           <div className="flex flex-wrap gap-2 sm:flex-nowrap">
@@ -773,7 +838,7 @@ export function PayrollSection() {
           </div>
         ) : (
           <div className="scroll-thin max-h-[62vh] overflow-auto">
-            <Table className="table-zebra min-w-[900px]">
+            <Table className="table-zebra min-w-[1050px]">
               <TableHeader className="sticky top-0 z-10 bg-muted/80 backdrop-blur">
                 <TableRow>
                   <TableHead className="w-[40px] pr-0">
@@ -793,6 +858,14 @@ export function PayrollSection() {
                   <TableHead>Teacher</TableHead>
                   <TableHead className="text-right">Basic</TableHead>
                   <TableHead className="text-right">Allowances</TableHead>
+                  <TableHead
+                    className="text-right"
+                    title="Auto-calculated from enrolled students × (class fee − institute share)"
+                  >
+                    <span className="inline-flex items-center gap-1">
+                      <BookOpen className="h-3 w-3" /> Class earnings
+                    </span>
+                  </TableHead>
                   <TableHead className="text-right">Gross</TableHead>
                   <TableHead className="text-right">EPF −8%</TableHead>
                   <TableHead className="text-right">Net salary</TableHead>
@@ -811,6 +884,18 @@ export function PayrollSection() {
                 {visibleRows.map((r) => {
                   const isPaid = r.status === 'Paid'
                   const isSelected = selected.has(r.teacher.id)
+                  const isExternal = r.teacher.type === 'External'
+                  const classEarnings = r.classEarnings ?? 0
+                  const hasBreakdown =
+                    Array.isArray(r.classBreakdown) && r.classBreakdown.length > 0
+                  const tooltip = hasBreakdown
+                    ? r.classBreakdown!
+                        .map(
+                          (b) =>
+                            `${b.className ?? 'Class'}: ${b.enrolledCount} × LKR ${b.classFee} = LKR ${b.teacherShare}`,
+                        )
+                        .join('\n')
+                    : 'No classes assigned'
                   return (
                     <TableRow
                       key={r.teacher.id}
@@ -874,10 +959,30 @@ export function PayrollSection() {
                         </div>
                       </TableCell>
                       <TableCell className="text-right text-sm tabular-nums text-foreground/80">
-                        {currency(r.basicSalary)}
+                        {isExternal ? (
+                          <span className="text-[11px] text-muted-foreground">—</span>
+                        ) : (
+                          currency(r.basicSalary)
+                        )}
                       </TableCell>
                       <TableCell className="text-right text-sm tabular-nums text-foreground/80">
-                        {currency(r.allowances)}
+                        {isExternal ? (
+                          <span className="text-[11px] text-muted-foreground">—</span>
+                        ) : (
+                          currency(r.allowances)
+                        )}
+                      </TableCell>
+                      <TableCell
+                        className="text-right text-sm tabular-nums"
+                        title={tooltip}
+                      >
+                        {classEarnings > 0 ? (
+                          <span className="font-medium text-emerald-700 dark:text-emerald-300">
+                            {currency(classEarnings)}
+                          </span>
+                        ) : (
+                          <span className="text-[11px] text-muted-foreground">LKR 0</span>
+                        )}
                       </TableCell>
                       <TableCell className="text-right text-sm font-medium tabular-nums">
                         {currency(r.gross)}
@@ -893,7 +998,9 @@ export function PayrollSection() {
                         {currency(r.netSalary)}
                       </TableCell>
                       <TableCell className="text-right text-xs tabular-nums text-muted-foreground">
-                        {currency(r.epfEmployer + r.etfEmployer)}
+                        {r.epfEmployer + r.etfEmployer > 0
+                          ? currency(r.epfEmployer + r.etfEmployer)
+                          : '—'}
                       </TableCell>
                       <TableCell>
                         <Badge
@@ -955,6 +1062,9 @@ export function PayrollSection() {
                     </TableCell>
                     <TableCell className="text-right text-sm font-semibold tabular-nums">
                       {currency(sumAllowances)}
+                    </TableCell>
+                    <TableCell className="text-right text-sm font-semibold tabular-nums text-emerald-700 dark:text-emerald-300">
+                      {currency(sumClassEarnings)}
                     </TableCell>
                     <TableCell className="text-right text-sm font-semibold tabular-nums">
                       {currency(summary.totalGross)}
@@ -1028,18 +1138,20 @@ export function PayrollSection() {
               <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400">
                 <Pencil className="h-4 w-4" />
               </div>
-              Set salaries
+              Set internal staff salaries
             </DialogTitle>
             <DialogDescription>
-              Enter a basic salary (and optional allowances) for each teacher. EPF (8% of basic) is
-              deducted automatically; employer EPF 12% + ETF 3% is added on top.
+              Only <span className="font-medium">Internal</span> teachers receive a basic salary.
+              External teachers earn purely from their class tuition share — their basic is
+              locked to 0. EPF (8% of basic) is deducted automatically; employer EPF 12% + ETF 3%
+              is added on top.
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-3">
             {noSalaryRows.length === 0 && (
               <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-                All teachers have a salary configured.
+                All internal teachers have a salary configured.
               </p>
             )}
             {noSalaryRows.map((r) => {
@@ -1307,6 +1419,9 @@ function PayslipDialog({ row, onClose }: PayslipDialogProps) {
     printPayslipDocument(row, school)
   }, [row, school])
 
+  const isExternal = row.teacher.type === 'External'
+  const hasBreakdown = Array.isArray(row.classBreakdown) && row.classBreakdown.length > 0
+
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="w-[95vw] max-w-md max-h-[90vh] overflow-y-auto p-0 scroll-thin">
@@ -1376,18 +1491,45 @@ function PayslipDialog({ row, onClose }: PayslipDialogProps) {
 
             {/* Earnings & deductions */}
             <div className="space-y-1.5 border-y py-3 text-sm">
-              <div className="flex justify-between gap-2">
-                <span className="text-muted-foreground">Basic salary</span>
-                <span className="shrink-0 font-medium tabular-nums">
-                  {currency(row.basicSalary)}
-                </span>
-              </div>
-              <div className="flex justify-between gap-2">
-                <span className="text-muted-foreground">Allowances</span>
-                <span className="shrink-0 font-medium tabular-nums">
-                  {currency(row.allowances)}
-                </span>
-              </div>
+              {!isExternal && (
+                <>
+                  <div className="flex justify-between gap-2">
+                    <span className="text-muted-foreground">Basic salary</span>
+                    <span className="shrink-0 font-medium tabular-nums">
+                      {currency(row.basicSalary)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <span className="text-muted-foreground">Allowances</span>
+                    <span className="shrink-0 font-medium tabular-nums">
+                      {currency(row.allowances)}
+                    </span>
+                  </div>
+                </>
+              )}
+
+              {hasBreakdown && (
+                <>
+                  <p className="mt-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Tuition share from classes
+                  </p>
+                  {row.classBreakdown!.map((b, i) => (
+                    <div key={i} className="flex justify-between gap-2 pl-3 text-xs">
+                      <span className="min-w-0 text-muted-foreground">
+                        <span className="block truncate">{b.className ?? 'Class'}</span>
+                        <span className="block text-[10px] opacity-70">
+                          {b.enrolledCount} student{b.enrolledCount === 1 ? '' : 's'} ×{' '}
+                          {currency(b.classFee)}
+                        </span>
+                      </span>
+                      <span className="shrink-0 font-medium tabular-nums">
+                        {currency(b.teacherShare)}
+                      </span>
+                    </div>
+                  ))}
+                </>
+              )}
+
               <div className="flex justify-between gap-2 border-t pt-1.5">
                 <span className="text-muted-foreground">Gross earnings</span>
                 <span className="shrink-0 font-semibold tabular-nums">{currency(row.gross)}</span>
@@ -1414,24 +1556,32 @@ function PayslipDialog({ row, onClose }: PayslipDialogProps) {
                 </p>
                 <Badge
                   variant="outline"
-                  className="border-transparent bg-purple-500/10 text-[10px] text-purple-700 dark:text-purple-300"
+                  className={
+                    isExternal
+                      ? 'border-transparent bg-slate-500/10 text-[10px] text-slate-600 dark:text-slate-300'
+                      : 'border-transparent bg-purple-500/10 text-[10px] text-purple-700 dark:text-purple-300'
+                  }
                 >
-                  paid by institute
+                  {isExternal ? 'not applicable' : 'paid by institute'}
                 </Badge>
               </div>
               <div className="mt-2 space-y-1.5">
-                <div className="flex justify-between gap-2">
-                  <span className="text-muted-foreground">EPF employer (12%)</span>
-                  <span className="shrink-0 font-medium tabular-nums">
-                    {currency(row.epfEmployer)}
-                  </span>
-                </div>
-                <div className="flex justify-between gap-2">
-                  <span className="text-muted-foreground">ETF employer (3%)</span>
-                  <span className="shrink-0 font-medium tabular-nums">
-                    {currency(row.etfEmployer)}
-                  </span>
-                </div>
+                {!isExternal && (
+                  <>
+                    <div className="flex justify-between gap-2">
+                      <span className="text-muted-foreground">EPF employer (12%)</span>
+                      <span className="shrink-0 font-medium tabular-nums">
+                        {currency(row.epfEmployer)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <span className="text-muted-foreground">ETF employer (3%)</span>
+                      <span className="shrink-0 font-medium tabular-nums">
+                        {currency(row.etfEmployer)}
+                      </span>
+                    </div>
+                  </>
+                )}
                 <div className="flex justify-between gap-2 border-t pt-1.5">
                   <span className="text-muted-foreground">Total institute cost</span>
                   <span className="shrink-0 font-semibold tabular-nums">
