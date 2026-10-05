@@ -24,6 +24,7 @@ import {
   ShieldCheck,
   CheckCircle2,
   Loader2,
+  UserCog,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ThemeToggle } from '@/components/theme-toggle'
@@ -66,6 +67,7 @@ const NAV: NavItem[] = [
   { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, group: 'Overview', description: 'Key metrics & recent activity' },
   { key: 'students', label: 'Students', icon: Users, group: 'Records', description: 'Manage student records & barcodes' },
   { key: 'teachers', label: 'Teachers', icon: GraduationCap, group: 'Records', description: 'Internal & external tuition staff' },
+  { key: 'staff', label: 'Staff', icon: UserCog, group: 'Records', description: 'Minor staff (daily-wage) register & payslips' },
   { key: 'attendance', label: 'Attendance', icon: ScanLine, group: 'Operations', description: 'Barcode & fingerprint check-in/out' },
   { key: 'classes', label: 'Classes', icon: CalendarDays, group: 'Operations', description: 'Tuition class scheduling' },
   { key: 'programs', label: 'Programs', icon: BookOpen, group: 'Operations', description: 'Preschool, Daycare, IT, Elocution, Dancing' },
