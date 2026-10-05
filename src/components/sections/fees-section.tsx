@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import Link from 'next/link'
 import { toast } from 'sonner'
 import {
   Wallet,
@@ -845,6 +846,11 @@ export function FeesSection() {
         icon={<Wallet className="h-5 w-5" />}
         actions={
           <div className="flex flex-wrap items-center justify-end gap-2">
+            <Button variant="outline" size="sm" asChild className="gap-2">
+              <Link href="/payments/data-entry" target="_blank" rel="noopener noreferrer">
+                <ExternalLink className="h-4 w-4" /> Payment Entry
+              </Link>
+            </Button>
             <Button variant="outline" size="sm" onClick={exportCsv} className="gap-2">
               <Download className="h-4 w-4" /> Export CSV
             </Button>
