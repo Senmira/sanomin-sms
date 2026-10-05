@@ -4,6 +4,7 @@ export type SectionKey =
   | 'dashboard'
   | 'students'
   | 'teachers'
+  | 'staff'                // ← NEW: minor staff (daily-wage)
   | 'payroll'
   | 'attendance'
   | 'classes'
@@ -82,7 +83,7 @@ export interface EnrollmentRow {
     id: string
     name: string
     dayOfWeek: string | null
-    daysOfWeek: string[]              // ← NEW: full list of weekdays this class runs on
+    daysOfWeek: string[]              // full list of weekdays this class runs on
     startTime: string | null
     endTime: string | null
     grade: string | null
@@ -147,7 +148,7 @@ export interface TeacherRow {
     id: string
     name: string
     dayOfWeek: string | null
-    daysOfWeek?: string[]           // ← NEW: also returned by the teacher serializer
+    daysOfWeek?: string[]           // also returned by the teacher serializer
     startTime: string | null
     grade?: string | null
   }>
@@ -189,7 +190,7 @@ export interface ClassRow {
   id: string
   name: string
   dayOfWeek: string | null
-  daysOfWeek: string[]              // ← NEW: full list of weekdays (Mon–Fri / Mon–Sat / single day)
+  daysOfWeek: string[]              // full list of weekdays (Mon–Fri / Mon–Sat / single day)
   startTime: string | null
   endTime: string | null
   room: string | null
@@ -280,6 +281,17 @@ export interface PaymentSummary {
   overdueCount: number
 }
 
+// ─── Payroll (teachers) ────────────────────────────────────────────────────
+// Per-class breakdown the teacher earned from tuition share:
+//   teacherShare = enrolledCount × classFee × (100 − instituteSharePct) / 100
+export interface PayrollClassBreakdown {
+  classId: string | null
+  className: string | null
+  enrolledCount: number
+  classFee: number
+  teacherShare: number
+}
+
 export interface PayrollRow {
   teacher: {
     id: string
@@ -292,6 +304,8 @@ export interface PayrollRow {
   month: string // "YYYY-MM"
   basicSalary: number
   allowances: number
+  classEarnings: number                     // auto-computed from enrolments
+  classBreakdown: PayrollClassBreakdown[]   // per-class breakdown
   gross: number
   epfEmployee: number
   netSalary: number
@@ -307,6 +321,9 @@ export interface PayrollRow {
 
 export interface PayrollSummary {
   teachers: number
+  totalBasic: number                // total of basic salaries
+  totalAllowances: number           // total of allowances
+  totalClassEarnings: number        // total of class-earnings auto-computed
   totalGross: number
   totalEpfEmployee: number
   totalNet: number
@@ -320,6 +337,71 @@ export interface PayrollSummary {
 }
 
 export const PAYROLL_METHODS = ['Cash', 'Bank', 'Cheque'] as const
+
+// ─── Staff (minor staff, daily-wage) ──────────────────────────────────────
+// Cleaners, cooks, security, gardeners, etc. Their pay is purely the sum of
+// per-day work log entries. No fixed monthly salary, no EPF/ETF.
+export const STAFF_ROLES = [
+  'Cleaner',
+  'Cook',
+  'Security',
+  'Gardener',
+  'Driver',
+  'Helper',
+  'Other',
+] as const
+export type StaffRole = (typeof STAFF_ROLES)[number]
+
+export const STAFF_WORK_STATUSES = ['Present', 'Half Day', 'Absent', 'Leave'] as const
+export type StaffWorkStatus = (typeof STAFF_WORK_STATUSES)[number]
+
+export interface StaffRow {
+  id: string
+  staffId: string                 // e.g. "MS001"
+  fullName: string
+  role: string
+  phone: string | null
+  defaultDailyRate: number
+  joinDate: string | null
+  active: boolean
+  notes: string | null
+}
+
+export interface StaffWorkLogRow {
+  id: string
+  date: string                    // "YYYY-MM-DD"
+  dayRate: number                 // snapshot of rate applied for that day
+  status: StaffWorkStatus
+  note: string | null
+}
+
+export interface StaffWorkLogResponse {
+  month: string
+  logs: StaffWorkLogRow[]
+  totalDays: number               // excludes Absent
+  totalPay: number
+}
+
+export interface StaffPayrollRow {
+  staffId: string                 // Mongo _id of the Staff doc
+  staffCode: string               // human "MS001"
+  fullName: string
+  role: string
+  defaultDailyRate: number
+  daysWorked: number
+  totalPay: number
+}
+
+export interface StaffPayrollSummary {
+  staff: number
+  grandTotal: number
+}
+
+export interface StaffPayrollResponse {
+  month: string
+  data: StaffPayrollRow[]
+  totals: StaffPayrollSummary
+}
 
 export interface AnnouncementRow {
   id: string
@@ -391,6 +473,9 @@ export interface ExpenseRow {
 // ─── Payroll history (teacher profile dialog) ──────────────────────────────
 export interface PayrollHistoryEntry {
   month: string
+  basicSalary: number                 // ← NEW
+  allowances: number                  // ← NEW
+  classEarnings: number               // ← NEW
   gross: number
   netSalary: number
   epfEmployee: number
