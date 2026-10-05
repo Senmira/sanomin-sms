@@ -1,6 +1,6 @@
 // ─── Payroll routes — monthly salary register with EPF/ETF breakdown ───────
 import { Router } from 'express'
-import { PayrollRecord, Teacher, Class } from '../models'
+import { PayrollRecord, Teacher, Class, Enrollment } from '../models'
 import { ah, qs, breakdown, round2 } from '../helpers'
 
 const r = Router()
@@ -12,10 +12,70 @@ const currentMonth = (): string => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
 }
 
+// ─── Class-earnings calculator ──────────────────────────────────────────────
+// For each active class a teacher teaches, the teacher's share is:
+//     enrolledCount × class.fee × (100 − class.instituteSharePct) / 100
+//
+// Returns { total, breakdown[] } where breakdown has one row per class with
+// the fields needed to display "5 students × LKR 675 = LKR 3,375".
+async function computeTeacherEarnings(teacherId: string): Promise<{
+  total: number
+  breakdown: Array<{
+    classId: string | null
+    className: string | null
+    enrolledCount: number
+    classFee: number
+    teacherShare: number
+  }>
+}> {
+  const classes = await Class.find({ teacherId, active: true }).lean()
+  if (classes.length === 0) return { total: 0, breakdown: [] }
+
+  const classIds = classes.map((c: any) => c._id.toString())
+
+  // Aggregate active enrolments per class in one query
+  const enrollAgg = await Enrollment.aggregate([
+    { $match: { classId: { $in: classIds }, status: 'Active' } },
+    { $group: { _id: '$classId', count: { $sum: 1 } } },
+  ])
+  const countByClass = new Map<string, number>()
+  for (const row of enrollAgg as any[]) {
+    countByClass.set(String(row._id), row.count)
+  }
+
+  let total = 0
+  const breakdown: Array<{
+    classId: string | null
+    className: string | null
+    enrolledCount: number
+    classFee: number
+    teacherShare: number
+  }> = []
+
+  for (const c of classes as any[]) {
+    const cid = c._id.toString()
+    const enrolled = countByClass.get(cid) ?? 0
+    const sharePct = 100 - (typeof c.instituteSharePct === 'number' ? c.instituteSharePct : 25)
+    const perStudent = (c.fee ?? 0) * (sharePct / 100)
+    const teacherShare = round2(enrolled * perStudent)
+    total += teacherShare
+    breakdown.push({
+      classId: cid,
+      className: c.name ?? null,
+      enrolledCount: enrolled,
+      classFee: c.fee ?? 0,
+      teacherShare,
+    })
+  }
+
+  return { total: round2(total), breakdown }
+}
+
 // ─── GET /api/payroll?month= | ?teacher= ────────────────────────────────────
 r.get('/', ah(async (req, res) => {
   const p = qs(req)
 
+  // ── Single-teacher history view ──────────────────────────────────────────
   const teacherIdParam = p.get('teacher')?.trim() || ''
   if (teacherIdParam) {
     const teacher = await Teacher.findById(teacherIdParam).lean()
@@ -35,6 +95,9 @@ r.get('/', ah(async (req, res) => {
       },
       history: (records as any[]).map((x) => ({
         month: x.month,
+        basicSalary: round2(x.basicSalary ?? 0),
+        allowances: round2(x.allowances ?? 0),
+        classEarnings: round2(x.classEarnings ?? 0),
         gross: round2(x.gross),
         netSalary: round2(x.netSalary),
         epfEmployee: round2(x.epfEmployee),
@@ -50,6 +113,7 @@ r.get('/', ah(async (req, res) => {
     })
   }
 
+  // ── Monthly register view ────────────────────────────────────────────────
   const month = p.get('month')?.trim() || currentMonth()
   if (!/^\d{4}-\d{2}$/.test(month)) {
     return res.status(400).json({ error: 'month must be YYYY-MM' })
@@ -61,6 +125,7 @@ r.get('/', ah(async (req, res) => {
     Teacher.find({ status: 'Active' }).sort({ type: 1, teacherId: 1 }).lean(),
     PayrollRecord.find({ month }).lean(),
   ])
+
   const classCounts = await (async () => {
     const rows = await Class.find({}, 'teacherId').lean()
     const m: Record<string, number> = {}
@@ -73,68 +138,94 @@ r.get('/', ah(async (req, res) => {
 
   const recByTeacher = new Map((records as any[]).map((x) => [x.teacherId, x]))
 
-  let rows = (teachers as any[]).map((t) => {
-    const tid = t._id.toString()
-    const live = breakdown(t.basicSalary, t.allowances)
-    const rec = recByTeacher.get(tid) ?? null
-    const paid = rec?.status === 'Paid'
-    const figures = paid && rec ? rec : live
-    return {
-      teacher: {
-        id: tid,
-        teacherId: t.teacherId,
-        fullName: t.fullName,
-        type: t.type,
-        epfNo: t.epfNo ?? null,
-        classes: classCounts[tid] || 0,
-      },
-      month,
-      basicSalary: round2(figures.basicSalary),
-      allowances: round2(figures.allowances),
-      gross: round2(figures.gross),
-      epfEmployee: round2(figures.epfEmployee),
-      netSalary: round2(figures.netSalary),
-      epfEmployer: round2(figures.epfEmployer),
-      etfEmployer: round2(figures.etfEmployer),
-      employerCost: round2(figures.employerCost),
-      status: rec?.status ?? 'Pending',
-      method: rec?.method ?? null,
-      paidDate: rec?.paidDate ? new Date(rec.paidDate).toISOString() : null,
-      note: rec?.note ?? null,
-      recordId: rec?._id?.toString() ?? null,
-    }
-  })
+  // Build a row for every teacher. If a PayrollRecord exists for the month
+  // AND it's already marked Paid, use its frozen numbers. Otherwise recompute
+  // live (basic/allowances + class earnings) so the UI always reflects the
+  // latest enrolment counts.
+  const rows = await Promise.all(
+    (teachers as any[]).map(async (t) => {
+      const tid = t._id.toString()
+      const rec = recByTeacher.get(tid) ?? null
+      const isPaid = rec?.status === 'Paid'
+      const isExternal = t.type === 'External'
 
-  // External tuition teachers without a basic salary fall back to monthlyRate
-  for (const row of rows) {
-    if (row.teacher.type === 'External' && row.basicSalary <= 0 && row.gross <= 0) {
-      const t = (teachers as any[]).find((x) => x._id.toString() === row.teacher.id)
-      if (t && t.monthlyRate > 0) {
-        row.basicSalary = round2(t.monthlyRate)
-        row.allowances = 0
-        row.gross = round2(t.monthlyRate)
-        row.epfEmployee = 0
-        row.netSalary = round2(t.monthlyRate)
-        row.epfEmployer = 0
-        row.etfEmployer = 0
-        row.employerCost = round2(t.monthlyRate)
+      let basicSalary: number
+      let allowances: number
+      let classEarnings: number
+      let classBreakdown: any[]
+
+      if (isPaid && rec) {
+        // Frozen snapshot — don't recompute for already-paid months
+        basicSalary = rec.basicSalary ?? 0
+        allowances = rec.allowances ?? 0
+        classEarnings = rec.classEarnings ?? 0
+        classBreakdown = rec.classBreakdown ?? []
+      } else {
+        // Live recompute
+        const earnings = await computeTeacherEarnings(tid)
+        basicSalary = isExternal ? 0 : (t.basicSalary ?? 0)
+        allowances = isExternal ? 0 : (t.allowances ?? 0)
+        classEarnings = earnings.total
+        classBreakdown = earnings.breakdown
       }
-    }
-  }
 
+      // External teachers: no EPF/ETF, gross = class earnings only
+      // Internal teachers: gross = basic + allowances + class earnings,
+      //                   EPF 8% employee + 12% employer + ETF 3% on BASIC only
+      const gross = round2(basicSalary + allowances + classEarnings)
+      const epfEmployee = isExternal ? 0 : round2(basicSalary * 0.08)
+      const epfEmployer = isExternal ? 0 : round2(basicSalary * 0.12)
+      const etfEmployer = isExternal ? 0 : round2(basicSalary * 0.03)
+      const netSalary = round2(gross - epfEmployee)
+      const employerCost = round2(gross + epfEmployer + etfEmployer)
+
+      return {
+        teacher: {
+          id: tid,
+          teacherId: t.teacherId,
+          fullName: t.fullName,
+          type: t.type,
+          epfNo: t.epfNo ?? null,
+          classes: classCounts[tid] || 0,
+        },
+        month,
+        basicSalary: round2(basicSalary),
+        allowances: round2(allowances),
+        classEarnings: round2(classEarnings),
+        classBreakdown,
+        gross,
+        epfEmployee,
+        netSalary,
+        epfEmployer,
+        etfEmployer,
+        employerCost,
+        status: rec?.status ?? 'Pending',
+        method: rec?.method ?? null,
+        paidDate: rec?.paidDate ? new Date(rec.paidDate).toISOString() : null,
+        note: rec?.note ?? null,
+        recordId: rec?._id?.toString() ?? null,
+      }
+    }),
+  )
+
+  let filtered = rows
   if (q) {
-    rows = rows.filter(
+    const ql = q.toLowerCase()
+    filtered = filtered.filter(
       (x) =>
-        x.teacher.fullName.toLowerCase().includes(q.toLowerCase()) ||
-        x.teacher.teacherId.toLowerCase().includes(q.toLowerCase()),
+        x.teacher.fullName.toLowerCase().includes(ql) ||
+        x.teacher.teacherId.toLowerCase().includes(ql),
     )
   }
   if (status === 'Paid' || status === 'Pending') {
-    rows = rows.filter((x) => x.status === status)
+    filtered = filtered.filter((x) => x.status === status)
   }
 
-  const totals = rows.reduce(
+  const totals = filtered.reduce(
     (acc, x) => {
+      acc.totalBasic += x.basicSalary
+      acc.totalAllowances += x.allowances
+      acc.totalClassEarnings += x.classEarnings
       acc.totalGross += x.gross
       acc.totalEpfEmployee += x.epfEmployee
       acc.totalNet += x.netSalary
@@ -151,7 +242,8 @@ r.get('/', ah(async (req, res) => {
       return acc
     },
     {
-      totalGross: 0, totalEpfEmployee: 0, totalNet: 0, totalEpfEmployer: 0,
+      totalBasic: 0, totalAllowances: 0, totalClassEarnings: 0, totalGross: 0,
+      totalEpfEmployee: 0, totalNet: 0, totalEpfEmployer: 0,
       totalEtfEmployer: 0, totalEmployerCost: 0, paidCount: 0, pendingCount: 0,
       totalPaid: 0, totalPending: 0,
     },
@@ -159,9 +251,9 @@ r.get('/', ah(async (req, res) => {
 
   res.json({
     month,
-    data: rows,
+    data: filtered,
     summary: {
-      teachers: rows.length,
+      teachers: filtered.length,
       ...Object.fromEntries(Object.entries(totals).map(([k, v]) => [k, round2(v)])),
     },
   })
@@ -210,31 +302,36 @@ r.post('/', ah(async (req, res) => {
       continue
     }
     const method = entry.method && PAYROLL_METHODS.has(entry.method) ? entry.method : 'Cash'
-    const paidDate = status === 'Paid' ? (entry.paidDate ? new Date(entry.paidDate) : new Date()) : null
+    const paidDate =
+      status === 'Paid' ? (entry.paidDate ? new Date(entry.paidDate) : new Date()) : null
     const note = entry.note?.trim() || null
 
-    const isRateOnlyExternal =
-      teacher.type === 'External' && teacher.basicSalary <= 0 && teacher.monthlyRate > 0
-    const f = isRateOnlyExternal
-      ? breakdown(teacher.monthlyRate, 0)
-      : breakdown(teacher.basicSalary, teacher.allowances)
-    if (isRateOnlyExternal) {
-      f.epfEmployee = 0
-      f.epfEmployer = 0
-      f.etfEmployer = 0
-      f.employerCost = f.gross
-      f.netSalary = f.gross
-    }
+    const isExternal = (teacher as any).type === 'External'
+
+    // Compute class earnings fresh (enrolments might have changed since GET)
+    const earnings = await computeTeacherEarnings(tid)
+
+    const basicSalary = isExternal ? 0 : (teacher as any).basicSalary ?? 0
+    const allowances = isExternal ? 0 : (teacher as any).allowances ?? 0
+    const classEarnings = earnings.total
+    const gross = round2(basicSalary + allowances + classEarnings)
+    const epfEmployee = isExternal ? 0 : round2(basicSalary * 0.08)
+    const epfEmployer = isExternal ? 0 : round2(basicSalary * 0.12)
+    const etfEmployer = isExternal ? 0 : round2(basicSalary * 0.03)
+    const netSalary = round2(gross - epfEmployee)
+    const employerCost = round2(gross + epfEmployer + etfEmployer)
 
     const data = {
-      basicSalary: round2(f.basicSalary),
-      allowances: round2(f.allowances),
-      gross: round2(f.gross),
-      epfEmployee: round2(f.epfEmployee),
-      netSalary: round2(f.netSalary),
-      epfEmployer: round2(f.epfEmployer),
-      etfEmployer: round2(f.etfEmployer),
-      employerCost: round2(f.employerCost),
+      basicSalary: round2(basicSalary),
+      allowances: round2(allowances),
+      classEarnings: round2(classEarnings),
+      classBreakdown: earnings.breakdown,
+      gross,
+      epfEmployee,
+      netSalary,
+      epfEmployer,
+      etfEmployer,
+      employerCost,
       status,
       method,
       paidDate,
