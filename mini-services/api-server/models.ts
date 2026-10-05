@@ -117,12 +117,30 @@ const TeacherSchema = new Schema(
 )
 
 // ─── PayrollRecord ──────────────────────────────────────────────────────────
+// Monthly payroll snapshot per teacher. `classEarnings` and `classBreakdown`
+// store the auto-calculated tuition share the teacher earned from each class
+// they taught this month. For External teachers, basicSalary and allowances
+// are always 0 and gross == classEarnings.
+const PayrollClassBreakdownSchema = new Schema(
+  {
+    classId: { type: String, ref: 'Class', default: null },
+    className: nullStr,
+    enrolledCount: { type: Number, default: 0 },
+    classFee: { type: Number, default: 0 },
+    teacherShare: { type: Number, default: 0 },
+  },
+  { _id: false },
+)
+
 const PayrollRecordSchema = new Schema(
   {
     teacherId: { type: String, required: true, ref: 'Teacher' },
     month: { type: String, required: true },
     basicSalary: { type: Number, default: 0 },
     allowances: { type: Number, default: 0 },
+    // ── new ── auto-calculated tuition share from enrolled classes
+    classEarnings: { type: Number, default: 0 },
+    classBreakdown: { type: [PayrollClassBreakdownSchema], default: [] },
     gross: { type: Number, default: 0 },
     epfEmployee: { type: Number, default: 0 },
     netSalary: { type: Number, default: 0 },
@@ -153,7 +171,7 @@ const ClassSchema = new Schema(
     programId: { type: String, default: null, ref: 'Program' },
     teacherId: { type: String, default: null, ref: 'Teacher' },
     dayOfWeek: nullStr,                                 // legacy single-day field
-    daysOfWeek: { type: [String], default: [] },        // ← NEW: multi-day support
+    daysOfWeek: { type: [String], default: [] },        // multi-day support
     startTime: nullStr,
     endTime: nullStr,
     room: nullStr,
@@ -285,6 +303,45 @@ const AnnouncementSchema = new Schema(
   { timestamps: true },
 )
 
+// ─── Staff (minor staff — daily-wage workers) ───────────────────────────────
+// Cleaners, cooks, security, gardeners, etc. They do NOT have a fixed monthly
+// salary — their pay is purely the sum of `StaffWorkLog.dayRate` entries for
+// the month. `defaultDailyRate` is only a suggestion used to pre-fill the
+// per-day log; the actual rate for each worked day is stored on that day's
+// log record (so mid-month rate changes don't retroactively alter past pay).
+const StaffSchema = new Schema(
+  {
+    staffId: { type: String, required: true, unique: true },     // e.g. "MS001"
+    fullName: { type: String, required: true },
+    role: { type: String, required: true },                      // Cleaner | Cook | Security | Gardener | ...
+    phone: nullStr,
+    defaultDailyRate: { type: Number, default: 0 },
+    joinDate: nullDate,
+    active: { type: Boolean, default: true },
+    notes: nullStr,
+  },
+  { timestamps: true },
+)
+
+// ─── StaffWorkLog (one row per staff per worked day) ────────────────────────
+// status: Present | Half Day | Absent | Leave
+//   Present  → dayRate stored as-is
+//   Half Day → dayRate stored as (rate / 2)
+//   Absent   → dayRate stored as 0
+//   Leave    → dayRate stored as 0 (paid/unpaid decided by policy)
+const StaffWorkLogSchema = new Schema(
+  {
+    staffId: { type: String, required: true, ref: 'Staff' },
+    date: { type: Date, required: true },                        // midnight UTC of the day
+    dayRate: { type: Number, required: true, default: 0 },       // snapshot of pay for that day
+    status: { type: String, default: 'Present' },
+    note: nullStr,
+  },
+  { timestamps: true },
+)
+StaffWorkLogSchema.index({ staffId: 1, date: 1 }, { unique: true })
+StaffWorkLogSchema.index({ date: -1 })
+
 export const Program =
   (models.Program as mongoose.Model<any>) || model('Program', ProgramSchema)
 export const Student =
@@ -309,3 +366,7 @@ export const Expense =
   (models.Expense as mongoose.Model<any>) || model('Expense', ExpenseSchema)
 export const Announcement =
   (models.Announcement as mongoose.Model<any>) || model('Announcement', AnnouncementSchema)
+export const Staff =
+  (models.Staff as mongoose.Model<any>) || model('Staff', StaffSchema)
+export const StaffWorkLog =
+  (models.StaffWorkLog as mongoose.Model<any>) || model('StaffWorkLog', StaffWorkLogSchema)
