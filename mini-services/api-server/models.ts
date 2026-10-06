@@ -303,12 +303,39 @@ const AnnouncementSchema = new Schema(
   { timestamps: true },
 )
 
+// ─── Extra (common fees catalog) ────────────────────────────────────────────
+// Admin-defined recurring fees that are NOT tied to programmes or class
+// enrolments — Annual Concert, Sports Meet, School Photograph, Graduation Fee,
+// Uniform charges, etc. The payment-entry page renders this list and lets the
+// operator tick the ones that apply for a given student. `defaultAmount` is
+// just a suggestion; the operator can override it inline per payment.
+const ExtraSchema = new Schema(
+  {
+    name: { type: String, required: true },
+    defaultAmount: { type: Number, default: 0 },
+    // category — free-text group used for grouping in the UI:
+    //   'Event' | 'Uniform' | 'Books' | 'Other' (not enforced; any string works)
+    category: { type: String, default: 'Other' },
+    description: nullStr,
+    active: { type: Boolean, default: true },
+    // order — lower numbers appear first in the payment-entry list
+    order: { type: Number, default: 0 },
+  },
+  { timestamps: true },
+)
+ExtraSchema.index({ active: 1, order: 1 })
+
 // ─── Staff (minor staff — daily-wage workers) ───────────────────────────────
 // Cleaners, cooks, security, gardeners, etc. They do NOT have a fixed monthly
 // salary — their pay is purely the sum of `StaffWorkLog.dayRate` entries for
-// the month. `defaultDailyRate` is only a suggestion used to pre-fill the
-// per-day log; the actual rate for each worked day is stored on that day's
-// log record (so mid-month rate changes don't retroactively alter past pay).
+// the month.
+//
+// defaultDailyRate  — suggestion used to pre-fill a full-day log entry.
+// defaultHalfDayRate — suggestion used to pre-fill a half-day log entry.
+//   This is NOT computed as half of defaultDailyRate — every staff member can
+//   have their own half-day amount (e.g. full 1500 / half 1000). The actual
+//   amount for each worked day is stored on that day's StaffWorkLog.dayRate,
+//   so mid-month rate changes never retroactively alter past pay.
 const StaffSchema = new Schema(
   {
     staffId: { type: String, required: true, unique: true },     // e.g. "MS001"
@@ -316,6 +343,7 @@ const StaffSchema = new Schema(
     role: { type: String, required: true },                      // Cleaner | Cook | Security | Gardener | ...
     phone: nullStr,
     defaultDailyRate: { type: Number, default: 0 },
+    defaultHalfDayRate: { type: Number, default: 0 },            // ── new ──
     joinDate: nullDate,
     active: { type: Boolean, default: true },
     notes: nullStr,
@@ -325,10 +353,12 @@ const StaffSchema = new Schema(
 
 // ─── StaffWorkLog (one row per staff per worked day) ────────────────────────
 // status: Present | Half Day | Absent | Leave
-//   Present  → dayRate stored as-is
-//   Half Day → dayRate stored as (rate / 2)
+//   Present  → dayRate stored as the staff's full-day amount for that day
+//   Half Day → dayRate stored as the staff's half-day amount for that day
 //   Absent   → dayRate stored as 0
 //   Leave    → dayRate stored as 0 (paid/unpaid decided by policy)
+// The route layer decides which amount to persist based on status + any
+// per-day override the operator typed in.
 const StaffWorkLogSchema = new Schema(
   {
     staffId: { type: String, required: true, ref: 'Staff' },
@@ -366,6 +396,8 @@ export const Expense =
   (models.Expense as mongoose.Model<any>) || model('Expense', ExpenseSchema)
 export const Announcement =
   (models.Announcement as mongoose.Model<any>) || model('Announcement', AnnouncementSchema)
+export const Extra =
+  (models.Extra as mongoose.Model<any>) || model('Extra', ExtraSchema)
 export const Staff =
   (models.Staff as mongoose.Model<any>) || model('Staff', StaffSchema)
 export const StaffWorkLog =
