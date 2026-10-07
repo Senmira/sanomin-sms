@@ -32,6 +32,7 @@ import {
   ArrowLeft,
   ChevronUp,
   ChevronDown,
+  Settings2,
 } from 'lucide-react'
 
 import { api } from '@/lib/api'
@@ -184,6 +185,84 @@ function billLines(p: PaymentRow): BillLine[] {
       color: p.program?.color ?? null,
     },
   ]
+}
+
+// ─── Common fees (extras) + other items ────────────────────────────────────
+const SCHOOL_NAME_DEFAULT = 'SANOMIN Learning Center'
+const SCHOOL_PHONE_DEFAULT = '0117221077'
+
+interface ExtraRow {
+  id: string
+  name: string
+  defaultAmount: number
+  category: string
+  description: string | null
+  active: boolean
+  order: number
+}
+
+interface CustomItem {
+  id: string
+  name: string
+  amount: string
+}
+
+/**
+ * Text receipt sent via WhatsApp after a payment is recorded.
+ * Uses a fixed school name and phone (independent of the school-settings
+ * values used elsewhere) so the message stays consistent.
+ */
+function buildReceiptMessage(payment: PaymentRow): string {
+  const [y, mm] = payment.month.split('-').map((n) => parseInt(n, 10))
+  const monthShort = new Date(y, mm - 1, 1).toLocaleDateString('en-GB', {
+    month: 'short',
+    year: 'numeric',
+  })
+
+  const lines: string[] = []
+  lines.push('Dear Parent,')
+  lines.push('')
+  lines.push(
+    `Thank you for settling the fees for *${payment.student.fullName}* (${payment.student.studentId}) — ${monthShort}.`,
+  )
+  lines.push('')
+  lines.push(`*Receipt ${payment.receiptNo ?? ''}*`)
+
+  const items =
+    (payment.items ?? []).length > 0
+      ? payment.items
+      : [
+          {
+            id: 'amount',
+            programId: null,
+            description: payment.program?.name ?? 'Fee',
+            amount: payment.amount,
+            program: null,
+          },
+        ]
+
+  for (const it of items) {
+    const label = it.description || it.program?.name || 'Fee'
+    lines.push(`• ${label}: LKR ${it.amount.toLocaleString()}`)
+  }
+
+  lines.push(
+    `Total paid: LKR ${payment.paidAmount.toLocaleString()} (${payment.method})`,
+  )
+  lines.push('')
+  lines.push('We appreciate your prompt payment!')
+  lines.push(`— ${SCHOOL_NAME_DEFAULT} (${SCHOOL_PHONE_DEFAULT})`)
+  return lines.join('\n')
+}
+
+function whatsappHrefForPayment(payment: PaymentRow): string | null {
+  const guardians = payment.student.guardians ?? []
+  const withPhone = guardians.filter((g) => toWaPhone(g.phone) !== null)
+  const chosen = withPhone.find((g) => g.isPrimary) ?? withPhone[0]
+  if (!chosen) return null
+  const waPhone = toWaPhone(chosen.phone)
+  if (!waPhone) return null
+  return `https://wa.me/${waPhone}?text=${encodeURIComponent(buildReceiptMessage(payment))}`
 }
 
 // ─── Print helpers (self-contained popup windows) ─────────────────────────
@@ -1323,6 +1402,15 @@ function PaymentDialog({
   const [selectedStudent, setSelectedStudent] = useState<StudentRow | null>(null)
   const [studentOpen, setStudentOpen] = useState(false)
   const [saving, setSaving] = useState(false)
+
+  // ── Common fees (extras) ──────────────────────────────────────────────
+  const [extras, setExtras] = useState<ExtraRow[]>([])
+  const [selectedExtraIds, setSelectedExtraIds] = useState<string[]>([])
+  const [extraAmounts, setExtraAmounts] = useState<Record<string, string>>({})
+
+  // ── Other items ───────────────────────────────────────────────────────
+  const [customItems, setCustomItems] = useState<CustomItem[]>([])
+
   const [form, setForm] = useState<FormState>(() =>
     payment
       ? {
@@ -1346,6 +1434,42 @@ function PaymentDialog({
   )
 
   const isEdit = mode === 'edit' && !!payment
+
+  // ── Load extras catalog once ──────────────────────────────────────────
+  useEffect(() => {
+    api<{ data: ExtraRow[] }>('/api/extras?active=true')
+      .then((r) => setExtras(r.data ?? []))
+      .catch(() => setExtras([]))
+  }, [])
+
+  // ── Reconstruct extras + custom items when editing ────────────────────
+  useEffect(() => {
+    if (!isEdit || !payment || extras.length === 0) return
+    const nonProgram = (payment.items ?? []).filter((it) => !it.programId)
+
+    const matchedExtras: string[] = []
+    const amounts: Record<string, string> = {}
+    const remaining: CustomItem[] = []
+
+    for (const it of nonProgram) {
+      const desc = (it.description ?? '').trim()
+      const match = extras.find((e) => e.name.trim() === desc)
+      if (match) {
+        matchedExtras.push(match.id)
+        amounts[match.id] = String(it.amount)
+      } else {
+        remaining.push({
+          id: `custom-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          name: desc,
+          amount: String(it.amount),
+        })
+      }
+    }
+
+    setSelectedExtraIds(matchedExtras)
+    setExtraAmounts(amounts)
+    setCustomItems(remaining)
+  }, [isEdit, payment, extras])
 
   const allPrograms = useMemo<ProgramRow[]>(() => {
     const map = new Map<string, ProgramRow>()
@@ -1385,15 +1509,12 @@ function PaymentDialog({
     [allPrograms, form.programIds],
   )
 
-  // Map each programme → the fee that will actually be charged, based on the
-  // student's enrolled class (class.fee). Falls back to programme.monthlyFee.
+  // Class-fee resolution
   const feeByProgram = useMemo(() => {
     const map = new Map<string, { amount: number; classId: string | null; className: string | null }>()
-    // Default: programme monthlyFee
     for (const p of allPrograms) {
       map.set(p.id, { amount: p.monthlyFee || 0, classId: null, className: null })
     }
-    // Override with the student's class fee when available
     const enrols = selectedStudent?.enrollments ?? []
     for (const e of enrols) {
       if (!e.program) continue
@@ -1405,8 +1526,7 @@ function PaymentDialog({
     return map
   }, [allPrograms, selectedStudent])
 
-  // Bill total = Σ (class fee if enrolled, else programme monthlyFee)
-  const totalAmount = useMemo(
+  const programmesTotal = useMemo(
     () =>
       selectedPrograms.reduce(
         (sum, p) => sum + (feeByProgram.get(p.id)?.amount ?? p.monthlyFee ?? 0),
@@ -1414,6 +1534,27 @@ function PaymentDialog({
       ),
     [selectedPrograms, feeByProgram],
   )
+
+  const extrasTotal = useMemo(() => {
+    let sum = 0
+    for (const id of selectedExtraIds) {
+      const override = extraAmounts[id]
+      if (override !== undefined && override !== '') {
+        sum += parseFloat(override) || 0
+      } else {
+        const e = extras.find((x) => x.id === id)
+        sum += e?.defaultAmount ?? 0
+      }
+    }
+    return sum
+  }, [selectedExtraIds, extraAmounts, extras])
+
+  const customTotal = useMemo(
+    () => customItems.reduce((sum, it) => sum + (parseFloat(it.amount) || 0), 0),
+    [customItems],
+  )
+
+  const totalAmount = programmesTotal + extrasTotal + customTotal
 
   const toggleProgram = useCallback((id: string) => {
     setForm((f) => ({
@@ -1431,6 +1572,31 @@ function PaymentDialog({
   const clearPrograms = useCallback(() => {
     setForm((f) => ({ ...f, programIds: [] }))
   }, [])
+
+  const toggleExtra = (id: string) => {
+    setSelectedExtraIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    )
+  }
+
+  const addCustomItem = () => {
+    setCustomItems((prev) => [
+      ...prev,
+      {
+        id: `custom-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        name: '',
+        amount: '',
+      },
+    ])
+  }
+
+  const updateCustomItem = (id: string, patch: Partial<CustomItem>) => {
+    setCustomItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...patch } : it)))
+  }
+
+  const removeCustomItem = (id: string) => {
+    setCustomItems((prev) => prev.filter((it) => it.id !== id))
+  }
 
   useEffect(() => {
     if (!isEdit || !payment) return
@@ -1498,37 +1664,92 @@ function PaymentDialog({
       toast.error('Month must be in YYYY-MM format')
       return
     }
-    const programIds = Array.from(new Set(form.programIds))
-    if (programIds.length === 0) {
-      toast.error('Select at least one programme for this bill')
+    const hasPrograms = form.programIds.length > 0
+    const hasExtras = selectedExtraIds.length > 0
+    const hasCustoms = customItems.some((c) => c.name.trim() && (parseFloat(c.amount) || 0) > 0)
+    if (!hasPrograms && !hasExtras && !hasCustoms) {
+      toast.error('Add at least one programme, common fee, or other item')
       return
     }
     const paidAmount = parseFloat(form.paidAmount) || 0
+
+    // ── Build unified items payload ──────────────────────────────────────
+    const items: Array<{ programId: string | null; amount: number; description: string }> = []
+
+    for (const pid of form.programIds) {
+      const p = allPrograms.find((x) => x.id === pid)
+      if (!p) continue
+      const f = feeByProgram.get(pid)
+      const amt = f?.amount ?? p.monthlyFee ?? 0
+      items.push({
+        programId: pid,
+        amount: amt,
+        description: f?.className ? `${p.name} — ${f.className}` : p.name,
+      })
+    }
+
+    for (const eid of selectedExtraIds) {
+      const e = extras.find((x) => x.id === eid)
+      if (!e) continue
+      const override = extraAmounts[eid]
+      const amt =
+        override !== undefined && override !== ''
+          ? parseFloat(override) || 0
+          : e.defaultAmount
+      if (amt <= 0) continue
+      items.push({ programId: null, amount: amt, description: e.name })
+    }
+
+    for (const c of customItems) {
+      const name = c.name.trim()
+      const amt = parseFloat(c.amount) || 0
+      if (name && amt > 0) {
+        items.push({ programId: null, amount: amt, description: name })
+      }
+    }
+
     setSaving(true)
     try {
       const payload = {
         studentId: form.studentId,
         month: form.month,
-        programIds,
+        items,
         paidAmount,
         method: form.method,
         dueDate: form.dueDate || null,
         paidDate: paidAmount > 0 ? form.paidDate || null : null,
         note: form.note.trim() || null,
       }
+
+      let saved: PaymentRow
       if (isEdit && payment) {
-        await api(`/api/payments/${payment.id}`, {
+        saved = await api<PaymentRow>(`/api/payments/${payment.id}`, {
           method: 'PUT',
           body: JSON.stringify(payload),
         })
         toast.success('Payment updated')
       } else {
-        await api('/api/payments', {
+        saved = await api<PaymentRow>('/api/payments', {
           method: 'POST',
           body: JSON.stringify(payload),
         })
-        toast.success('Payment recorded')
+        toast.success(`Payment recorded · ${saved.receiptNo ?? ''}`)
       }
+
+      // Open WhatsApp with the text receipt
+      const href = whatsappHrefForPayment(saved)
+      if (href) {
+        const win = window.open(href, '_blank', 'noopener')
+        if (!win) {
+          toast.message('Receipt saved', {
+            description:
+              'Pop-up blocked — receipt can be sent later from the row actions menu.',
+          })
+        }
+      } else {
+        toast.warning('Receipt saved — no guardian phone number for WhatsApp')
+      }
+
       onSaved()
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to save payment')
@@ -1549,12 +1770,13 @@ function PaymentDialog({
           </DialogTitle>
           <DialogDescription>
             {isEdit
-              ? `Update receipt ${payment?.receiptNo ?? '—'} for ${payment?.student.fullName ?? ''}. Changing the selected programmes recalculates the bill total.`
-              : 'One bill per student — tick one or more programmes and the total is computed automatically. Receipt number is auto-generated.'}
+              ? `Update receipt ${payment?.receiptNo ?? '—'} for ${payment?.student.fullName ?? ''}. Changing items recalculates the total.`
+              : 'One bill per student — tick programmes, tick common fees, add other items. Receipt number is auto-generated. WhatsApp receipt opens after saving.'}
           </DialogDescription>
         </DialogHeader>
 
         <div className="grid gap-4 py-2">
+          {/* ── Student ── */}
           <div className="flex flex-col gap-1.5">
             <Label>Student *</Label>
             {selectedStudent ? (
@@ -1639,6 +1861,7 @@ function PaymentDialog({
             )}
           </div>
 
+          {/* ── Month + Method ── */}
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="flex flex-col gap-1.5">
               <Label>Month (YYYY-MM) *</Label>
@@ -1668,9 +1891,10 @@ function PaymentDialog({
             </div>
           </div>
 
+          {/* ── 2 · Programmes ── */}
           <div className="flex flex-col gap-1.5">
             <div className="flex items-center justify-between gap-2">
-              <Label>Programmes *</Label>
+              <Label>2 · Programmes</Label>
               <div className="flex items-center gap-1">
                 <Button
                   type="button"
@@ -1734,7 +1958,11 @@ function PaymentDialog({
                         return (
                           <span
                             className="shrink-0 text-right text-xs tabular-nums text-muted-foreground"
-                            title={fromClass ? `From class: ${f!.className}` : 'From programme monthly fee'}
+                            title={
+                              fromClass
+                                ? `From class: ${f!.className}`
+                                : 'From programme monthly fee'
+                            }
                           >
                             {currency(amt)}/mo
                             {fromClass && (
@@ -1752,13 +1980,138 @@ function PaymentDialog({
             </div>
           </div>
 
+          {/* ── 3 · Common fees ── */}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <Label>3 · Common fees</Label>
+              <Link
+                href="/payments/data-entry"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              >
+                <Settings2 className="h-3.5 w-3.5" /> Manage
+              </Link>
+            </div>
+            {extras.length === 0 ? (
+              <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
+                No common fees defined yet. Open the Payment Entry page and tap{' '}
+                <span className="font-medium">Manage</span> to add Annual Concert, Sports Meet,
+                etc.
+              </p>
+            ) : (
+              <div className="space-y-1.5 rounded-lg border p-1.5">
+                {extras.map((e) => {
+                  const checked = selectedExtraIds.includes(e.id)
+                  const override = extraAmounts[e.id]
+                  return (
+                    <div
+                      key={e.id}
+                      className={`flex items-center justify-between gap-2 rounded-md px-2 py-1.5 transition-colors ${
+                        checked ? 'bg-primary/5' : 'hover:bg-muted/50'
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => toggleExtra(e.id)}
+                        className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                      >
+                        <Checkbox checked={checked} className="pointer-events-none" />
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-medium leading-tight">
+                            {e.name}
+                          </span>
+                          {e.category && e.category !== 'Other' && (
+                            <span className="block truncate text-[10px] uppercase tracking-wider text-muted-foreground">
+                              {e.category}
+                            </span>
+                          )}
+                        </span>
+                      </button>
+                      <Input
+                        type="number"
+                        min={0}
+                        inputMode="decimal"
+                        value={override ?? String(e.defaultAmount)}
+                        onChange={(ev) =>
+                          setExtraAmounts((prev) => ({ ...prev, [e.id]: ev.target.value }))
+                        }
+                        className="h-8 w-24 text-right text-sm tabular-nums"
+                        aria-label={`Amount for ${e.name}`}
+                      />
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* ── 4 · Other items ── */}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <Label>4 · Other items</Label>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 gap-1 px-2 text-xs"
+                onClick={addCustomItem}
+              >
+                <Plus className="h-3 w-3" /> Add item
+              </Button>
+            </div>
+            {customItems.length === 0 ? (
+              <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
+                No items added. Use <span className="font-medium">Add item</span> for school bags,
+                uniforms, books, stationery, etc.
+              </p>
+            ) : (
+              <div className="space-y-1.5">
+                {customItems.map((it, idx) => (
+                  <div key={it.id} className="flex items-center gap-2 rounded-lg border p-2">
+                    <span className="w-5 shrink-0 font-mono text-[10px] text-muted-foreground">
+                      #{idx + 1}
+                    </span>
+                    <Input
+                      placeholder="Item name"
+                      value={it.name}
+                      onChange={(e) => updateCustomItem(it.id, { name: e.target.value })}
+                      className="h-8 flex-1 text-sm"
+                    />
+                    <Input
+                      type="number"
+                      min={0}
+                      inputMode="decimal"
+                      placeholder="Amount"
+                      value={it.amount}
+                      onChange={(e) => updateCustomItem(it.id, { amount: e.target.value })}
+                      className="h-8 w-24 text-right text-sm tabular-nums"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 shrink-0 text-muted-foreground hover:text-red-600"
+                      onClick={() => removeCustomItem(it.id)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* ── Bill summary ── */}
           <div className="rounded-lg border bg-muted/30 p-3">
             <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
               Bill summary
             </p>
-            {selectedPrograms.length === 0 ? (
+            {selectedPrograms.length === 0 &&
+            selectedExtraIds.length === 0 &&
+            customTotal === 0 ? (
               <p className="text-xs text-muted-foreground">
-                No programmes selected yet — tick one or more above.
+                Nothing selected yet — tick programmes or common fees above, or add other items.
               </p>
             ) : (
               <div className="space-y-1.5">
@@ -1766,7 +2119,10 @@ function PaymentDialog({
                   const f = feeByProgram.get(p.id)
                   const amt = f?.amount ?? p.monthlyFee ?? 0
                   return (
-                    <div key={p.id} className="flex items-center justify-between gap-2 text-sm">
+                    <div
+                      key={p.id}
+                      className="flex items-center justify-between gap-2 text-sm"
+                    >
                       <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
                         <span
                           className="h-2 w-2 shrink-0 rounded-full"
@@ -1781,10 +2137,64 @@ function PaymentDialog({
                           )}
                         </span>
                       </span>
-                      <span className="shrink-0 font-medium tabular-nums">{currency(amt)}</span>
+                      <span className="shrink-0 font-medium tabular-nums">
+                        {currency(amt)}
+                      </span>
                     </div>
                   )
                 })}
+
+                {selectedExtraIds.length > 0 && (
+                  <>
+                    <div className="border-t pt-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      Common fees
+                    </div>
+                    {selectedExtraIds.map((id) => {
+                      const e = extras.find((x) => x.id === id)
+                      if (!e) return null
+                      const override = extraAmounts[id]
+                      const amt =
+                        override !== undefined && override !== ''
+                          ? parseFloat(override) || 0
+                          : e.defaultAmount
+                      return (
+                        <div
+                          key={id}
+                          className="flex items-center justify-between gap-2 text-sm"
+                        >
+                          <span className="truncate text-muted-foreground">{e.name}</span>
+                          <span className="shrink-0 font-medium tabular-nums">
+                            {currency(amt)}
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </>
+                )}
+
+                {customItems.filter(
+                  (c) => c.name.trim() && parseFloat(c.amount) > 0,
+                ).length > 0 && (
+                  <>
+                    <div className="border-t pt-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      Other items
+                    </div>
+                    {customItems
+                      .filter((c) => c.name.trim() && parseFloat(c.amount) > 0)
+                      .map((c) => (
+                        <div
+                          key={c.id}
+                          className="flex items-center justify-between gap-2 text-sm"
+                        >
+                          <span className="truncate text-muted-foreground">{c.name}</span>
+                          <span className="shrink-0 font-medium tabular-nums">
+                            {currency(parseFloat(c.amount) || 0)}
+                          </span>
+                        </div>
+                      ))}
+                  </>
+                )}
+
                 <div className="flex items-center justify-between gap-2 border-t pt-2">
                   <span className="text-sm font-semibold">Total billed</span>
                   <span className="text-base font-bold tabular-nums text-primary">
@@ -1795,6 +2205,7 @@ function PaymentDialog({
             )}
           </div>
 
+          {/* ── Paid amount / dates ── */}
           <div className="grid gap-4 sm:grid-cols-3">
             <div className="flex flex-col gap-1.5">
               <div className="flex items-center justify-between gap-2">
@@ -1866,8 +2277,16 @@ function PaymentDialog({
             Cancel
           </Button>
           <Button onClick={handleSubmit} disabled={saving} className="gap-2">
-            {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-            {isEdit ? 'Save changes' : 'Record payment'}
+            {saving ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <MessageCircle className="h-4 w-4" />
+            )}
+            {saving
+              ? 'Saving…'
+              : isEdit
+                ? 'Save & send WhatsApp'
+                : 'Record & send WhatsApp'}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1890,9 +2309,9 @@ function WhatsAppDialog({ payment, onClose }: { payment: PaymentRow; onClose: ()
     const lines: string[] = []
     if (hasBalance) {
       lines.push(
-        `Dear ${guardian?.name || 'Parent'},`,
+        `Dear Parent,`,
         ``,
-        `Friendly reminder from ${school.name}: the tuition fee for *${payment.student.fullName}* (${payment.student.studentId}) is due for ${month}.`,
+        `Friendly reminder from ${SCHOOL_NAME_DEFAULT}: the tuition fee for *${payment.student.fullName}* (${payment.student.studentId}) is due for ${month}.`,
         ``,
         `*Bill ${payment.receiptNo ?? ''}*`,
       )
@@ -1907,11 +2326,11 @@ function WhatsAppDialog({ payment, onClose }: { payment: PaymentRow; onClose: ()
         `Kindly settle the balance at your earliest convenience. Payments accepted via Cash, Card or Bank transfer.`,
         ``,
         `Thank you!`,
-        `— ${school.name}${school.phone ? ` (${school.phone})` : ''}`,
+        `— ${SCHOOL_NAME_DEFAULT} (${SCHOOL_PHONE_DEFAULT})`,
       )
     } else {
       lines.push(
-        `Dear ${guardian?.name || 'Parent'},`,
+        `Dear Parent,`,
         ``,
         `Thank you for settling the fees for *${payment.student.fullName}* (${payment.student.studentId}) — ${month}.`,
         ``,
@@ -1924,11 +2343,11 @@ function WhatsAppDialog({ payment, onClose }: { payment: PaymentRow; onClose: ()
         `Total paid: LKR ${payment.paidAmount.toLocaleString()} (${payment.method})`,
         ``,
         `We appreciate your prompt payment!`,
-        `— ${school.name}${school.phone ? ` (${school.phone})` : ''}`,
+        `— ${SCHOOL_NAME_DEFAULT} (${SCHOOL_PHONE_DEFAULT})`,
       )
     }
     return lines.join('\n')
-  }, [payment, hasBalance, balance, guardian?.name, school.name, school.phone])
+  }, [payment, hasBalance, balance])
 
   const [message, setMessage] = useState(defaultMessage)
   useEffect(() => {
@@ -1966,7 +2385,9 @@ function WhatsAppDialog({ payment, onClose }: { payment: PaymentRow; onClose: ()
                 balance {currency(balance)}
               </span>
             ) : (
-              <span className="font-semibold text-emerald-600 dark:text-emerald-400">fully paid</span>
+              <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                fully paid
+              </span>
             )}
           </DialogDescription>
         </DialogHeader>
@@ -2031,7 +2452,9 @@ function WhatsAppDialog({ payment, onClose }: { payment: PaymentRow; onClose: ()
                   {guardian.name}
                   {guardian.relationship ? ` · ${guardian.relationship}` : ''}
                 </p>
-                <p className="truncate font-mono text-[10px] text-muted-foreground">{guardian.phone}</p>
+                <p className="truncate font-mono text-[10px] text-muted-foreground">
+                  {guardian.phone}
+                </p>
               </div>
               {waPhone && (
                 <Badge
@@ -2133,16 +2556,11 @@ interface BlastData {
   }>
 }
 
-function blastMessage(
-  g: BlastGuardian,
-  schoolName: string,
-  schoolPhone: string,
-  month: string,
-): string {
+function blastMessage(g: BlastGuardian, month: string): string {
   const lines: string[] = [
-    `Dear ${g.guardianName || 'Parent'},`,
+    `Dear Parent,`,
     ``,
-    `Friendly reminder from ${schoolName}: the following fees are due for ${monthLabel(month)}.`,
+    `Friendly reminder from ${SCHOOL_NAME_DEFAULT}: the following fees are due for ${monthLabel(month)}.`,
   ]
   for (const s of g.students) {
     lines.push(``, `*${s.studentName}* (${s.studentRef})`)
@@ -2160,13 +2578,12 @@ function blastMessage(
     `Kindly settle at your earliest convenience. Payments accepted via Cash, Card or Bank transfer.`,
     ``,
     `Thank you!`,
-    `— ${schoolName}${schoolPhone ? ` (${schoolPhone})` : ''}`,
+    `— ${SCHOOL_NAME_DEFAULT} (${SCHOOL_PHONE_DEFAULT})`,
   )
   return lines.join('\n')
 }
 
 function BulkWhatsAppDialog({ month, onClose }: { month: string; onClose: () => void }) {
-  const school = useSchoolInfo()
   const [data, setData] = useState<BlastData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -2200,14 +2617,14 @@ function BulkWhatsAppDialog({ month, onClose }: { month: string; onClose: () => 
     })
 
   const openChat = (g: BlastGuardian) => {
-    const msg = blastMessage(g, school.name, school.phone, month)
+    const msg = blastMessage(g, month)
     window.open(`https://wa.me/${g.phone}?text=${encodeURIComponent(msg)}`, '_blank', 'noopener')
     markSent(g.phone)
   }
 
   const copyOne = async (g: BlastGuardian) => {
     try {
-      await navigator.clipboard.writeText(blastMessage(g, school.name, school.phone, month))
+      await navigator.clipboard.writeText(blastMessage(g, month))
       toast.success(`Message for ${g.guardianName || g.displayPhone} copied`)
     } catch {
       toast.error('Could not copy — please try again')
@@ -2304,7 +2721,11 @@ function BulkWhatsAppDialog({ month, onClose }: { month: string; onClose: () => 
                             : 'bg-primary/10 text-primary'
                         }`}
                       >
-                        {isSent ? <CheckCircle2 className="h-4 w-4" /> : initials(g.guardianName || '?')}
+                        {isSent ? (
+                          <CheckCircle2 className="h-4 w-4" />
+                        ) : (
+                          initials(g.guardianName || '?')
+                        )}
                       </span>
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
@@ -2337,7 +2758,9 @@ function BulkWhatsAppDialog({ month, onClose }: { month: string; onClose: () => 
                               key={s.studentId}
                               className="inline-flex max-w-full items-center gap-1 rounded-full bg-muted/70 px-2 py-0.5 text-[10px] font-medium"
                             >
-                              <span className="max-w-44 truncate sm:max-w-56">{s.studentName}</span>
+                              <span className="max-w-44 truncate sm:max-w-56">
+                                {s.studentName}
+                              </span>
                               <span className="shrink-0 font-semibold text-red-600 dark:text-red-400">
                                 {currency(s.balance)}
                               </span>
@@ -2395,8 +2818,8 @@ function BulkWhatsAppDialog({ month, onClose }: { month: string; onClose: () => 
                 <div className="rounded-xl border border-dashed border-amber-500/40 bg-amber-500/5 p-3">
                   <p className="flex items-center gap-1.5 text-xs font-semibold text-amber-700 dark:text-amber-300">
                     <AlertCircle className="h-3.5 w-3.5" />
-                    {data.unreachable.length} bill{data.unreachable.length > 1 ? 's' : ''} unreachable
-                    on WhatsApp
+                    {data.unreachable.length} bill{data.unreachable.length > 1 ? 's' : ''}{' '}
+                    unreachable on WhatsApp
                   </p>
                   <div className="mt-2 space-y-1">
                     {data.unreachable.map((u, i) => (
@@ -2417,7 +2840,8 @@ function BulkWhatsAppDialog({ month, onClose }: { month: string; onClose: () => 
                     ))}
                   </div>
                   <p className="mt-2 text-[10px] text-amber-700/80 dark:text-amber-300/80">
-                    Fix these guardian phone numbers in the Students section, then reopen the blast.
+                    Fix these guardian phone numbers in the Students section, then reopen the
+                    blast.
                   </p>
                 </div>
               )}
@@ -2460,6 +2884,15 @@ function ReceiptDialog({ payment, onClose }: ReceiptDialogProps) {
   const handlePrint = useCallback(() => {
     printReceiptDocument(payment, school)
   }, [payment, school])
+
+  const handleSendWhatsApp = useCallback(() => {
+    const href = whatsappHrefForPayment(payment)
+    if (!href) {
+      toast.error('No valid guardian phone number on file')
+      return
+    }
+    window.open(href, '_blank', 'noopener')
+  }, [payment])
 
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
@@ -2510,9 +2943,7 @@ function ReceiptDialog({ payment, onClose }: ReceiptDialogProps) {
           </div>
 
           <div className="rounded-lg bg-muted/40 p-3">
-            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              Student
-            </p>
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Student</p>
             <div className="mt-1 flex items-center gap-2.5">
               <Avatar className="h-8 w-8">
                 <AvatarFallback className={avatarColor(payment.student.fullName)}>
@@ -2617,11 +3048,17 @@ function ReceiptDialog({ payment, onClose }: ReceiptDialogProps) {
           </p>
         </div>
 
-        <div className="flex items-center justify-end gap-2 border-t p-3">
+        <div className="flex flex-wrap items-center justify-end gap-2 border-t p-3">
           <Button variant="outline" onClick={onClose}>
             Close
           </Button>
-          <Button onClick={handlePrint} className="gap-2">
+          <Button
+            onClick={handleSendWhatsApp}
+            className="gap-2 bg-emerald-600 hover:bg-emerald-700"
+          >
+            <MessageCircle className="h-4 w-4" /> Send WhatsApp
+          </Button>
+          <Button onClick={handlePrint} variant="outline" className="gap-2">
             <Printer className="h-4 w-4" /> Print
           </Button>
         </div>
@@ -2797,7 +3234,11 @@ function BulkGenerateDialog({
             </div>
 
             <DialogFooter>
-              <Button variant="outline" onClick={() => onOpenChange(false)} disabled={previewing}>
+              <Button
+                variant="outline"
+                onClick={() => onOpenChange(false)}
+                disabled={previewing}
+              >
                 Cancel
               </Button>
               <Button
@@ -2969,7 +3410,8 @@ function BulkGenerateDialog({
                       <span className="flex items-center gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-300">
                         <CheckCircle2 className="h-3.5 w-3.5" />
                         {preview.skipped.length} student
-                        {preview.skipped.length === 1 ? '' : 's'} already billed — will be skipped
+                        {preview.skipped.length === 1 ? '' : 's'} already billed — will be
+                        skipped
                       </span>
                       {showSkipped ? (
                         <ChevronUp className="h-3.5 w-3.5 text-amber-700 dark:text-amber-300" />
@@ -3105,7 +3547,8 @@ function StudentStatementDialog({
     printStatementDocument(data, school)
   }, [data, school])
 
-  const primaryGuardian = data?.student.guardians.find((g) => g.isPrimary) ?? data?.student.guardians[0]
+  const primaryGuardian =
+    data?.student.guardians.find((g) => g.isPrimary) ?? data?.student.guardians[0]
 
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
@@ -3135,7 +3578,11 @@ function StudentStatementDialog({
               <div className="flex items-center justify-between gap-3 border-b p-4">
                 <div className="flex items-center gap-3">
                   <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-lg ring-1 ring-border">
-                    <img src={school.logoUrl} alt={school.shortName} className="h-full w-full object-cover" />
+                    <img
+                      src={school.logoUrl}
+                      alt={school.shortName}
+                      className="h-full w-full object-cover"
+                    />
                   </div>
                   <div className="leading-tight">
                     <p className="text-sm font-bold">{school.shortName}</p>
@@ -3152,18 +3599,27 @@ function StudentStatementDialog({
                     Fee Statement
                   </p>
                   <p className="text-[10px] text-muted-foreground">
-                    As of {new Date(data.generatedAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                    As of{' '}
+                    {new Date(data.generatedAt).toLocaleDateString('en-GB', {
+                      day: '2-digit',
+                      month: 'short',
+                      year: 'numeric',
+                    })}
                   </p>
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3 border-b p-4 sm:grid-cols-4">
                 <div>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Student</p>
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Student
+                  </p>
                   <p className="mt-0.5 text-sm font-semibold">{data.student.fullName}</p>
                 </div>
                 <div>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Student ID</p>
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Student ID
+                  </p>
                   <p className="mt-0.5 font-mono text-sm">{data.student.studentId}</p>
                 </div>
                 <div>
@@ -3184,19 +3640,26 @@ function StudentStatementDialog({
                     Enrolled in
                   </p>
                   <div className="mt-1 flex flex-wrap gap-1">
-                    {data.student.enrollments.filter((e) => e.program).slice(0, 4).map((e, i) => (
-                      <span
-                        key={i}
-                        className="inline-flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium"
-                      >
+                    {data.student.enrollments
+                      .filter((e) => e.program)
+                      .slice(0, 4)
+                      .map((e, i) => (
                         <span
-                          className="size-1.5 rounded-full"
-                          style={{ backgroundColor: e.programColor ?? 'var(--muted-foreground)' }}
-                        />
-                        {e.program}
-                      </span>
-                    ))}
-                    {data.student.enrollments.length === 0 && <span className="text-sm">—</span>}
+                          key={i}
+                          className="inline-flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium"
+                        >
+                          <span
+                            className="size-1.5 rounded-full"
+                            style={{
+                              backgroundColor: e.programColor ?? 'var(--muted-foreground)',
+                            }}
+                          />
+                          {e.program}
+                        </span>
+                      ))}
+                    {data.student.enrollments.length === 0 && (
+                      <span className="text-sm">—</span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -3215,7 +3678,10 @@ function StudentStatementDialog({
                   <tbody>
                     {data.months.length === 0 && (
                       <tr>
-                        <td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">
+                        <td
+                          colSpan={5}
+                          className="px-4 py-8 text-center text-muted-foreground"
+                        >
                           No bills issued for this student yet.
                         </td>
                       </tr>
@@ -3227,11 +3693,16 @@ function StudentStatementDialog({
                             {monthLabel(m.month)}
                           </p>
                           <div className="mt-1 flex flex-wrap items-center gap-1">
-                            <Badge variant="outline" className={`px-1.5 py-0 text-[9px] ${statementStatusClasses(m.status)}`}>
+                            <Badge
+                              variant="outline"
+                              className={`px-1.5 py-0 text-[9px] ${statementStatusClasses(m.status)}`}
+                            >
                               {m.status}
                             </Badge>
                             {m.receiptNo && (
-                              <span className="font-mono text-[9px] text-muted-foreground">{m.receiptNo}</span>
+                              <span className="font-mono text-[9px] text-muted-foreground">
+                                {m.receiptNo}
+                              </span>
                             )}
                           </div>
                           {m.paidDate && (
@@ -3243,10 +3714,15 @@ function StudentStatementDialog({
                         <td className="px-2 py-2.5">
                           <div className="space-y-0.5">
                             {m.lines.map((l, i) => (
-                              <p key={i} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                              <p
+                                key={i}
+                                className="flex items-center gap-1.5 text-xs text-muted-foreground"
+                              >
                                 <span
                                   className="size-1.5 shrink-0 rounded-full"
-                                  style={{ backgroundColor: l.color ?? 'var(--muted-foreground)' }}
+                                  style={{
+                                    backgroundColor: l.color ?? 'var(--muted-foreground)',
+                                  }}
                                 />
                                 {l.description}
                               </p>
@@ -3276,8 +3752,12 @@ function StudentStatementDialog({
 
               <div className="space-y-1 border-t bg-muted/30 p-4 text-sm">
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Total billed ({data.totals.billCount} bills)</span>
-                  <span className="font-semibold tabular-nums">{currency(data.totals.billed)}</span>
+                  <span className="text-muted-foreground">
+                    Total billed ({data.totals.billCount} bills)
+                  </span>
+                  <span className="font-semibold tabular-nums">
+                    {currency(data.totals.billed)}
+                  </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Total paid</span>
