@@ -101,6 +101,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 // ─── Helpers ───────────────────────────────────────────────────────────────
 const PAGE_SIZE = 20
 const CARDS_PER_PAGE = 10
+const FETCH_CHUNK = 100 // backend caps `limit` at 100 per request
 
 function toDateInput(iso?: string | null): string {
   if (!iso) return ''
@@ -193,6 +194,28 @@ const STATUS_VARIANT: Record<
   Graduated: 'outline',
 }
 
+// ─── Fetch every active student (loops past the 100-per-request cap) ──────
+async function fetchAllActiveStudents(): Promise<StudentRow[]> {
+  const out: StudentRow[] = []
+  let page = 1
+  // hard-stop safety net so a bad response can't infinite-loop
+  for (let guard = 0; guard < 200; guard += 1) {
+    const res = await api<{
+      data: StudentRow[]
+      total: number
+      page: number
+      limit: number
+    }>(`/api/students?limit=${FETCH_CHUNK}&page=${page}&status=Active`)
+    const batch = res.data ?? []
+    out.push(...batch)
+    if (batch.length === 0) break
+    if (out.length >= res.total) break
+    if (batch.length < FETCH_CHUNK) break
+    page += 1
+  }
+  return out
+}
+
 // ─── Print CSS (single + bulk) ─────────────────────────────────────────────
 const PRINT_CSS = `
 @media print {
@@ -244,23 +267,26 @@ const PRINT_CSS = `
   }
   body.bulk-print-mode .bulk-print-page {
     display: grid !important;
-    grid-template-columns: repeat(2, 90mm);
+    grid-template-columns: repeat(2, 88mm);
     grid-template-rows: repeat(5, 52mm);
     gap: 4mm 3mm;
-    padding: 6mm 12mm;
+    padding: 8mm 12mm;
     width: 210mm;
     height: 297mm;
     box-sizing: border-box;
     page-break-after: always;
     page-break-inside: avoid;
     break-after: page;
+    break-inside: avoid;
+    align-content: start;
+    justify-content: center;
   }
   body.bulk-print-mode .bulk-print-page:last-child {
     page-break-after: auto;
     break-after: auto;
   }
   body.bulk-print-mode .bulk-print-card {
-    width: 90mm;
+    width: 88mm;
     height: 52mm;
     border: 0.4mm solid #a1a1aa;
     border-radius: 3mm;
@@ -270,6 +296,10 @@ const PRINT_CSS = `
     background: white;
     display: flex;
     flex-direction: column;
+  }
+  body.bulk-print-mode .bulk-print-card.is-empty {
+    border: none !important;
+    visibility: hidden !important;
   }
 }
 
@@ -402,6 +432,9 @@ export function StudentsSection() {
   // Bulk print state
   const [bulkPrintStudents, setBulkPrintStudents] = useState<StudentRow[]>([])
   const bulkPrintRef = useRef(false)
+
+  // "Print all" state
+  const [printingAll, setPrintingAll] = useState(false)
 
   // dialog state
   const [addEditOpen, setAddEditOpen] = useState(false)
@@ -591,17 +624,38 @@ export function StudentsSection() {
   }, [deleteTarget, reload])
 
   // ─── Bulk print ───────────────────────────────────────────────────────────
-  const startBulkPrint = useCallback(
-    (students: StudentRow[]) => {
-      if (students.length === 0) {
-        toast.error('Select at least one student to print')
+  const startBulkPrint = useCallback((students: StudentRow[]) => {
+    if (students.length === 0) {
+      toast.error('No students to print')
+      return
+    }
+    bulkPrintRef.current = true
+    setBulkPrintStudents(students)
+  }, [])
+
+  // Print the selected students (uses the current page's selection)
+  const handlePrintSelected = useCallback(() => {
+    startBulkPrint(rows.filter((r) => selectedIds.has(r.id)))
+  }, [rows, selectedIds, startBulkPrint])
+
+  // Print every active student across all pages
+  const handlePrintAll = useCallback(async () => {
+    setPrintingAll(true)
+    try {
+      const all = await fetchAllActiveStudents()
+      if (all.length === 0) {
+        toast.error('No active students to print')
         return
       }
-      bulkPrintRef.current = true
-      setBulkPrintStudents(students)
-    },
-    [],
-  )
+      toast.success(`Preparing ${all.length} ID cards…`)
+      startBulkPrint(all)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to load students'
+      toast.error(msg)
+    } finally {
+      setPrintingAll(false)
+    }
+  }, [startBulkPrint])
 
   useEffect(() => {
     if (bulkPrintStudents.length === 0) return
@@ -610,7 +664,7 @@ export function StudentsSection() {
     document.body.classList.add('bulk-print-mode')
 
     const run = async () => {
-      await new Promise((r) => setTimeout(r, 350))
+      await new Promise((r) => setTimeout(r, 400))
 
       const imgs = Array.from(
         document.querySelectorAll<HTMLImageElement>('.bulk-print-container img'),
@@ -653,6 +707,10 @@ export function StudentsSection() {
 
   const bc = stats.byCategory ?? { all: 0, preschool: 0, daycare: 0, tuition: 0 }
 
+  // Rows to hand to the hidden print container
+  const printRows = bulkPrintStudents
+  const printPages = chunk(printRows, CARDS_PER_PAGE)
+
   return (
     <div className="flex flex-col gap-6">
       <style dangerouslySetInnerHTML={{ __html: PRINT_CSS }} />
@@ -667,13 +725,28 @@ export function StudentsSection() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => startBulkPrint(selectedStudents)}
+                onClick={handlePrintSelected}
                 className="gap-2 border-primary/40 text-primary hover:bg-primary/5"
               >
                 <Printer className="h-4 w-4" />
-                Print {selectedIds.size} ID card{selectedIds.size === 1 ? '' : 's'}
+                Print {selectedIds.size} selected
               </Button>
             )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handlePrintAll}
+              disabled={printingAll || stats.activeStudents === 0}
+              className="gap-2"
+              title="Fetch every active student and print all ID cards in one go"
+            >
+              {printingAll ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <IdCard className="h-4 w-4" />
+              )}
+              {printingAll ? 'Loading…' : 'Print all IDs'}
+            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -1014,15 +1087,21 @@ export function StudentsSection() {
       </div>
 
       {/* Hidden bulk-print container — only visible during print */}
-      {bulkPrintStudents.length > 0 && (
+      {printRows.length > 0 && (
         <div className="bulk-print-container" aria-hidden>
-          {chunk(bulkPrintStudents, CARDS_PER_PAGE).map((pageStudents, pageIdx) => (
-            <div key={pageIdx} className="bulk-print-page">
-              {pageStudents.map((s) => (
-                <BulkIdCard key={s.id} student={s} school={school} />
-              ))}
-            </div>
-          ))}
+          {printPages.map((pageStudents, pageIdx) => {
+            const fillers = CARDS_PER_PAGE - pageStudents.length
+            return (
+              <div key={pageIdx} className="bulk-print-page">
+                {pageStudents.map((s) => (
+                  <BulkIdCard key={s.id} student={s} school={school} />
+                ))}
+                {Array.from({ length: fillers }).map((_, i) => (
+                  <div key={`empty-${i}`} className="bulk-print-card is-empty" />
+                ))}
+              </div>
+            )
+          })}
         </div>
       )}
 
